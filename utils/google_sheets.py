@@ -1,0 +1,490 @@
+"""
+Google Sheets integration for reading/writing apartment data
+
+Handles multi-tab operations for:
+- Main data sheet
+- Scatter plot data
+- Criteria matrix
+"""
+
+import os
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+import json
+
+import gspread
+from google.oauth2.service_account import Credentials
+from gspread.exceptions import WorksheetNotFound, SpreadsheetNotFound
+
+import config
+
+
+class GoogleSheetsClient:
+    """Client for interacting with Google Sheets"""
+    
+    SCOPES = [
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive'
+    ]
+    
+    # Sheet names
+    MAIN_SHEET_NAME = "Apartment Data"
+    SCATTER_PLOT_SHEET_NAME = "Price vs Score"
+    CRITERIA_MATRIX_SHEET_NAME = "Criteria Matrix"
+    APPROVED_GYMS_SHEET_NAME = "Approved Gyms"
+    
+    def __init__(self, credentials_path: str = None, sheet_id: str = None):
+        """
+        Initialize Google Sheets client
+        
+        Args:
+            credentials_path: Path to service account JSON credentials
+            sheet_id: Google Sheet ID
+        """
+        self.credentials_path = credentials_path or config.GOOGLE_SHEETS_CREDENTIALS_PATH
+        self.sheet_id = sheet_id or config.GOOGLE_SHEET_ID
+        
+        if not os.path.exists(self.credentials_path):
+            raise FileNotFoundError(
+                f"Google Sheets credentials not found at {self.credentials_path}. "
+                "Please follow setup instructions in README."
+            )
+        
+        if not self.sheet_id:
+            raise ValueError(
+                "GOOGLE_SHEET_ID not set. Please set it in .env file."
+            )
+        
+        # Authenticate
+        creds = Credentials.from_service_account_file(
+            self.credentials_path,
+            scopes=self.SCOPES
+        )
+        self.client = gspread.authorize(creds)
+        self.spreadsheet = self.client.open_by_key(self.sheet_id)
+    
+    def _get_or_create_worksheet(self, name: str, rows: int = 1000, cols: int = 50) -> gspread.Worksheet:
+        """Get worksheet by name or create if doesn't exist"""
+        try:
+            return self.spreadsheet.worksheet(name)
+        except WorksheetNotFound:
+            return self.spreadsheet.add_worksheet(title=name, rows=rows, cols=cols)
+    
+    def initialize_sheets(self) -> None:
+        """Initialize all required sheets with headers"""
+        # Main data sheet
+        main_sheet = self._get_or_create_worksheet(self.MAIN_SHEET_NAME)
+        self._initialize_main_sheet(main_sheet)
+        
+        # Scatter plot sheet
+        scatter_sheet = self._get_or_create_worksheet(self.SCATTER_PLOT_SHEET_NAME)
+        self._initialize_scatter_plot_sheet(scatter_sheet)
+        
+        # Criteria matrix sheet
+        criteria_sheet = self._get_or_create_worksheet(self.CRITERIA_MATRIX_SHEET_NAME)
+        self._initialize_criteria_matrix_sheet(criteria_sheet)
+    
+    def _initialize_main_sheet(self, sheet: gspread.Worksheet) -> None:
+        """Initialize main data sheet with headers"""
+        # Check if already initialized
+        if sheet.row_count > 0 and sheet.col_count > 0:
+            first_row = sheet.row_values(1)
+            if first_row and first_row[0] == config.SHEET_COLUMNS["zillow_url"]:
+                return  # Already initialized
+        
+        # Create headers
+        # Note: zillow_url is stored but not displayed as a column (it's in the address hyperlink)
+        headers = [
+            config.SHEET_COLUMNS["manual_safety"],
+            config.SHEET_COLUMNS["address"],
+            config.SHEET_COLUMNS["price"],
+            config.SHEET_COLUMNS["bedrooms"],
+            config.SHEET_COLUMNS["bathrooms"],
+            config.SHEET_COLUMNS["sqft"],
+            config.SHEET_COLUMNS["commute_time_you"],
+            config.SHEET_COLUMNS["commute_route"],
+            config.SHEET_COLUMNS["commute_time_partner"],
+            config.SHEET_COLUMNS["safety_score_opendata"],
+            config.SHEET_COLUMNS["combined_safety"],
+            config.SHEET_COLUMNS["wfh_quality_score"],
+            config.SHEET_COLUMNS["natural_light"],
+            config.SHEET_COLUMNS["desk_space_quality"],
+            config.SHEET_COLUMNS["quietness_score"],
+            config.SHEET_COLUMNS["double_pane_windows"],
+            config.SHEET_COLUMNS["study_door_type"],
+            config.SHEET_COLUMNS["kitchen_quality"],
+            config.SHEET_COLUMNS["location_vibe_score"],
+            config.SHEET_COLUMNS["restaurants_nearby"],
+            config.SHEET_COLUMNS["cafes_nearby"],
+            config.SHEET_COLUMNS["parks_nearby"],
+            config.SHEET_COLUMNS["parking_type"],
+            config.SHEET_COLUMNS["parking_enclosure"],
+            config.SHEET_COLUMNS["parking_distance"],
+            config.SHEET_COLUMNS["street_parking_ease"],
+            config.SHEET_COLUMNS["visitor_parking_ease"],
+            config.SHEET_COLUMNS["parking_score"],
+            config.SHEET_COLUMNS["laundry_type"],
+            config.SHEET_COLUMNS["floor_level"],
+            config.SHEET_COLUMNS["view_quality"],
+            config.SHEET_COLUMNS["gym_within_10min"],
+            config.SHEET_COLUMNS["gym_quality"],
+            config.SHEET_COLUMNS["rent_control"],
+            config.SHEET_COLUMNS["year_built"],
+            config.SHEET_COLUMNS["neighborhood"],
+            config.SHEET_COLUMNS["neighborhoods"],
+            config.SHEET_COLUMNS["tour_questions"],
+            config.SHEET_COLUMNS["weighted_score"],
+            config.SHEET_COLUMNS["value_ratio"],
+            config.SHEET_COLUMNS["last_updated"],
+        ]
+        
+        sheet.update('A1:AO1', [headers])
+        
+        # Apply formatting
+        sheet.format('A1:AO1', {
+            'textFormat': {'bold': True},
+            'backgroundColor': {'red': 0.8, 'green': 0.8, 'blue': 0.8}
+        })
+        
+        # Freeze header row
+        sheet.freeze(rows=1)
+    
+    def _col_index_to_letter(self, col_idx: int) -> str:
+        """Converts a 0-indexed column number to an Excel-style column letter."""
+        letter = ''
+        while col_idx >= 0:
+            letter = chr(col_idx % 26 + ord('A')) + letter
+            col_idx = col_idx // 26 - 1
+        return letter
+    
+    def _initialize_scatter_plot_sheet(self, sheet: gspread.Worksheet) -> None:
+        """Initialize scatter plot data sheet"""
+        if sheet.row_count > 0 and sheet.col_count > 0:
+            first_row = sheet.row_values(1)
+            if first_row and first_row[0] == "Address":
+                return  # Already initialized
+        
+        headers = ["Address", "Price", "Weighted Score"]
+        sheet.update('A1:C1', [headers])
+        sheet.format('A1:C1', {
+            'textFormat': {'bold': True},
+            'backgroundColor': {'red': 0.8, 'green': 0.8, 'blue': 0.8}
+        })
+        sheet.freeze(rows=1)
+    
+    def _initialize_criteria_matrix_sheet(self, sheet: gspread.Worksheet) -> None:
+        """Initialize criteria matrix sheet"""
+        if sheet.row_count > 0 and sheet.col_count > 0:
+            first_row = sheet.row_values(1)
+            if first_row and first_row[0] == "Address":
+                return  # Already initialized
+        
+        headers = ["Address"]
+        # Add criteria names
+        for criterion_name, criterion_data in config.IDEAL_CRITERIA.items():
+            # Convert snake_case to Title Case
+            display_name = criterion_name.replace("_", " ").title()
+            headers.append(display_name)
+        headers.append("Total Criteria Met")
+        
+        sheet.update(f'A1:{chr(65 + len(headers) - 1)}1', [headers])
+        sheet.format(f'A1:{chr(65 + len(headers) - 1)}1', {
+            'textFormat': {'bold': True},
+            'backgroundColor': {'red': 0.8, 'green': 0.8, 'blue': 0.8}
+        })
+        sheet.freeze(rows=1)
+    
+    def read_main_sheet(self) -> List[Dict[str, Any]]:
+        """
+        Read all data from main sheet
+        
+        Returns:
+            List of apartment records as dictionaries
+        """
+        sheet = self._get_or_create_worksheet(self.MAIN_SHEET_NAME)
+        records = sheet.get_all_records()
+        return records
+    
+    def get_apartments_needing_analysis(self) -> List[Dict[str, Any]]:
+        """
+        Get apartments that need analysis (have URL but no weighted score)
+        
+        Returns:
+            List of apartment records that need analysis
+        """
+        records = self.read_main_sheet()
+        needing_analysis = []
+        
+        for i, record in enumerate(records):
+            zillow_url = record.get(config.SHEET_COLUMNS["zillow_url"], "").strip()
+            weighted_score = record.get(config.SHEET_COLUMNS["weighted_score"], "")
+            
+            # Check if has URL but no score
+            if zillow_url and not weighted_score:
+                record['_row_number'] = i + 2  # +2 for 1-indexed and header row
+                needing_analysis.append(record)
+        
+        return needing_analysis
+    
+    def write_apartment_data(self, row_number: int, data: Dict[str, Any]) -> None:
+        """
+        Write apartment analysis data to a specific row
+        
+        Args:
+            row_number: Row number (1-indexed, where 1 is header)
+            data: Dictionary with analysis results
+        """
+        sheet = self._get_or_create_worksheet(self.MAIN_SHEET_NAME)
+        
+        # Build row data in correct column order
+        row_data = []
+        column_mapping = {
+            "address": config.SHEET_COLUMNS["address"],
+            "price": config.SHEET_COLUMNS["price"],
+            "bedrooms": config.SHEET_COLUMNS["bedrooms"],
+            "bathrooms": config.SHEET_COLUMNS["bathrooms"],
+            "sqft": config.SHEET_COLUMNS["sqft"],
+            "commute_duration": config.SHEET_COLUMNS["commute_time_you"],  # Map commute_duration -> commute_time_you
+            "commute_route": config.SHEET_COLUMNS["commute_route"],
+            "commute_duration_partner": config.SHEET_COLUMNS["commute_time_partner"],  # Map commute_duration_partner -> commute_time_partner
+            "safety_score_opendata": config.SHEET_COLUMNS["safety_score_opendata"],
+            "combined_safety": config.SHEET_COLUMNS["combined_safety"],
+            "wfh_quality_score": config.SHEET_COLUMNS["wfh_quality_score"],
+            "natural_light": config.SHEET_COLUMNS["natural_light"],
+            "desk_space_quality": config.SHEET_COLUMNS["desk_space_quality"],
+            "quietness_score": config.SHEET_COLUMNS["quietness_score"],
+            "double_pane_windows": config.SHEET_COLUMNS["double_pane_windows"],
+            "study_door_type": config.SHEET_COLUMNS["study_door_type"],
+            "kitchen_quality": config.SHEET_COLUMNS["kitchen_quality"],
+            "location_vibe_score": config.SHEET_COLUMNS["location_vibe_score"],
+            "restaurants_nearby": config.SHEET_COLUMNS["restaurants_nearby"],
+            "cafes_nearby": config.SHEET_COLUMNS["cafes_nearby"],
+            "parks_nearby": config.SHEET_COLUMNS["parks_nearby"],
+            "parking_type": config.SHEET_COLUMNS["parking_type"],
+            "parking_enclosure": config.SHEET_COLUMNS["parking_enclosure"],
+            "parking_distance": config.SHEET_COLUMNS["parking_distance"],
+            "street_parking_ease": config.SHEET_COLUMNS["street_parking_ease"],
+            "visitor_parking_ease": config.SHEET_COLUMNS["visitor_parking_ease"],
+            "parking_score": config.SHEET_COLUMNS["parking_score"],
+            "laundry_type": config.SHEET_COLUMNS["laundry_type"],
+            "floor_level": config.SHEET_COLUMNS["floor_level"],
+            "view_quality": config.SHEET_COLUMNS["view_quality"],
+            "gym_within_10min": config.SHEET_COLUMNS["gym_within_10min"],
+            "gym_quality": config.SHEET_COLUMNS["gym_quality"],
+            "rent_control": config.SHEET_COLUMNS["rent_control"],
+            "year_built": config.SHEET_COLUMNS["year_built"],
+            "neighborhood": config.SHEET_COLUMNS["neighborhood"],
+            "neighborhoods": config.SHEET_COLUMNS["neighborhoods"],
+            "tour_questions": config.SHEET_COLUMNS["tour_questions"],
+            "weighted_score": config.SHEET_COLUMNS["weighted_score"],
+            "value_ratio": config.SHEET_COLUMNS["value_ratio"],
+            "last_updated": config.SHEET_COLUMNS["last_updated"],
+        }
+        
+        # Get header row to determine column positions
+        headers = sheet.row_values(1)
+        
+        # Helper function to convert column index to letter (0=A, 25=Z, 26=AA, etc.)
+        def col_index_to_letter(col_index):
+            result = ""
+            while col_index >= 0:
+                result = chr(65 + (col_index % 26)) + result
+                col_index = col_index // 26 - 1
+            return result
+        
+        # Create update dict mapping column letter to value
+        updates = {}
+        for data_key, column_name in column_mapping.items():
+            if data_key in data:
+                try:
+                    col_index = headers.index(column_name)
+                    col_letter = col_index_to_letter(col_index)
+                    updates[f"{col_letter}{row_number}"] = data[data_key]
+                except ValueError:
+                    print(f"Warning: Column {column_name} not found in sheet")
+        
+        # Batch update
+        if updates:
+            update_list = [{'range': cell, 'values': [[value]]} for cell, value in updates.items()]
+            sheet.batch_update(update_list)
+    
+    def update_scatter_plot_data(self) -> None:
+        """Update scatter plot sheet with latest data from main sheet"""
+        main_data = self.read_main_sheet()
+        scatter_sheet = self._get_or_create_worksheet(self.SCATTER_PLOT_SHEET_NAME)
+        
+        # Build scatter plot data
+        plot_data = []
+        for record in main_data:
+            address = record.get(config.SHEET_COLUMNS["address"], "")
+            price = record.get(config.SHEET_COLUMNS["price"], "")
+            score = record.get(config.SHEET_COLUMNS["weighted_score"], "")
+            
+            if address and price and score:
+                plot_data.append([address, price, score])
+        
+        if plot_data:
+            # Clear existing data (except headers)
+            if scatter_sheet.row_count > 1:
+                # Delete all rows except header (but keep at least one empty row to avoid the API error)
+                try:
+                    scatter_sheet.delete_rows(2, scatter_sheet.row_count)
+                except Exception as e:
+                    # If we can't delete (e.g., only 1 row left), clear the data instead
+                    print(f"  Note: Clearing scatter plot data via resize method")
+                    scatter_sheet.resize(rows=1)  # Keep only header
+            
+            # Add new data
+            scatter_sheet.append_rows(plot_data)
+        # If no data, just leave the headers
+    
+    def update_criteria_matrix(self, criteria_results: List[Dict[str, Any]]) -> None:
+        """
+        Update criteria matrix sheet
+        
+        Args:
+            criteria_results: List of dicts with 'address' and criteria flags
+        """
+        criteria_sheet = self._get_or_create_worksheet(self.CRITERIA_MATRIX_SHEET_NAME)
+        
+        # Get criteria order from headers
+        headers = criteria_sheet.row_values(1)
+        criterion_columns = headers[1:-1]  # Skip "Address" and "Total"
+        
+        # Build matrix data
+        matrix_data = []
+        for result in criteria_results:
+            row = [result.get('address', '')]
+            
+            # Add checkmarks for each criterion
+            for col_name in criterion_columns:
+                # Convert column name back to snake_case key
+                key = col_name.lower().replace(" ", "_")
+                has_criterion = result.get(key, False)
+                row.append("✓" if has_criterion else "")
+            
+            # Add total count
+            total = result.get('total_criteria_met', 0)
+            row.append(total)
+            
+            matrix_data.append(row)
+        
+        # Sort by total criteria met (descending)
+        matrix_data.sort(key=lambda x: x[-1], reverse=True)
+        
+        if matrix_data:
+            # Clear existing data (except headers)
+            if criteria_sheet.row_count > 1:
+                # Delete all rows except header (but keep at least one empty row to avoid the API error)
+                try:
+                    criteria_sheet.delete_rows(2, criteria_sheet.row_count)
+                except Exception as e:
+                    # If we can't delete (e.g., only 1 row left), clear the data instead
+                    print(f"  Note: Clearing criteria matrix data via resize method")
+                    criteria_sheet.resize(rows=1)  # Keep only header
+            
+            # Add new data
+            criteria_sheet.append_rows(matrix_data)
+            
+            # Apply conditional formatting based on total
+            # Green scale based on number of criteria met
+            self._apply_criteria_conditional_formatting(criteria_sheet, len(matrix_data))
+    
+    def _apply_criteria_conditional_formatting(self, sheet: gspread.Worksheet, num_rows: int) -> None:
+        """Apply conditional formatting to criteria matrix"""
+        if num_rows == 0:
+            return
+        
+        # Apply color scale to "Total Criteria Met" column
+        last_col_letter = chr(65 + len(sheet.row_values(1)) - 1)
+        range_notation = f"{last_col_letter}2:{last_col_letter}{num_rows + 1}"
+        
+        # Color scale: red (0) to yellow (4) to green (8)
+        sheet.format(range_notation, {
+            'backgroundColor': {'red': 0.85, 'green': 0.92, 'blue': 0.83}
+        })
+    
+    def init_approved_gyms_sheet(self) -> None:
+        """Initialize Approved Gyms sheet if it doesn't exist"""
+        try:
+            worksheet = self.spreadsheet.worksheet(self.APPROVED_GYMS_SHEET_NAME)
+            # Check if already initialized
+            if worksheet.row_count > 0:
+                first_row = worksheet.row_values(1)
+                if first_row and first_row[0] == "Gym Name":
+                    return  # Already initialized
+        except WorksheetNotFound:
+            worksheet = self.spreadsheet.add_worksheet(
+                title=self.APPROVED_GYMS_SHEET_NAME,
+                rows=100,
+                cols=10
+            )
+        
+        headers = [
+            "Gym Name",
+            "Google Place ID",
+            "Address",
+            "Rating",
+            "Types",
+            "First Approved",
+            "Times Used",
+            "Latitude",
+            "Longitude"
+        ]
+        worksheet.update(range_name='A1:I1', values=[headers])
+        
+        # Apply formatting
+        worksheet.format('A1:I1', {
+            'textFormat': {'bold': True},
+            'backgroundColor': {'red': 0.8, 'green': 0.8, 'blue': 0.8}
+        })
+        worksheet.freeze(rows=1)
+    
+    def get_approved_gyms(self) -> List[Dict]:
+        """Get all approved gyms from sheet"""
+        try:
+            worksheet = self.spreadsheet.worksheet(self.APPROVED_GYMS_SHEET_NAME)
+            records = worksheet.get_all_records()
+            return records
+        except Exception as e:
+            print(f"Error reading approved gyms: {e}")
+            return []
+    
+    def add_approved_gym(self, gym_data: Dict) -> None:
+        """Add a gym to approved list or increment usage count"""
+        try:
+            worksheet = self.spreadsheet.worksheet(self.APPROVED_GYMS_SHEET_NAME)
+        except WorksheetNotFound:
+            # Initialize if doesn't exist
+            self.init_approved_gyms_sheet()
+            worksheet = self.spreadsheet.worksheet(self.APPROVED_GYMS_SHEET_NAME)
+        
+        approved = self.get_approved_gyms()
+        
+        # Check if gym already exists (by place_id)
+        existing_idx = None
+        for idx, gym in enumerate(approved):
+            if gym.get('Google Place ID') == gym_data.get('place_id'):
+                existing_idx = idx
+                break
+        
+        if existing_idx is not None:
+            # Increment usage count
+            row_num = existing_idx + 2  # +1 for header, +1 for 0-index
+            current_count = approved[existing_idx].get('Times Used', 0)
+            worksheet.update(range_name=f'G{row_num}', values=[[current_count + 1]])
+        else:
+            # Add new gym
+            new_row = [
+                gym_data.get('name'),
+                gym_data.get('place_id'),
+                gym_data.get('address'),
+                gym_data.get('rating'),
+                ', '.join(gym_data.get('types', [])),
+                datetime.now().strftime('%Y-%m-%d'),
+                1,  # Times Used
+                gym_data.get('lat'),
+                gym_data.get('lng')
+            ]
+            worksheet.append_row(new_row)
+

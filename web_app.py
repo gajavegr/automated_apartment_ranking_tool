@@ -1,0 +1,776 @@
+#!/usr/bin/env python3
+"""
+Web interface for manual apartment data entry
+
+Provides a user-friendly web form with Google Maps integration
+for adding apartments to the analysis sheet.
+"""
+
+import os
+import json
+import webbrowser
+from datetime import datetime
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from threading import Timer
+
+import config
+from utils.google_sheets import GoogleSheetsClient
+from analyzers.location_analyzer import LocationAnalyzer
+
+app = Flask(__name__)
+app.secret_key = os.urandom(24)
+
+# Initialize clients
+sheets_client = None
+location_analyzer = None
+
+def init_clients():
+    """Initialize Google Sheets and Location Analyzer clients"""
+    global sheets_client, location_analyzer
+    try:
+        sheets_client = GoogleSheetsClient()
+        location_analyzer = LocationAnalyzer()
+        return True
+    except Exception as e:
+        print(f"Error initializing clients: {e}")
+        return False
+
+
+def col_index_to_letter(col_idx):
+    """
+    Convert column index (0-based) to Excel-style column letter(s)
+    
+    Examples:
+        0 -> A
+        25 -> Z
+        26 -> AA
+        27 -> AB
+    """
+    result = ""
+    col_idx += 1  # Make it 1-based
+    while col_idx > 0:
+        col_idx -= 1
+        result = chr(65 + (col_idx % 26)) + result
+        col_idx //= 26
+    return result
+
+
+@app.route('/')
+def index():
+    """Show the entry form"""
+    return render_template('entry_form.html', 
+                         google_maps_api_key=config.GOOGLE_MAPS_API_KEY)
+
+
+@app.route('/get_apartments', methods=['GET'])
+def get_apartments():
+    """Get list of all apartments for dropdown"""
+    try:
+        records = sheets_client.read_main_sheet()
+        apartments = [{
+            'row': i + 2,  # +2 for header and 1-indexing
+            'address': record.get(config.SHEET_COLUMNS['address'], 'Unknown'),
+            'price': record.get(config.SHEET_COLUMNS['price'], '')
+        } for i, record in enumerate(records)]
+        return jsonify({'apartments': apartments, 'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
+@app.route('/get_apartment/<int:row_number>', methods=['GET'])
+def get_apartment(row_number):
+    """Get data for a specific apartment"""
+    try:
+        records = sheets_client.read_main_sheet()
+        if 0 <= row_number - 2 < len(records):
+            apartment = records[row_number - 2]
+            apartment['row_number'] = row_number
+            
+            # Extract Zillow URL from Address column HYPERLINK formula
+            sheet = sheets_client.spreadsheet.worksheet(sheets_client.MAIN_SHEET_NAME)
+            headers = sheet.row_values(1)
+            address_col_name = config.SHEET_COLUMNS['address']
+            
+            if address_col_name in headers:
+                col_idx = headers.index(address_col_name)
+                col_letter = chr(65 + col_idx)  # A=65
+                cell_range = f'{col_letter}{row_number}'
+                
+                # Get the formula from the cell
+                cell_data = sheet.get(cell_range, value_render_option='FORMULA')
+                if cell_data and len(cell_data) > 0 and len(cell_data[0]) > 0:
+                    formula = cell_data[0][0]
+                    # Extract URL from HYPERLINK formula: =HYPERLINK("url", "text")
+                    if formula.startswith('=HYPERLINK('):
+                        import re
+                        match = re.search(r'=HYPERLINK\("([^"]+)"', formula)
+                        if match:
+                            apartment['Zillow URL'] = match.group(1)
+            
+            return jsonify(apartment)
+        return jsonify({'error': 'Not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/geocode', methods=['POST'])
+def geocode():
+    """Geocode an address to get lat/lng"""
+    try:
+        address = request.json.get('address')
+        if not address:
+            return jsonify({'error': 'No address provided'}), 400
+        
+        coords = location_analyzer.geocode_address(address)
+        if coords:
+            return jsonify({
+                'lat': coords[0],
+                'lng': coords[1],
+                'success': True
+            })
+        else:
+            return jsonify({'error': 'Could not geocode address'}), 400
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/get_neighborhoods', methods=['POST'])
+def get_neighborhoods():
+    """Get neighborhoods for an address"""
+    try:
+        address = request.json.get('address')
+        
+        if not address:
+            return jsonify({'error': 'Address required'}), 400
+        
+        # Get neighborhoods
+        neighborhoods = location_analyzer.get_neighborhoods(address)
+        
+        return jsonify({
+            'neighborhoods': neighborhoods,
+            'success': True
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/get_gyms', methods=['POST'])
+def get_gyms():
+    """Get nearby gyms for apartment address"""
+    try:
+        data = request.get_json()
+        address = data.get('address')
+        
+        if not address:
+            return jsonify({'error': 'Address required'}), 400
+        
+        # Geocode address
+        coords = location_analyzer.geocode_address(address)
+        
+        if not coords:
+            return jsonify({'error': 'Could not geocode address'}), 400
+        
+        # Get nearby gyms
+        gyms = location_analyzer.get_nearby_gyms_detailed(coords[0], coords[1], limit=20)
+        
+        # Get detailed info (reviews) for each gym
+        for gym in gyms:
+            details = location_analyzer.get_gym_details(gym['place_id'])
+            if details:
+                gym.update(details)
+        
+        # Get approved gyms to pre-select
+        approved_gyms = sheets_client.get_approved_gyms()
+        approved_place_ids = [g.get('Google Place ID') for g in approved_gyms]
+        
+        # Mark pre-selected gyms
+        for gym in gyms:
+            gym['is_approved'] = gym['place_id'] in approved_place_ids
+        
+        return jsonify({
+            'gyms': gyms,
+            'success': True
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/get_hilliness', methods=['POST'])
+def get_hilliness():
+    """Get auto-detected hilliness for an address"""
+    try:
+        data = request.get_json()
+        address = data.get('address')
+        
+        if not address:
+            return jsonify({'error': 'Address required'}), 400
+        
+        # Get coordinates
+        coords = location_analyzer.geocode_address(address)
+        
+        if not coords:
+            return jsonify({'error': 'Could not geocode address'}), 400
+        
+        # Get elevation
+        elevation = location_analyzer.get_elevation(coords[0], coords[1])
+        
+        if elevation is None:
+            return jsonify({
+                'hilliness': None,
+                'elevation': None,
+                'success': False
+            })
+        
+        # Calculate hilliness score (0-10 scale)
+        # Based on elevation thresholds
+        if elevation > 100:
+            hilliness = 10
+        elif elevation > 80:
+            hilliness = 9
+        elif elevation > 60:
+            hilliness = 8
+        elif elevation > 50:
+            hilliness = 7
+        elif elevation > 40:
+            hilliness = 6
+        elif elevation > 30:
+            hilliness = 5
+        elif elevation > 20:
+            hilliness = 4
+        elif elevation > 15:
+            hilliness = 3
+        elif elevation > 10:
+            hilliness = 2
+        elif elevation > 5:
+            hilliness = 1
+        else:
+            hilliness = 0
+        
+        return jsonify({
+            'hilliness': hilliness,
+            'elevation': round(elevation, 1),
+            'success': True
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/get_parking_ease', methods=['POST'])
+def get_parking_ease():
+    """Get estimated visitor parking ease for an address"""
+    try:
+        data = request.get_json()
+        address = data.get('address')
+        
+        if not address:
+            return jsonify({'error': 'Address required'}), 400
+        
+        # Geocode address
+        coords = location_analyzer.geocode_address(address)
+        
+        if not coords:
+            return jsonify({'error': 'Could not geocode address'}), 400
+        
+        # Estimate parking ease
+        parking_info = location_analyzer.estimate_parking_ease(coords[0], coords[1], address)
+        
+        return jsonify({
+            'parking_ease': parking_info.get('parking_ease', 3),
+            'reasoning': parking_info.get('reasoning', ''),
+            'success': True
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/get_laundromats', methods=['POST'])
+def get_laundromats():
+    """Get nearby laundromats for an address"""
+    try:
+        data = request.get_json()
+        address = data.get('address')
+        
+        if not address:
+            return jsonify({'error': 'Address required'}), 400
+        
+        # Geocode address
+        coords = location_analyzer.geocode_address(address)
+        
+        if not coords:
+            return jsonify({'error': 'Could not geocode address'}), 400
+        
+        # Get nearby laundromats
+        laundromats = location_analyzer.get_nearby_laundromats(coords[0], coords[1], radius_miles=0.5)
+        
+        # Calculate estimated monthly cost
+        cost_per_load = config.SCORE_COMPONENTS['laundry']['laundromat_penalty']['cost_per_load']
+        loads_per_week = config.SCORE_COMPONENTS['laundry']['laundromat_penalty']['loads_per_week']
+        monthly_cost = cost_per_load * loads_per_week * 4.33  # Average weeks per month
+        
+        return jsonify({
+            'laundromats': laundromats[:5],  # Return top 5 closest
+            'estimated_monthly_cost': round(monthly_cost, 2),
+            'success': True
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/get_building_year', methods=['POST'])
+def get_building_year():
+    """Attempt to automatically detect building year"""
+    try:
+        data = request.get_json()
+        address = data.get('address')
+        
+        if not address:
+            return jsonify({'error': 'Address required'}), 400
+        
+        # Try to find building year
+        year = location_analyzer.get_building_year(address)
+        
+        if year:
+            return jsonify({
+                'year': year,
+                'success': True
+            })
+        else:
+            return jsonify({
+                'year': None,
+                'success': False,
+                'message': 'Could not automatically determine building year'
+            })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/add', methods=['POST'])
+def add_apartment():
+    """Process form submission and add to Google Sheets"""
+    try:
+        # Extract multi-select fields as lists
+        parking_types = request.form.getlist('parking_type')
+        parking_enclosures = request.form.getlist('parking_enclosure')
+        laundry_types = request.form.getlist('laundry_type')
+        neighborhoods = request.form.getlist('neighborhoods')
+        
+        # Build tour questions list
+        tour_questions = []
+        if request.form.get('parking_type_tour_question'):
+            tour_questions.append('Parking type')
+        if request.form.get('parking_enclosure_tour_question'):
+            tour_questions.append('Parking enclosure')
+        if request.form.get('laundry_type_tour_question'):
+            tour_questions.append('Laundry type')
+        
+        # Extract form data
+        data = {
+            'zillow_url': request.form.get('zillow_url', '').strip(),
+            'address': request.form.get('address', '').strip(),
+            'manual_safety_rating': float(request.form.get('manual_safety_rating', 5.0)),
+            # Store multi-select values as newline-separated for better readability
+            'parking_type': '\n'.join(parking_types) if parking_types else 'none',
+            'parking_enclosure': '\n'.join(parking_enclosures) if parking_enclosures else '',
+            'laundry_type': '\n'.join(laundry_types) if laundry_types else 'none',
+            'neighborhoods': '\n'.join(neighborhoods) if neighborhoods else '',
+            'tour_questions': '\n'.join(tour_questions) if tour_questions else '',
+            'floor_level': request.form.get('floor_level', ''),
+            'street_parking_ease': request.form.get('street_parking_ease', ''),
+            'visitor_parking_ease': request.form.get('visitor_parking_ease', ''),
+            'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        # Parse numeric fields
+        try:
+            data['price'] = int(request.form.get('price', 0))
+        except ValueError:
+            data['price'] = 0
+        
+        try:
+            data['bedrooms'] = int(request.form.get('bedrooms', 0))
+        except ValueError:
+            data['bedrooms'] = 0
+        
+        try:
+            data['bathrooms'] = float(request.form.get('bathrooms', 0))
+        except ValueError:
+            data['bathrooms'] = 0
+        
+        try:
+            data['sqft'] = int(request.form.get('sqft', 0))
+        except ValueError:
+            data['sqft'] = 0
+        
+        # Year built and rent control
+        year_built = request.form.get('year_built', '').strip()
+        if year_built:
+            try:
+                year = int(year_built)
+                data['year_built'] = year
+                data['rent_control'] = year < config.SF_RENT_CONTROL_CUTOFF_YEAR
+            except ValueError:
+                pass
+        
+        # Hilliness override (only if checkbox is enabled)
+        hilliness_enabled = request.form.get('hilliness_override_enabled')
+        if hilliness_enabled:
+            hilliness = request.form.get('hilliness_override', '5').strip()
+            if hilliness:
+                try:
+                    hilliness_val = int(hilliness)
+                    data['hilliness_manual_override'] = hilliness_val
+                except ValueError:
+                    pass
+        
+        # Handle selected gyms
+        selected_gym_ids = request.form.getlist('selected_gyms[]')
+        
+        if selected_gym_ids:
+            # Get gym details from hidden fields and add to approved gyms
+            for gym_id in selected_gym_ids:
+                gym_name = request.form.get(f'gym_name_{gym_id}')
+                gym_address = request.form.get(f'gym_address_{gym_id}')
+                gym_rating = request.form.get(f'gym_rating_{gym_id}')
+                gym_lat = request.form.get(f'gym_lat_{gym_id}')
+                gym_lng = request.form.get(f'gym_lng_{gym_id}')
+                gym_types = request.form.get(f'gym_types_{gym_id}')
+                
+                gym_data = {
+                    'place_id': gym_id,
+                    'name': gym_name,
+                    'address': gym_address,
+                    'rating': gym_rating,
+                    'lat': gym_lat,
+                    'lng': gym_lng,
+                    'types': gym_types.split(',') if gym_types else []
+                }
+                
+                sheets_client.add_approved_gym(gym_data)
+            
+            # Store selected gym names in apartment data
+            gym_names = [request.form.get(f'gym_name_{gid}') for gid in selected_gym_ids]
+            data['selected_gyms'] = ', '.join(gym_names)
+        
+        # Validate required fields
+        if not data['address']:
+            flash('Address is required', 'error')
+            return redirect(url_for('index'))
+        
+        # Check if this is an update or new apartment
+        row_number_str = request.form.get('row_number', '').strip()
+        is_update = bool(row_number_str)
+        
+        # Add to or update Google Sheet
+        sheet = sheets_client.spreadsheet.worksheet(sheets_client.MAIN_SHEET_NAME)
+        records = sheets_client.read_main_sheet()
+        
+        if is_update:
+            row_number = int(row_number_str)
+        else:
+            row_number = len(records) + 2
+        
+        headers = sheet.row_values(1)
+        
+        # Build row data
+        updates = []
+        
+        # Column A: Manual Safety Rating (zillow_url column was removed)
+        manual_safety_col_name = config.SHEET_COLUMNS['manual_safety']
+        if manual_safety_col_name in headers:
+            col_idx = headers.index(manual_safety_col_name)
+            col_letter = col_index_to_letter(col_idx)
+            updates.append({
+                'range': f'{col_letter}{row_number}',
+                'values': [[data.get('manual_safety_rating', 5.0)]]
+            })
+        
+        # Column B: Address as hyperlink (if Zillow URL provided)
+        # We'll handle this separately with a formula
+        address_col_name = config.SHEET_COLUMNS['address']
+        if address_col_name in headers:
+            col_idx = headers.index(address_col_name)
+            col_letter = col_index_to_letter(col_idx)
+            
+            # If zillow_url exists, create hyperlink formula, otherwise just address
+            if data.get('zillow_url'):
+                # Use HYPERLINK formula: =HYPERLINK("url", "text")
+                formula = f'=HYPERLINK("{data["zillow_url"]}", "{data["address"]}")'
+                updates.append({
+                    'range': f'{col_letter}{row_number}',
+                    'values': [[formula]]
+                })
+            else:
+                updates.append({
+                    'range': f'{col_letter}{row_number}',
+                    'values': [[data['address']]]
+                })
+        
+        # Other columns (skip address since we handled it above)
+        column_mapping = {
+            'price': config.SHEET_COLUMNS['price'],
+            'bedrooms': config.SHEET_COLUMNS['bedrooms'],
+            'bathrooms': config.SHEET_COLUMNS['bathrooms'],
+            'sqft': config.SHEET_COLUMNS['sqft'],
+            'parking_type': config.SHEET_COLUMNS['parking_type'],
+            'parking_enclosure': config.SHEET_COLUMNS['parking_enclosure'],
+            'floor_level': config.SHEET_COLUMNS['floor_level'],
+            'street_parking_ease': config.SHEET_COLUMNS['street_parking_ease'],
+            'visitor_parking_ease': config.SHEET_COLUMNS['visitor_parking_ease'],
+            'laundry_type': config.SHEET_COLUMNS['laundry_type'],
+            'neighborhoods': config.SHEET_COLUMNS['neighborhoods'],
+            'neighborhood': config.SHEET_COLUMNS['neighborhood'],
+            'rent_control': config.SHEET_COLUMNS['rent_control'],
+            'tour_questions': config.SHEET_COLUMNS['tour_questions'],
+            'hilliness_manual_override': config.SHEET_COLUMNS['hilliness_manual_override'],
+            'selected_gyms': config.SHEET_COLUMNS['selected_gyms'],
+            'year_built': config.SHEET_COLUMNS.get('year_built', 'Year Built'),
+            'last_updated': config.SHEET_COLUMNS['last_updated'],
+        }
+        
+        for data_key, column_name in column_mapping.items():
+            if data_key in data and column_name in headers:
+                col_idx = headers.index(column_name)
+                col_letter = col_index_to_letter(col_idx)
+                updates.append({
+                    'range': f'{col_letter}{row_number}',
+                    'values': [[data[data_key]]]
+                })
+        
+        # Batch update
+        # Use valueInputOption='USER_ENTERED' to allow formulas to be evaluated
+        sheet.batch_update(updates, value_input_option='USER_ENTERED')
+        
+        # Format the row: auto-resize first, then apply text wrapping
+        try:
+            # Multi-select columns that need auto-width adjustment
+            multi_select_column_names = [
+                config.SHEET_COLUMNS["parking_type"],
+                config.SHEET_COLUMNS["parking_enclosure"],
+                config.SHEET_COLUMNS["laundry_type"],
+                config.SHEET_COLUMNS["neighborhoods"],
+                config.SHEET_COLUMNS["tour_questions"]
+            ]
+            
+            # Build batch update request for sizing
+            resize_requests = []
+            
+            # Set minimum widths for multi-select columns to prevent text cutoff
+            # Use fixed widths that are wide enough for the longest expected values
+            min_widths = {
+                config.SHEET_COLUMNS["parking_type"]: 280,  # Wide enough for "dedicated_spot_car_and_motorcycle"
+                config.SHEET_COLUMNS["parking_enclosure"]: 120,
+                config.SHEET_COLUMNS["laundry_type"]: 150,
+                config.SHEET_COLUMNS["neighborhoods"]: 200,
+                config.SHEET_COLUMNS["tour_questions"]: 180
+            }
+            
+            for col_name, min_width in min_widths.items():
+                if col_name in headers:
+                    col_idx = headers.index(col_name)
+                    resize_requests.append({
+                        'updateDimensionProperties': {
+                            'range': {
+                                'sheetId': sheet.id,
+                                'dimension': 'COLUMNS',
+                                'startIndex': col_idx,
+                                'endIndex': col_idx + 1
+                            },
+                            'properties': {
+                                'pixelSize': min_width
+                            },
+                            'fields': 'pixelSize'
+                        }
+                    })
+            
+            # Execute column width updates first
+            if resize_requests:
+                sheets_client.spreadsheet.batch_update({'requests': resize_requests})
+            
+            # Apply text wrapping to the entire row
+            sheet.format(f'A{row_number}:{col_index_to_letter(len(headers)-1)}{row_number}', {
+                'wrapStrategy': 'WRAP',
+                'verticalAlignment': 'TOP'
+            })
+            
+            # Auto-resize row height to fit wrapped content (do this AFTER wrapping)
+            sheets_client.spreadsheet.batch_update({
+                'requests': [{
+                    'autoResizeDimensions': {
+                        'dimensions': {
+                            'sheetId': sheet.id,
+                            'dimension': 'ROWS',
+                            'startIndex': row_number - 1,  # 0-indexed
+                            'endIndex': row_number
+                        }
+                    }
+                }]
+            })
+        except Exception as format_error:
+            print(f"Warning: Could not format row {row_number}: {format_error}")
+        
+        action = 'Updated' if is_update else 'Added'
+        flash(f'✓ {action} apartment: {data["address"]} (Row {row_number})', 'success')
+        return redirect(url_for('index'))
+    
+    except Exception as e:
+        flash(f'Error adding apartment: {str(e)}', 'error')
+        return redirect(url_for('index'))
+
+
+@app.route('/delete/<int:row_number>', methods=['POST'])
+def delete_apartment(row_number):
+    """Delete an apartment from the sheet"""
+    try:
+        sheet = sheets_client.spreadsheet.worksheet(sheets_client.MAIN_SHEET_NAME)
+        sheet.delete_rows(row_number)
+        flash(f'✓ Deleted apartment from row {row_number}', 'success')
+        return jsonify({'success': True})
+    except Exception as e:
+        flash(f'Error deleting apartment: {str(e)}', 'error')
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
+@app.route('/run_analysis', methods=['POST'])
+def run_analysis():
+    """Run analysis on all apartments (same as main.py --analyze-new)"""
+    try:
+        from main import ApartmentAnalyzer
+        
+        analyzer = ApartmentAnalyzer()
+        records = sheets_client.read_main_sheet()
+        
+        # Find apartments that need analysis (those without a weighted score)
+        apartments_to_analyze = []
+        for i, record in enumerate(records):
+            if not record.get(config.SHEET_COLUMNS['weighted_score']):
+                record['_row_number'] = i + 2  # +2 for header row and 1-indexing
+                apartments_to_analyze.append(record)
+        
+        print(f"Found {len(apartments_to_analyze)} apartments to analyze")
+        
+        results = []
+        for apartment in apartments_to_analyze:
+            try:
+                result = analyzer.analyze_apartment(apartment)
+                if result and 'error' not in result:
+                    # Write each result back to the sheet
+                    row_number = apartment.get('_row_number')
+                    if row_number:
+                        print(f"Writing analysis results to row {row_number}")
+                        sheets_client.write_apartment_data(row_number, result)
+                    else:
+                        print(f"⚠️  Warning: No row number found for apartment: {apartment.get('address')}")
+                    results.append(result)
+            except Exception as e:
+                print(f"Error analyzing apartment: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+        
+        # Update visualizations
+        if results:
+            sheets_client.update_scatter_plot_data()
+            
+            # Build criteria results for matrix
+            criteria_results = []
+            for result in results:
+                if result.get('scorecard'):
+                    criteria_result = {
+                        'address': result.get('address', ''),
+                        'components': result['scorecard'].get('components', {}),
+                        'weighted_score': result.get('weighted_score', 0)
+                    }
+                    criteria_results.append(criteria_result)
+            
+            if criteria_results:
+                sheets_client.update_criteria_matrix(criteria_results)
+        
+        return jsonify({'success': True, 'analyzed': len(results)})
+    except Exception as e:
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
+@app.route('/get_analysis_data', methods=['GET'])
+def get_analysis_data():
+    """Get all analysis data for visualization"""
+    try:
+        records = sheets_client.read_main_sheet()
+        
+        scatter_data = []
+        for i, r in enumerate(records):
+            weighted_score = r.get(config.SHEET_COLUMNS['weighted_score'])
+            if weighted_score:
+                try:
+                    scatter_data.append({
+                        'address': r.get(config.SHEET_COLUMNS['address'], 'Unknown'),
+                        'price': float(r.get(config.SHEET_COLUMNS['price'], 0) or 0),
+                        'score': float(weighted_score),
+                        'score_min': float(r.get(config.SHEET_COLUMNS['score_min'], weighted_score) or weighted_score),
+                        'score_max': float(r.get(config.SHEET_COLUMNS['score_max'], weighted_score) or weighted_score),
+                        'row': i + 2
+                    })
+                except (ValueError, TypeError):
+                    continue
+        
+        # Sort by score descending
+        ranked = sorted(scatter_data, key=lambda x: x['score'], reverse=True)
+        
+        # Get criteria matrix data (simplified for now)
+        criteria_matrix = {}
+        
+        return jsonify({
+            'scatter': scatter_data,
+            'ranked': ranked,
+            'criteria_matrix': criteria_matrix,
+            'success': True
+        })
+    except Exception as e:
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
+@app.route('/stats')
+def stats():
+    """Show current statistics"""
+    try:
+        records = sheets_client.read_main_sheet()
+        return jsonify({
+            'total_apartments': len(records),
+            'analyzed': len([r for r in records if r.get(config.SHEET_COLUMNS['weighted_score'])]),
+            'pending': len([r for r in records if not r.get(config.SHEET_COLUMNS['weighted_score'])])
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def open_browser():
+    """Open browser after a short delay"""
+    webbrowser.open('http://127.0.0.1:5000')
+
+
+if __name__ == '__main__':
+    print("="*80)
+    print("APARTMENT ENTRY WEB INTERFACE")
+    print("="*80)
+    print("\nInitializing...")
+    
+    if not init_clients():
+        print("✗ Failed to initialize. Check your credentials and .env file.")
+        exit(1)
+    
+    print("✓ Clients initialized")
+    print("\nStarting web server...")
+    print("URL: http://127.0.0.1:5000")
+    print("\nPress Ctrl+C to stop the server\n")
+    
+    # Open browser after 1 second
+    Timer(1, open_browser).start()
+    
+    # Run Flask app on 127.0.0.1 explicitly
+    app.run(debug=True, use_reloader=False, host='127.0.0.1', port=5000)
+

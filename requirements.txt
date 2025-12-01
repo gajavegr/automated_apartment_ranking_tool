@@ -1,0 +1,39 @@
+# Core dependencies
+anthropic==0.39.0
+httpx==0.27.0
+Flask==3.0.0
+google-auth==2.25.2
+
+# Optional: For interactive photo analysis
+# playwright==1.40.0
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
+google-api-python-client==2.111.0
+gspread==5.12.3
+oauth2client==4.1.3
+
+# Data processing
+pandas==2.1.4
+numpy==1.26.2
+
+# HTTP and API
+requests==2.31.0
+urllib3==2.1.0
+
+# Environment management
+python-dotenv==1.0.0
+
+# Scheduling
+schedule==1.2.0
+APScheduler==3.10.4
+
+# Progress tracking
+tqdm==4.66.1
+
+# Caching
+diskcache==5.6.3
+
+# Utilities
+python-dateutil==2.8.2
+pytz==2023.3
+

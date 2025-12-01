@@ -1,0 +1,1412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Add Apartment - Manual Entry</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=places"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🏠 Apartment Analyzer</h1>
+            <p>Manage your apartment listings and analyze your options</p>
+        </header>
+
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('entry')">Entry</button>
+            <button class="tab" onclick="showTab('analysis')">Analysis</button>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="main-content">
+            <!-- Left side: Form -->
+            <div id="entryTab" class="tab-content active">
+                <div class="form-container">
+                    <form method="POST" action="/add" id="apartmentForm">
+                    <h2>Listing Information</h2>
+                    
+                    <div class="form-group">
+                        <label for="zillow_url">Zillow URL (Recommended)</label>
+                        <input type="url" 
+                               id="zillow_url" 
+                               name="zillow_url" 
+                               placeholder="https://www.zillow.com/homedetails/...">
+                        <small>💡 Paste the Zillow link here - it will be embedded in the address for easy access to photos and details</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="apartment_selector">Load Existing Apartment</label>
+                        <select id="apartment_selector" onchange="onApartmentSelected()">
+                            <option value="">-- New Apartment --</option>
+                        </select>
+                        <small>Select an existing apartment to view or edit</small>
+                    </div>
+
+                    <input type="hidden" id="row_number" name="row_number" value="">
+
+                    <div class="form-group">
+                        <label for="address">Address *</label>
+                        <input type="text" 
+                               id="address" 
+                               name="address" 
+                               required 
+                               placeholder="123 Mission St, San Francisco, CA"
+                               autocomplete="off">
+                        <small>Start typing and select from suggestions</small>
+                    </div>
+
+                    <h2>Property Details</h2>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="price">Monthly Rent ($) *</label>
+                            <input type="number" 
+                                   id="price" 
+                                   name="price" 
+                                   required 
+                                   min="0" 
+                                   placeholder="3500">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="sqft">Square Feet</label>
+                            <input type="number" 
+                                   id="sqft" 
+                                   name="sqft" 
+                                   min="0" 
+                                   placeholder="800">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="bedrooms">Bedrooms *</label>
+                            <input type="number" 
+                                   id="bedrooms" 
+                                   name="bedrooms" 
+                                   required 
+                                   min="0" 
+                                   max="10" 
+                                   value="1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="bathrooms">Bathrooms *</label>
+                            <input type="number" 
+                                   id="bathrooms" 
+                                   name="bathrooms" 
+                                   required 
+                                   min="0" 
+                                   max="10" 
+                                   step="0.5" 
+                                   value="1">
+                        </div>
+                    </div>
+
+                    <h2>Amenities</h2>
+
+                    <div class="form-group">
+                        <label>Parking Type *</label>
+                        <div class="multi-select-wrapper">
+                            <div class="multi-select-options">
+                                <label><input type="checkbox" name="parking_type" value="single_garage"> Single Garage</label>
+                                <label><input type="checkbox" name="parking_type" value="dedicated_spot_car_and_motorcycle"> Dedicated Spot (Car + Motorcycle)</label>
+                                <label><input type="checkbox" name="parking_type" value="dedicated_spot_car_only"> Dedicated Spot (Car Only)</label>
+                                <label><input type="checkbox" name="parking_type" value="street_parking"> Street Parking</label>
+                                <label><input type="checkbox" name="parking_type" value="none"> No Parking</label>
+                            </div>
+                            <label class="tour-question-checkbox">
+                                <input type="checkbox" name="parking_type_tour_question" value="true">
+                                Mark as tour question
+                            </label>
+                        </div>
+                        <small>Select one or more if uncertain</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Parking Enclosure</label>
+                        <div class="multi-select-wrapper">
+                            <div class="multi-select-options">
+                                <label><input type="checkbox" name="parking_enclosure" value="enclosed"> Enclosed (Garage/Underground)</label>
+                                <label><input type="checkbox" name="parking_enclosure" value="covered"> Covered (Carport/Overhang)</label>
+                                <label><input type="checkbox" name="parking_enclosure" value="open"> Open (Outdoor/Exposed)</label>
+                            </div>
+                            <label class="tour-question-checkbox">
+                                <input type="checkbox" name="parking_enclosure_tour_question" value="true">
+                                Mark as tour question
+                            </label>
+                        </div>
+                        <small>Weather protection and security level</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Laundry *</label>
+                        <div class="multi-select-wrapper">
+                            <div class="multi-select-options">
+                                <label><input type="checkbox" name="laundry_type" value="in_unit"> In-Unit (Separate Washer/Dryer)</label>
+                                <label><input type="checkbox" name="laundry_type" value="in_unit_combo"> In-Unit Combo (Washer/Dryer Combined)</label>
+                                <label><input type="checkbox" name="laundry_type" value="shared_good"> Shared (Good Ratio)</label>
+                                <label><input type="checkbox" name="laundry_type" value="shared_poor"> Shared (Poor Ratio)</label>
+                                <label><input type="checkbox" name="laundry_type" value="none"> No Laundry</label>
+                            </div>
+                            <label class="tour-question-checkbox">
+                                <input type="checkbox" name="laundry_type_tour_question" value="true">
+                                Mark as tour question
+                            </label>
+                        </div>
+                        <small>Select one or more if uncertain</small>
+                    </div>
+
+                    <!-- Laundromat Information Section -->
+                    <div class="form-group" id="laundromatSection" style="display: none;">
+                        <div style="padding: 15px; background: #fff3cd; border-radius: 8px; border-left: 4px solid #ffc107;">
+                            <h4 style="margin-top: 0; color: #856404;">⚠️ Nearby Laundromats</h4>
+                            <p style="margin-bottom: 10px; color: #856404;">
+                                <strong>Estimated Monthly Cost:</strong> $<span id="laundromatMonthlyCost">0</span>
+                                <small>(~1 load/week at $5/load)</small>
+                            </p>
+                            <div id="laundromatsList" style="max-height: 200px; overflow-y: auto;">
+                                <!-- Populated by JavaScript -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="floor_level">Floor Level *</label>
+                        <select id="floor_level" name="floor_level" required>
+                            <option value="">Select floor level...</option>
+                            <option value="ground">Ground Floor</option>
+                            <option value="mid">Mid (2-4 floors)</option>
+                            <option value="high">High (5+ floors)</option>
+                            <option value="unknown">Unknown</option>
+                        </select>
+                        <small>Height of the apartment unit</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="street_parking_ease">Street Parking Ease (if street parking is your primary option)</label>
+                        <div class="rating-scale">
+                            <input type="radio" id="parking_ease_5" name="street_parking_ease" value="5">
+                            <label for="parking_ease_5" title="Very Easy">★</label>
+                            
+                            <input type="radio" id="parking_ease_4" name="street_parking_ease" value="4">
+                            <label for="parking_ease_4" title="Easy">★</label>
+                            
+                            <input type="radio" id="parking_ease_3" name="street_parking_ease" value="3">
+                            <label for="parking_ease_3" title="Moderate">★</label>
+                            
+                            <input type="radio" id="parking_ease_2" name="street_parking_ease" value="2">
+                            <label for="parking_ease_2" title="Difficult">★</label>
+                            
+                            <input type="radio" id="parking_ease_1" name="street_parking_ease" value="1">
+                            <label for="parking_ease_1" title="Very Difficult">★</label>
+                        </div>
+                        <small>Only relevant if street parking is selected above</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="visitor_parking_ease">Visitor Parking Ease</label>
+                        <div class="rating-scale">
+                            <input type="radio" id="visitor_ease_5" name="visitor_parking_ease" value="5">
+                            <label for="visitor_ease_5" title="Very Easy">★</label>
+                            
+                            <input type="radio" id="visitor_ease_4" name="visitor_parking_ease" value="4">
+                            <label for="visitor_ease_4" title="Easy">★</label>
+                            
+                            <input type="radio" id="visitor_ease_3" name="visitor_parking_ease" value="3">
+                            <label for="visitor_ease_3" title="Moderate">★</label>
+                            
+                            <input type="radio" id="visitor_ease_2" name="visitor_parking_ease" value="2">
+                            <label for="visitor_ease_2" title="Difficult">★</label>
+                            
+                            <input type="radio" id="visitor_ease_1" name="visitor_parking_ease" value="1">
+                            <label for="visitor_ease_1" title="Very Difficult">★</label>
+                        </div>
+                        <small>How easy is it for visitors to find parking nearby? (Street parking, guest spots, etc.)</small>
+                    </div>
+
+                    <h2>Additional Details</h2>
+
+                    <div class="form-group">
+                        <label for="manual_safety_rating">Your Safety Rating (0-10) *</label>
+                        <input type="range" 
+                               id="manual_safety_rating" 
+                               name="manual_safety_rating" 
+                               min="0" 
+                               max="10" 
+                               step="0.5" 
+                               value="5"
+                               oninput="document.getElementById('safetyValue').textContent = this.value">
+                        <div class="range-value">
+                            <span id="safetyValue">5</span> / 10
+                        </div>
+                        <small>Based on your knowledge of the area</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Neighborhoods</label>
+                        <div class="multi-select-wrapper searchable">
+                            <input type="text" 
+                                   class="neighborhood-search" 
+                                   placeholder="Search neighborhoods..."
+                                   onkeyup="filterNeighborhoods()">
+                            <div class="multi-select-options" id="neighborhoodOptions">
+                                <!-- Populated by JavaScript -->
+                            </div>
+                        </div>
+                        <small>Auto-filled from address, adjust if needed</small>
+                    </div>
+
+                    <div class="form-group">
+                        <div id="hilliness_auto_display" style="display: none; margin-bottom: 10px; padding: 10px; background: #e8f4f8; border-radius: 5px; border-left: 3px solid #0071e3;">
+                            <strong>Auto-detected Hilliness:</strong> 
+                            <span id="hilliness_auto_value">-</span>/10
+                            <span id="hilliness_elevation" style="color: #666; font-size: 0.9em;"></span>
+                        </div>
+                        
+                        <label>
+                            <input type="checkbox" id="hilliness_override_enabled" name="hilliness_override_enabled">
+                            Manually Override Hilliness
+                        </label>
+                        <small>Check this if the auto-detected hilliness seems incorrect</small>
+                        
+                        <div id="hilliness_slider_container" style="display: none; margin-top: 10px;">
+                            <label for="hilliness_override">Hilliness Level</label>
+                            <input type="range" 
+                                   id="hilliness_override" 
+                                   name="hilliness_override" 
+                                   min="0" 
+                                   max="10" 
+                                   step="1" 
+                                   value="5"
+                                   oninput="document.getElementById('hillinessValue').textContent = this.value">
+                            <div class="range-value">
+                                <span id="hillinessValue">5</span> / 10
+                            </div>
+                            <small>0 = Completely flat, 5 = Moderate hill, 10 = Very steep hill</small>
+                        </div>
+                    </div>
+
+                    <!-- Gym Selection Section -->
+                    <div class="form-group" id="gymSelectionSection" style="display: none;">
+                        <label>Nearby Gyms (Select ones you'd use)</label>
+                        <div id="gymsList" class="gyms-list">
+                            <!-- Populated by JavaScript -->
+                        </div>
+                        <small>Checked gyms will be saved for future apartments</small>
+                    </div>
+
+                    <!-- Hidden fields for gym data -->
+                    <div id="gymHiddenFields"></div>
+
+                    <div class="form-group">
+                        <label for="year_built">Year Built</label>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <input type="number" 
+                                   id="year_built" 
+                                   name="year_built" 
+                                   min="1850" 
+                                   max="2025" 
+                                   placeholder="1980"
+                                   style="flex: 1;">
+                            <button type="button" 
+                                    id="autoDetectYearBtn" 
+                                    class="btn btn-secondary"
+                                    style="white-space: nowrap;">
+                                🔍 Auto-Detect
+                            </button>
+                        </div>
+                        <small>For rent control eligibility (pre-1979 in SF). Click Auto-Detect to try finding it automatically.</small>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" id="addButton" class="btn btn-primary">Add Apartment</button>
+                        <button type="submit" id="updateButton" class="btn btn-primary" style="display: none;">Update Apartment</button>
+                        <button type="button" id="deleteButton" class="btn btn-danger" style="display: none;" onclick="deleteApartment()">Delete Apartment</button>
+                        <button type="reset" class="btn btn-secondary" onclick="clearForm()">Clear Form</button>
+                    </div>
+                </form>
+
+                <div class="next-steps">
+                    <h3>After adding apartments:</h3>
+                    <p>Run in terminal:</p>
+                    <code>python main.py --analyze-new</code>
+                    <p>This will calculate commute times, safety scores, and rankings.</p>
+                </div>
+            </div>
+
+            <!-- Right side: Maps -->
+            <div class="map-container">
+                <div class="map-section">
+                    <h3>Street View</h3>
+                    <div id="streetView" class="street-view">
+                        <div class="placeholder">
+                            <p>📍 Enter an address to see Street View</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="map-section">
+                    <h3>Location Map</h3>
+                    <div id="map" class="map-view">
+                        <div class="placeholder">
+                            <p>🗺️ Enter an address to see the map</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="map-info" id="mapInfo" style="display: none;">
+                    <h4>Location Details</h4>
+                    <p id="coords"></p>
+                </div>
+            </div>
+            </div>
+
+            <!-- Analysis Tab -->
+            <div id="analysisTab" class="tab-content" style="display: none;">
+                <div class="analysis-container">
+                    <div class="analysis-header">
+                        <h2>Apartment Analysis</h2>
+                        <button id="runAnalysisBtn" class="btn btn-primary" onclick="runAnalysis()">
+                            Run Analysis
+                        </button>
+                    </div>
+
+                    <div id="analysisLoading" class="loading-spinner" style="display: none;">
+                        <p>⏳ Analyzing apartments... This may take a few minutes.</p>
+                    </div>
+
+                    <div id="analysisResults" style="display: none;">
+                        <div class="analysis-section">
+                            <h3>Score vs Price</h3>
+                            <canvas id="scatterPlot"></canvas>
+                        </div>
+
+                        <div class="analysis-section">
+                            <h3>Ranked Apartments</h3>
+                            <div id="rankedList"></div>
+                        </div>
+
+                        <div class="analysis-section">
+                            <h3>Criteria Matrix</h3>
+                            <div id="criteriaMatrix"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Apartment Profile Modal -->
+            <div id="apartmentModal" class="modal" style="display: none;">
+                <div class="modal-content">
+                    <span class="modal-close" onclick="closeModal()">&times;</span>
+                    <div id="modalBody"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script>
+        let map;
+        let streetView;
+        let marker;
+        let autocomplete;
+        let scatterChart = null;
+
+        function initMaps() {
+            // Initialize map (centered on SF)
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: 37.7749, lng: -122.4194 },
+                zoom: 13,
+                mapTypeControl: false
+            });
+
+            // Initialize Street View
+            streetView = new google.maps.StreetViewPanorama(
+                document.getElementById('streetView'),
+                {
+                    position: { lat: 37.7749, lng: -122.4194 },
+                    pov: { heading: 165, pitch: 0 },
+                    zoom: 1,
+                    visible: false
+                }
+            );
+
+            // Setup autocomplete
+            const input = document.getElementById('address');
+            autocomplete = new google.maps.places.Autocomplete(input, {
+                types: ['address'],
+                componentRestrictions: { country: 'us' }
+            });
+
+            autocomplete.addListener('place_changed', onPlaceChanged);
+            
+            // Load apartments for selector
+            loadApartmentsList();
+        }
+
+        // Load apartments list for dropdown
+        async function loadApartmentsList() {
+            try {
+                const response = await fetch('/get_apartments');
+                const data = await response.json();
+                
+                if (data.success && data.apartments) {
+                    const selector = document.getElementById('apartment_selector');
+                    
+                    // Clear existing options except the first one
+                    while (selector.options.length > 1) {
+                        selector.remove(1);
+                    }
+                    
+                    // Add apartments
+                    data.apartments.forEach(apt => {
+                        const option = document.createElement('option');
+                        option.value = apt.row;
+                        option.textContent = `${apt.address}${apt.price ? ' - $' + apt.price : ''}`;
+                        selector.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading apartments:', error);
+            }
+        }
+
+        // Handle apartment selection
+        async function onApartmentSelected() {
+            const selector = document.getElementById('apartment_selector');
+            const rowNumber = selector.value;
+            
+            if (!rowNumber) {
+                // "New Apartment" selected - clear form
+                clearForm();
+                updateButtonVisibility(false);
+                return;
+            }
+            
+            // Load apartment data
+            try {
+                const response = await fetch(`/get_apartment/${rowNumber}`);
+                const data = await response.json();
+                
+                if (data) {
+                    populateForm(data);
+                    updateButtonVisibility(true);
+                }
+            } catch (error) {
+                console.error('Error loading apartment:', error);
+                alert('Error loading apartment data');
+            }
+        }
+
+        // Populate form with apartment data
+        function populateForm(data) {
+            // Set row number
+            document.getElementById('row_number').value = data.row_number || '';
+            
+            // Basic fields
+            document.getElementById('zillow_url').value = data['Zillow URL'] || '';
+            document.getElementById('address').value = data['Address'] || '';
+            document.getElementById('manual_safety_rating').value = data['Manual Safety Rating'] || 5;
+            document.getElementById('safetyValue').textContent = data['Manual Safety Rating'] || 5;
+            
+            // Property details
+            document.getElementById('price').value = data['Price'] || '';
+            document.getElementById('sqft').value = data['Square Feet'] || '';
+            
+            // Parking - handle multi-select
+            const parkingTypes = (data['Parking Type'] || '').split('\n').filter(v => v);
+            document.querySelectorAll('input[name="parking_type"]').forEach(cb => {
+                cb.checked = parkingTypes.includes(cb.value);
+            });
+            
+            const parkingEnclosures = (data['Parking Enclosure'] || '').split('\n').filter(v => v);
+            document.querySelectorAll('input[name="parking_enclosure"]').forEach(cb => {
+                cb.checked = parkingEnclosures.includes(cb.value);
+            });
+            
+            // Laundry
+            const laundryTypes = (data['Laundry Type'] || '').split('\n').filter(v => v);
+            document.querySelectorAll('input[name="laundry_type"]').forEach(cb => {
+                cb.checked = laundryTypes.includes(cb.value);
+            });
+            
+            // Floor level
+            document.getElementById('floor_level').value = data['Floor Level'] || '';
+            
+            // Street parking ease
+            const parkingEase = data['Street Parking Ease'];
+            if (parkingEase) {
+                document.querySelector(`input[name="street_parking_ease"][value="${parkingEase}"]`).checked = true;
+            }
+            
+            // Visitor parking ease
+            const visitorEase = data['Visitor Parking Ease'];
+            if (visitorEase) {
+                document.querySelector(`input[name="visitor_parking_ease"][value="${visitorEase}"]`).checked = true;
+            }
+            
+            // Neighborhoods - handle multi-select
+            const neighborhoods = (data['Neighborhoods'] || '').split('\n').filter(v => v);
+            document.querySelectorAll('input[name="neighborhoods"]').forEach(cb => {
+                cb.checked = neighborhoods.includes(cb.value);
+            });
+            
+            // Hilliness override
+            const hillinessOverride = data['Hilliness Override (0-10)'];
+            if (hillinessOverride && hillinessOverride !== '5') {
+                document.getElementById('hilliness_override_toggle').checked = true;
+                document.getElementById('hillinessOverrideContainer').style.display = 'block';
+                document.getElementById('hilliness_override').value = hillinessOverride;
+                document.getElementById('hillinessValue').textContent = hillinessOverride;
+            }
+            
+            // Year built
+            const yearBuilt = data['Year Built'];
+            if (yearBuilt) {
+                document.getElementById('year_built').value = yearBuilt;
+            }
+            
+            // Tour questions checkboxes
+            const tourQuestions = (data['Tour Questions'] || '').split('\n').filter(v => v);
+            document.querySelector('input[name="parking_type_tour_question"]').checked = tourQuestions.includes('Parking type');
+            document.querySelector('input[name="parking_enclosure_tour_question"]').checked = tourQuestions.includes('Parking enclosure');
+            document.querySelector('input[name="laundry_type_tour_question"]').checked = tourQuestions.includes('Laundry type');
+            
+            // Update maps and fetch additional data if address is present
+            const address = data['Address'];
+            if (address) {
+                console.log('Loading apartment - updating maps and fetching data for:', address);
+                // Geocode the address and update maps
+                geocodeAndUpdateMaps(address);
+                
+                // Fetch parking ease if not already set
+                if (!visitorEase) {
+                    fetchParkingEase();
+                }
+            }
+            
+            // Check if we need to show laundromats
+            checkLaundryAndFetchLaundromats();
+        }
+
+        // Clear form
+        function clearForm() {
+            document.getElementById('row_number').value = '';
+            document.getElementById('apartmentForm').reset();
+            document.getElementById('safetyValue').textContent = '5';
+            document.getElementById('hillinessOverrideContainer').style.display = 'none';
+        }
+
+        // Update button visibility
+        function updateButtonVisibility(isExisting) {
+            const addBtn = document.getElementById('addButton');
+            const updateBtn = document.getElementById('updateButton');
+            const deleteBtn = document.getElementById('deleteButton');
+            
+            if (isExisting) {
+                addBtn.style.display = 'none';
+                updateBtn.style.display = 'inline-block';
+                deleteBtn.style.display = 'inline-block';
+            } else {
+                addBtn.style.display = 'inline-block';
+                updateBtn.style.display = 'none';
+                deleteBtn.style.display = 'none';
+            }
+        }
+
+        // Delete apartment
+        async function deleteApartment() {
+            const rowNumber = document.getElementById('row_number').value;
+            if (!rowNumber) return;
+            
+            const address = document.getElementById('address').value;
+            if (!confirm(`Are you sure you want to delete the apartment at:\n${address}?\n\nThis action cannot be undone.`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/delete/${rowNumber}`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    alert('Apartment deleted successfully');
+                    clearForm();
+                    loadApartmentsList();
+                    document.getElementById('apartment_selector').value = '';
+                } else {
+                    alert('Error deleting apartment');
+                }
+            } catch (error) {
+                console.error('Error deleting apartment:', error);
+                alert('Error deleting apartment');
+            }
+        }
+
+        // Update maps and fetch data for a given lat/lng
+        function updateMapsAndData(lat, lng, address) {
+            const location = new google.maps.LatLng(lat, lng);
+            
+            // Update map
+            map.setCenter(location);
+            map.setZoom(16);
+
+            // Add or update marker
+            if (marker) {
+                marker.setPosition(location);
+            } else {
+                marker = new google.maps.Marker({
+                    map: map,
+                    position: location,
+                    title: address
+                });
+            }
+
+            // Update Street View
+            streetView.setPosition(location);
+            streetView.setVisible(true);
+            
+            // Hide placeholders if they exist
+            const streetViewPlaceholder = document.querySelector('.street-view .placeholder');
+            const mapViewPlaceholder = document.querySelector('.map-view .placeholder');
+            if (streetViewPlaceholder) {
+                streetViewPlaceholder.style.display = 'none';
+            }
+            if (mapViewPlaceholder) {
+                mapViewPlaceholder.style.display = 'none';
+            }
+
+            // Show coordinates
+            document.getElementById('mapInfo').style.display = 'block';
+            document.getElementById('coords').textContent = 
+                `Coordinates: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+            
+            // Fetch additional data (gyms, hilliness, parking ease)
+            fetchNearbyGyms();
+            fetchHilliness();
+            fetchParkingEase();
+            checkLaundryAndFetchLaundromats();
+        }
+        
+        // Geocode an address and update maps
+        async function geocodeAndUpdateMaps(address) {
+            if (!address) return;
+            
+            console.log('Geocoding address for maps:', address);
+            
+            try {
+                const response = await fetch('/geocode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address })
+                });
+                
+                const data = await response.json();
+                
+                if (data.lat && data.lng) {
+                    console.log('✓ Geocoded:', data.lat, data.lng);
+                    updateMapsAndData(data.lat, data.lng, address);
+                } else {
+                    console.warn('Could not geocode address:', address);
+                }
+            } catch (error) {
+                console.error('Error geocoding address:', error);
+            }
+        }
+
+        function onPlaceChanged() {
+            const place = autocomplete.getPlace();
+            
+            if (!place.geometry) {
+                return;
+            }
+
+            const location = place.geometry.location;
+            const lat = location.lat();
+            const lng = location.lng();
+
+            // Get neighborhood from Google Places API
+            const addressComponents = place.address_components;
+            let detectedNeighborhoods = [];
+            
+            for (let component of addressComponents) {
+                if (component.types.includes('neighborhood') || 
+                    component.types.includes('sublocality')) {
+                    detectedNeighborhoods.push(component.long_name);
+                }
+            }
+            
+            // Pre-select detected neighborhoods
+            updateNeighborhoodCheckboxes(detectedNeighborhoods);
+            
+            // Update maps and fetch data
+            updateMapsAndData(lat, lng, place.formatted_address);
+        }
+
+        // SF Neighborhoods list
+        const SF_NEIGHBORHOODS = [
+            "Alamo Square", "Bayview", "Castro", "Chinatown", "Civic Center",
+            "Cole Valley", "Dogpatch", "Downtown", "Embarcadero", "Excelsior",
+            "Financial District", "Fisherman's Wharf", "Glen Park", "Haight-Ashbury",
+            "Hayes Valley", "Inner Richmond", "Inner Sunset", "Japantown", "Laurel Heights",
+            "Lower Haight", "Marina", "Mission", "Mission Bay", "Nob Hill", "Noe Valley",
+            "North Beach", "Outer Richmond", "Outer Sunset", "Pacific Heights", "Panhandle",
+            "Portola", "Potrero Hill", "Presidio", "Russian Hill", "SOMA", "South Beach",
+            "Tenderloin", "Telegraph Hill", "Twin Peaks", "Union Square", "Upper Market",
+            "Van Ness", "Visitacion Valley", "Western Addition", "West Portal"
+        ];
+
+        function initializeNeighborhoods() {
+            const container = document.getElementById('neighborhoodOptions');
+            container.innerHTML = '';
+            
+            SF_NEIGHBORHOODS.forEach(neighborhood => {
+                const label = document.createElement('label');
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.name = 'neighborhoods';
+                checkbox.value = neighborhood;
+                checkbox.className = 'neighborhood-checkbox';
+                
+                label.appendChild(checkbox);
+                label.appendChild(document.createTextNode(' ' + neighborhood));
+                container.appendChild(label);
+            });
+        }
+
+        function updateNeighborhoodCheckboxes(neighborhoods) {
+            // Uncheck all first
+            document.querySelectorAll('.neighborhood-checkbox').forEach(cb => {
+                cb.checked = false;
+            });
+            
+            // Check detected ones
+            neighborhoods.forEach(neighborhood => {
+                const checkbox = Array.from(document.querySelectorAll('.neighborhood-checkbox'))
+                    .find(cb => cb.value === neighborhood);
+                if (checkbox) {
+                    checkbox.checked = true;
+                }
+            });
+        }
+
+        function filterNeighborhoods() {
+            const searchTerm = document.querySelector('.neighborhood-search').value.toLowerCase();
+            const labels = document.querySelectorAll('#neighborhoodOptions label');
+            
+            labels.forEach(label => {
+                const text = label.textContent.toLowerCase();
+                if (text.includes(searchTerm)) {
+                    label.style.display = 'flex';
+                } else {
+                    label.style.display = 'none';
+                }
+            });
+        }
+
+        // Hilliness override toggle
+        document.getElementById('hilliness_override_enabled').addEventListener('change', function() {
+            const sliderContainer = document.getElementById('hilliness_slider_container');
+            if (this.checked) {
+                sliderContainer.style.display = 'block';
+            } else {
+                sliderContainer.style.display = 'none';
+                // Reset to default value when disabled
+                document.getElementById('hilliness_override').value = 5;
+                document.getElementById('hillinessValue').textContent = '5';
+            }
+        });
+
+        // Initialize neighborhoods on page load
+        window.addEventListener('load', function() {
+            initMaps();
+            initializeNeighborhoods();
+        });
+
+        // Gym selection functionality
+        async function fetchNearbyGyms() {
+            const address = document.getElementById('address').value.trim();
+            if (!address) return;
+            
+            try {
+                const response = await fetch('/get_gyms', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.gyms.length > 0) {
+                    displayGyms(data.gyms);
+                    document.getElementById('gymSelectionSection').style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Error fetching gyms:', error);
+            }
+        }
+
+        function displayGyms(gyms) {
+            const gymsList = document.getElementById('gymsList');
+            const hiddenFields = document.getElementById('gymHiddenFields');
+            
+            gymsList.innerHTML = '';
+            hiddenFields.innerHTML = '';
+            
+            gyms.forEach(gym => {
+                // Create gym card
+                const card = document.createElement('div');
+                card.className = 'gym-card';
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.name = 'selected_gyms[]';
+                checkbox.value = gym.place_id;
+                checkbox.id = `gym_${gym.place_id}`;
+                checkbox.checked = gym.is_approved;  // Pre-select if previously approved
+                
+                const label = document.createElement('label');
+                label.htmlFor = checkbox.id;
+                
+                // Build gym info HTML
+                const typesStr = gym.types.filter(t => !t.includes('point_of_interest')).slice(0, 3).join(', ');
+                const starsHTML = '⭐'.repeat(Math.round(gym.rating));
+                
+                label.innerHTML = `
+                    <div class="gym-header">
+                        <strong>${gym.name}</strong>
+                        <span class="gym-distance">${gym.distance_miles} mi</span>
+                    </div>
+                    <div class="gym-rating">
+                        ${starsHTML} ${gym.rating}/5 (${gym.user_ratings_total} reviews)
+                    </div>
+                    <div class="gym-address">${gym.address}</div>
+                    ${typesStr ? `<div class="gym-types">${typesStr}</div>` : ''}
+                    ${gym.review_snippet ? `<div class="gym-review">"${gym.review_snippet}"</div>` : ''}
+                `;
+                
+                card.appendChild(checkbox);
+                card.appendChild(label);
+                gymsList.appendChild(card);
+                
+                // Add hidden fields for gym data
+                hiddenFields.innerHTML += `
+                    <input type="hidden" name="gym_name_${gym.place_id}" value="${gym.name}">
+                    <input type="hidden" name="gym_address_${gym.place_id}" value="${gym.address}">
+                    <input type="hidden" name="gym_rating_${gym.place_id}" value="${gym.rating}">
+                    <input type="hidden" name="gym_lat_${gym.place_id}" value="${gym.lat}">
+                    <input type="hidden" name="gym_lng_${gym.place_id}" value="${gym.lng}">
+                    <input type="hidden" name="gym_types_${gym.place_id}" value="${gym.types.join(',')}">
+                `;
+            });
+        }
+
+        // Trigger gym fetch when address changes (debounced)
+        let addressTimeout;
+        let hillinessTimeout;
+        let parkingEaseTimeout;
+        let laundromatTimeout;
+        document.getElementById('address').addEventListener('input', function() {
+            clearTimeout(addressTimeout);
+            clearTimeout(hillinessTimeout);
+            clearTimeout(parkingEaseTimeout);
+            clearTimeout(laundromatTimeout);
+            addressTimeout = setTimeout(fetchNearbyGyms, 1000);
+            hillinessTimeout = setTimeout(fetchHilliness, 1000);
+            parkingEaseTimeout = setTimeout(fetchParkingEase, 1000);
+        });
+        
+        // Also check laundry selection to show/hide laundromats
+        document.querySelectorAll('input[name="laundry_type"]').forEach(checkbox => {
+            checkbox.addEventListener('change', function() {
+                checkLaundryAndFetchLaundromats();
+            });
+        });
+
+        // Fetch hilliness information
+        async function fetchHilliness() {
+            const address = document.getElementById('address').value.trim();
+            if (!address) return;
+            
+            try {
+                const response = await fetch('/get_hilliness', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.hilliness !== null && data.hilliness !== undefined) {
+                    document.getElementById('hilliness_auto_value').textContent = data.hilliness;
+                    document.getElementById('hilliness_elevation').textContent = `(elevation: ${data.elevation}m)`;
+                    document.getElementById('hilliness_auto_display').style.display = 'block';
+                } else {
+                    // Hide the display if no data
+                    document.getElementById('hilliness_auto_display').style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error fetching hilliness:', error);
+                document.getElementById('hilliness_auto_display').style.display = 'none';
+            }
+        }
+
+        // Check laundry selection and fetch laundromats if needed
+        function checkLaundryAndFetchLaundromats() {
+            const selectedLaundry = Array.from(document.querySelectorAll('input[name="laundry_type"]:checked'))
+                .map(cb => cb.value);
+            
+            // Show laundromats if "none" or "shared_poor" is selected
+            const needsLaundromat = selectedLaundry.includes('none') || selectedLaundry.includes('shared_poor');
+            
+            if (needsLaundromat) {
+                fetchLaundromats();
+            } else {
+                document.getElementById('laundromatSection').style.display = 'none';
+            }
+        }
+        
+        // Fetch nearby laundromats
+        async function fetchLaundromats() {
+            const address = document.getElementById('address').value.trim();
+            if (!address) return;
+            
+            console.log('Fetching laundromats for:', address);
+            
+            try {
+                const response = await fetch('/get_laundromats', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address })
+                });
+                
+                const data = await response.json();
+                console.log('Laundromat response:', data);
+                
+                if (data.success && data.laundromats) {
+                    displayLaundromats(data.laundromats, data.estimated_monthly_cost);
+                    document.getElementById('laundromatSection').style.display = 'block';
+                } else if (data.error) {
+                    console.error('Laundromat API error:', data.error);
+                }
+            } catch (error) {
+                console.error('Error fetching laundromats:', error);
+            }
+        }
+        
+        // Display laundromats
+        function displayLaundromats(laundromats, monthlyCost) {
+            const list = document.getElementById('laundromatsList');
+            const costSpan = document.getElementById('laundromatMonthlyCost');
+            
+            costSpan.textContent = monthlyCost;
+            
+            if (laundromats.length === 0) {
+                list.innerHTML = '<p style="color: #856404;">No laundromats found within 0.5 miles</p>';
+                return;
+            }
+            
+            list.innerHTML = laundromats.map(laundromat => {
+                // Prefer walking time, fall back to distance
+                let distanceDisplay;
+                if (laundromat.walking_time_mins) {
+                    distanceDisplay = `🚶 ${laundromat.walking_time_mins} min walk`;
+                } else {
+                    distanceDisplay = `${laundromat.distance_miles} mi`;
+                }
+                
+                return `
+                    <div style="padding: 10px; margin-bottom: 8px; background: white; border-radius: 6px; border: 1px solid #ffc107;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <strong style="color: #333;">${laundromat.name}</strong>
+                            <span style="color: #0066cc; font-weight: 600;">${distanceDisplay}</span>
+                        </div>
+                        <div style="font-size: 13px; color: #666; margin-top: 4px;">
+                            ${laundromat.rating > 0 ? `⭐ ${laundromat.rating}/5 (${laundromat.user_ratings_total} reviews)` : 'No ratings'}
+                        </div>
+                        <div style="font-size: 12px; color: #888; margin-top: 2px;">
+                            ${laundromat.address}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // Fetch visitor parking ease
+        async function fetchParkingEase() {
+            const address = document.getElementById('address').value.trim();
+            if (!address) {
+                console.log('No address provided for parking ease detection');
+                return;
+            }
+            
+            console.log('Fetching parking ease for:', address);
+            
+            try {
+                const response = await fetch('/get_parking_ease', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address })
+                });
+                
+                const data = await response.json();
+                console.log('Parking ease response:', data);
+                
+                if (data.success && data.parking_ease) {
+                    // Auto-select the visitor parking ease rating
+                    const radioButton = document.querySelector(`input[name="visitor_parking_ease"][value="${data.parking_ease}"]`);
+                    if (radioButton) {
+                        radioButton.checked = true;
+                        console.log(`✓ Auto-selected visitor parking ease: ${data.parking_ease}/5 stars`);
+                    } else {
+                        console.warn(`Radio button not found for value: ${data.parking_ease}`);
+                    }
+                    
+                    // Show reasoning
+                    if (data.reasoning) {
+                        console.log(`Reasoning: ${data.reasoning}`);
+                    }
+                } else if (data.error) {
+                    console.error('Parking ease API error:', data.error);
+                }
+            } catch (error) {
+                console.error('Error fetching parking ease:', error);
+            }
+        }
+
+        // Auto-detect building year
+        document.getElementById('autoDetectYearBtn').addEventListener('click', async function() {
+            const address = document.getElementById('address').value.trim();
+            if (!address) {
+                alert('Please enter an address first');
+                return;
+            }
+            
+            const btn = this;
+            const originalText = btn.textContent;
+            btn.textContent = '⏳ Detecting...';
+            btn.disabled = true;
+            
+            try {
+                const response = await fetch('/get_building_year', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.year) {
+                    document.getElementById('year_built').value = data.year;
+                    btn.textContent = '✓ Found!';
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                    }, 2000);
+                } else {
+                    alert('Could not automatically determine building year. Please enter manually.');
+                    btn.textContent = originalText;
+                }
+            } catch (error) {
+                console.error('Error detecting year:', error);
+                alert('Error detecting building year');
+                btn.textContent = originalText;
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        // Form validation
+        document.getElementById('apartmentForm').addEventListener('submit', function(e) {
+            const address = document.getElementById('address').value.trim();
+            if (!address) {
+                e.preventDefault();
+                alert('Please enter an address');
+                return false;
+            }
+            
+            // Ensure at least one checkbox is selected for required fields
+            const parkingChecked = document.querySelectorAll('input[name="parking_type"]:checked').length > 0;
+            const laundryChecked = document.querySelectorAll('input[name="laundry_type"]:checked').length > 0;
+            
+            if (!parkingChecked) {
+                e.preventDefault();
+                alert('Please select at least one parking type');
+                return false;
+            }
+            
+            if (!laundryChecked) {
+                e.preventDefault();
+                alert('Please select at least one laundry type');
+                return false;
+            }
+        });
+
+        // Tab switching
+        function showTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.style.display = 'none';
+            });
+            
+            // Remove active class from all tab buttons
+            document.querySelectorAll('.tab').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            // Show selected tab
+            if (tabName === 'entry') {
+                document.getElementById('entryTab').style.display = 'flex';
+                document.querySelectorAll('.tab')[0].classList.add('active');
+            } else if (tabName === 'analysis') {
+                document.getElementById('analysisTab').style.display = 'block';
+                document.querySelectorAll('.tab')[1].classList.add('active');
+                // Load analysis data if not already loaded
+                if (!document.getElementById('analysisResults').style.display || document.getElementById('analysisResults').style.display === 'none') {
+                    loadAnalysisData();
+                }
+            }
+        }
+
+        // Run analysis
+        async function runAnalysis() {
+            const btn = document.getElementById('runAnalysisBtn');
+            const loading = document.getElementById('analysisLoading');
+            const results = document.getElementById('analysisResults');
+            
+            btn.disabled = true;
+            btn.textContent = 'Running...';
+            loading.style.display = 'block';
+            results.style.display = 'none';
+            
+            try {
+                const response = await fetch('/run_analysis', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert(`Analysis complete! Analyzed ${data.analyzed} apartments.`);
+                    loadAnalysisData();
+                } else {
+                    alert('Error running analysis: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error running analysis:', error);
+                alert('Error running analysis');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Run Analysis';
+                loading.style.display = 'none';
+            }
+        }
+
+        // Load analysis data
+        async function loadAnalysisData() {
+            try {
+                const response = await fetch('/get_analysis_data');
+                const data = await response.json();
+                
+                if (data.scatter && data.scatter.length > 0) {
+                    renderScatterPlot(data.scatter);
+                    renderRankedList(data.ranked);
+                    renderCriteriaMatrix(data.criteria_matrix);
+                    document.getElementById('analysisResults').style.display = 'block';
+                } else {
+                    document.getElementById('analysisResults').innerHTML = '<p>No analyzed apartments found. Please run analysis first.</p>';
+                    document.getElementById('analysisResults').style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Error loading analysis data:', error);
+                document.getElementById('analysisResults').innerHTML = '<p>Error loading analysis data</p>';
+                document.getElementById('analysisResults').style.display = 'block';
+            }
+        }
+
+        // Render scatter plot
+        function renderScatterPlot(scatterData) {
+            const ctx = document.getElementById('scatterPlot').getContext('2d');
+            
+            // Destroy existing chart if it exists
+            if (scatterChart) {
+                scatterChart.destroy();
+            }
+            
+            scatterChart = new Chart(ctx, {
+                type: 'scatter',
+                data: {
+                    datasets: [{
+                        label: 'Apartments',
+                        data: scatterData.map(d => ({
+                            x: d.price,
+                            y: d.score,
+                            address: d.address,
+                            row: d.row,
+                            score_min: d.score_min,
+                            score_max: d.score_max
+                        })),
+                        backgroundColor: 'rgba(0, 102, 204, 0.6)',
+                        borderColor: 'rgba(0, 102, 204, 1)',
+                        pointRadius: 6,
+                        pointHoverRadius: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    onClick: (event, elements) => {
+                        if (elements.length > 0) {
+                            const index = elements[0].index;
+                            const apartment = scatterData[index];
+                            showApartmentModal(apartment.row);
+                        }
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => {
+                                    const apt = scatterData[context.dataIndex];
+                                    return [
+                                        apt.address,
+                                        `Price: $${apt.price}`,
+                                        `Score: ${apt.score.toFixed(1)}`,
+                                        apt.score_min && apt.score_max ? `Range: ${apt.score_min.toFixed(1)} - ${apt.score_max.toFixed(1)}` : ''
+                                    ].filter(Boolean);
+                                }
+                            }
+                        },
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Monthly Rent ($)'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Score'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Render ranked list
+        function renderRankedList(rankedData) {
+            const container = document.getElementById('rankedList');
+            
+            if (!rankedData || rankedData.length === 0) {
+                container.innerHTML = '<p>No apartments to rank</p>';
+                return;
+            }
+            
+            const html = `
+                <table class="ranked-table">
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Address</th>
+                            <th>Price</th>
+                            <th>Score</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rankedData.map((apt, idx) => `
+                            <tr>
+                                <td>${idx + 1}</td>
+                                <td>${apt.address}</td>
+                                <td>$${apt.price}</td>
+                                <td>${apt.score ? apt.score.toFixed(1) : 'N/A'}</td>
+                                <td>
+                                    <button class="btn-small" onclick="showApartmentModal(${apt.row})">View</button>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+            
+            container.innerHTML = html;
+        }
+
+        // Render criteria matrix
+        function renderCriteriaMatrix(matrixData) {
+            const container = document.getElementById('criteriaMatrix');
+            
+            if (!matrixData || Object.keys(matrixData).length === 0) {
+                container.innerHTML = '<p>No criteria matrix data available</p>';
+                return;
+            }
+            
+            // This is a simplified version - you can enhance it based on your criteria matrix structure
+            container.innerHTML = '<p>Criteria matrix visualization coming soon...</p>';
+        }
+
+        // Show apartment modal
+        async function showApartmentModal(rowNumber) {
+            const modal = document.getElementById('apartmentModal');
+            const modalBody = document.getElementById('modalBody');
+            
+            modalBody.innerHTML = '<p>Loading...</p>';
+            modal.style.display = 'block';
+            
+            try {
+                const response = await fetch(`/get_apartment/${rowNumber}`);
+                const data = await response.json();
+                
+                if (data) {
+                    const html = `
+                        <h2>${data['Address'] || 'Unknown'}</h2>
+                        <div class="modal-details">
+                            <p><strong>Price:</strong> $${data['Price'] || 'N/A'}</p>
+                            <p><strong>Score:</strong> ${data['Weighted Score'] || 'N/A'}</p>
+                            <p><strong>Commute Time:</strong> ${data['Commute Time (You)'] || 'N/A'}</p>
+                            <p><strong>Safety Score:</strong> ${data['Safety Score (OpenData)'] || 'N/A'}</p>
+                            <p><strong>Parking:</strong> ${data['Parking Type'] || 'N/A'}</p>
+                            <p><strong>Laundry:</strong> ${data['Laundry Type'] || 'N/A'}</p>
+                            ${data['Zillow URL'] ? `<p><a href="${data['Zillow URL']}" target="_blank">View on Zillow</a></p>` : ''}
+                        </div>
+                    `;
+                    modalBody.innerHTML = html;
+                }
+            } catch (error) {
+                console.error('Error loading apartment:', error);
+                modalBody.innerHTML = '<p>Error loading apartment details</p>';
+            }
+        }
+
+        // Close modal
+        function closeModal() {
+            document.getElementById('apartmentModal').style.display = 'none';
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('apartmentModal');
+            if (event.target === modal) {
+                modal.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>
+
