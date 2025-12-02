@@ -118,6 +118,13 @@ class ApartmentAnalyzer:
                 result['commute_details'] = commute_details
                 result['commute_details_json'] = json.dumps(commute_details) if commute_details else ""
                 result['safety_score_opendata'] = location_data.get('safety_score_opendata', 5.0)
+                result['incident_count'] = location_data.get('incident_count', 0)
+                result['avg_severity'] = location_data.get('avg_severity')
+                result['count_score'] = location_data.get('count_score')
+                result['severity_score'] = location_data.get('severity_score')
+                crime_details = location_data.get('crime_details')
+                if crime_details:
+                    result['crime_details'] = crime_details
                 result['restaurants_nearby'] = location_data.get('restaurants_nearby', 0)
                 result['cafes_nearby'] = location_data.get('cafes_nearby', 0)
                 result['parks_nearby'] = location_data.get('parks_nearby', 0)
@@ -213,6 +220,16 @@ class ApartmentAnalyzer:
             result['location_vibe_score'] = scorecard.components['location_vibe'].raw_value
             result['parking_score'] = scorecard.components['parking'].raw_value
             
+            # Prepare JSON fields for sheet storage
+            if 'commute_details' in result:
+                result['commute_details_json'] = result['commute_details']
+            if 'crime_details' in result:
+                result['crime_details_json'] = result['crime_details']
+                try:
+                    print(f"  -> Crime details prepared ({result['address']}): {json.dumps(result['crime_details'])[:200]}...")
+                except Exception as json_err:
+                    print(f"  ⚠ Failed to serialize crime details for {result['address']}: {json_err}")
+            
             # Evaluate ideal criteria
             criteria_met = scorecard.evaluate_ideal_criteria()
             result['criteria_met'] = criteria_met
@@ -257,6 +274,10 @@ class ApartmentAnalyzer:
             return
         
         print(f"\nFound {len(apartments)} apartments to analyze")
+        for apt in apartments:
+            address = apt.get(config.SHEET_COLUMNS["address"], "Unknown")
+            reason = apt.get('_analysis_reason', 'needs analysis')
+            print(f"  - {address}: {reason}")
         
         if fail_fast:
             print("⚠️  FAIL-FAST MODE: Will stop on first error\n")

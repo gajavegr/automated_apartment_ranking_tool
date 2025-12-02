@@ -54,6 +54,7 @@ SHEET_COLUMNS = {
     # Safety
     "safety_score_opendata": "Safety Score (OpenData)",
     "combined_safety": "Combined Safety",
+    "crime_details": "Crime Details (JSON)",
     
     # WFH Quality
     "wfh_quality_score": "WFH Quality Score",

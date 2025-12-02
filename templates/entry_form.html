@@ -523,6 +523,43 @@
                                             <label>Avg Severity:</label>
                                             <span id="safetySeverity" class="field-value">--</span>
                                         </div>
+                                        
+                                        <!-- Expandable crime breakdown -->
+                                        <div class="field-row" onclick="toggleSafetyDetails()" style="cursor: pointer; color: #0066cc; margin-top: 8px;">
+                                            <span style="font-size: 0.9em;">
+                                                <span id="safetyDetailsToggle">▶</span> View Crime Details
+                                            </span>
+                                        </div>
+                                        <div id="safetyDetailsContent" style="display: none; margin-top: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 0.9em;">
+                                            <div class="field-row">
+                                                <label>Search Radius:</label>
+                                                <span id="safetyRadius" class="field-value">--</span>
+                                            </div>
+                                            <div class="field-row">
+                                                <label>Incidents vs Baseline:</label>
+                                                <span id="safetyVsBaseline" class="field-value">--</span>
+                                            </div>
+                                            <div class="field-row">
+                                                <label>Count Score:
+                                                    <span title="Penalizes high incident volume compared to the SF city baseline (500 incidents = midpoint)." style="cursor: help; font-weight: normal;">?</span>
+                                                </label>
+                                                <span id="safetyCountScore" class="field-value">--</span>
+                                            </div>
+                                            <div class="field-row">
+                                                <label>Severity Score:
+                                                    <span title="Penalizes neighborhoods where the average severity of incidents is higher (violent crimes weigh more)." style="cursor: help; font-weight: normal;">?</span>
+                                                </label>
+                                                <span id="safetySeverityScore" class="field-value">--</span>
+                                            </div>
+                                            <div style="margin-top: 8px;">
+                                                <strong>Top Crime Types:</strong>
+                                                <div id="safetyTopCrimes" style="margin-top: 4px; font-size: 0.85em;"></div>
+                                            </div>
+                                            <div id="safetyFormulaText" style="margin-top: 10px; color: #555; font-size: 0.85em;">
+                                                <!-- populated via JS -->
+                                            </div>
+                                        </div>
+                                        
                                         <div id="safetyBreakdown" class="field-breakdown"></div>
                                     </div>
                                 </div>
@@ -1973,8 +2010,16 @@
             updateComponentScoreDisplay('safetyScore', components['safety']);
             updateComponentMeta('safetyMeta', components['safety']);
             document.getElementById('safetyOpenData').textContent = data['Safety Score (OpenData)'] ? data['Safety Score (OpenData)'].toFixed(1) : '--';
-            document.getElementById('safetyIncidents').textContent = data['incident_count'] || '--';
-            document.getElementById('safetySeverity').textContent = data['avg_severity'] ? data['avg_severity'].toFixed(2) : '--';
+            const crimeDetails = getCrimeDetails(data, components['safety']);
+            const incidentsValue = crimeDetails?.incident_count ?? data['incident_count'];
+            const severityValue = crimeDetails?.avg_severity ?? data['avg_severity'];
+            document.getElementById('safetyIncidents').textContent =
+                typeof incidentsValue === 'number' ? incidentsValue.toLocaleString() : '--';
+            document.getElementById('safetySeverity').textContent =
+                typeof severityValue === 'number' ? severityValue.toFixed(2) : '--';
+            
+            // Populate detailed safety information
+            populateSafetyDetails(crimeDetails, data, components['safety']);
             
             updateComponentScoreDisplay('wfhScore', components['wfh_quality']);
             updateComponentMeta('wfhMeta', components['wfh_quality']);
@@ -2044,7 +2089,11 @@
             document.getElementById('editParkingVisitorEase').value = data['Visitor Parking Ease'] || '';
             document.getElementById('editGymQuality').value = data['Gym Quality'] || '';
 
-            renderScoreContributions(data.component_contributions || [], data.calculated_weighted_score || data['Weighted Score']);
+            renderScoreContributions(
+                data.component_contributions || [],
+                data.calculated_weighted_score || data['Weighted Score'],
+                components
+            );
             renderScoreSankey(data.component_contributions || []);
         }
 
@@ -2369,6 +2418,14 @@
             if (details && typeof details.annoyingness_penalty === 'number' && details.annoyingness_penalty > 0) {
                 detailLines.push(`Annoyingness penalty: -${details.annoyingness_penalty.toFixed(2)} pts`);
             }
+            if (elementId === 'safetyMeta' && details) {
+                const manual = typeof details.manual_rating === 'number' ? details.manual_rating : null;
+                const opendata = typeof details.opendata_rating === 'number' ? details.opendata_rating : null;
+                if (manual !== null && opendata !== null) {
+                    const combined = ((manual + opendata) / 2).toFixed(1);
+                    detailLines.push(`Raw = (Manual ${manual.toFixed(1)} + OpenData ${opendata.toFixed(1)}) / 2 = ${combined}`);
+                }
+            }
             
             metaEl.innerHTML = `
                 <div class="meta-pill-row">
@@ -2380,7 +2437,7 @@
             metaEl.classList.add('active');
         }
 
-        function renderScoreContributions(contributions, totalScore) {
+        function renderScoreContributions(contributions, totalScore, componentScores = {}) {
             const list = document.getElementById('scoreContributionList');
             if (!list) return;
             
@@ -2406,6 +2463,17 @@
                 parts.push('x 10');
                 const formula = `${parts.join(' x ')} = ${weightedText} pts`;
                 
+                let extraDetails = '';
+                if (contribution.name === 'safety') {
+                    const safetyDetails = componentScores['safety']?.details || {};
+                    const manual = typeof safetyDetails.manual_rating === 'number' ? safetyDetails.manual_rating : null;
+                    const opendata = typeof safetyDetails.opendata_rating === 'number' ? safetyDetails.opendata_rating : null;
+                    if (manual !== null && opendata !== null) {
+                        const combined = ((manual + opendata) / 2).toFixed(1);
+                        extraDetails = `<div class="contrib-details">Safety raw = (Manual ${manual.toFixed(1)} + OpenData ${opendata.toFixed(1)}) / 2 = ${combined}</div>`;
+                    }
+                }
+                
                 return `
                     <li>
                         <div class="contrib-row">
@@ -2413,6 +2481,7 @@
                             <span class="contrib-value">${weightedText} pts</span>
                         </div>
                         <div class="contrib-formula">${formula}${maxText}</div>
+                        ${extraDetails}
                     </li>
                 `;
             });
@@ -2496,10 +2565,93 @@
             
             if (content.style.display === 'none') {
                 content.style.display = 'block';
-                toggle.classList.add('expanded');
+                toggle.textContent = '▼';
             } else {
                 content.style.display = 'none';
-                toggle.classList.remove('expanded');
+                toggle.textContent = '▶';
+            }
+        }
+
+        function toggleSafetyDetails() {
+            const content = document.getElementById('safetyDetailsContent');
+            const toggle = document.getElementById('safetyDetailsToggle');
+            
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                toggle.textContent = '▼';
+            } else {
+                content.style.display = 'none';
+                toggle.textContent = '▶';
+            }
+        }
+        
+        function getCrimeDetails(data, safetyComponent) {
+            const crimeDetailsRaw = data['Crime Details (JSON)'];
+            let parsed = null;
+            if (crimeDetailsRaw) {
+                try {
+                    parsed = typeof crimeDetailsRaw === 'string' ? JSON.parse(crimeDetailsRaw) : crimeDetailsRaw;
+                } catch (e) {
+                    console.warn('Failed to parse crime details:', e);
+                }
+            }
+            if (!parsed) {
+                parsed = safetyComponent?.details || {};
+            }
+            return parsed;
+        }
+
+        function populateSafetyDetails(crimeDetails, data, safetyComponent) {
+            crimeDetails = crimeDetails || {};
+            const details = safetyComponent?.details || {};
+            
+            // Populate the expandable fields
+            const searchRadius = crimeDetails.search_radius_miles || details.search_radius_miles || 0.25;
+            document.getElementById('safetyRadius').textContent = `${searchRadius} miles`;
+            
+            const incidentCount = crimeDetails.incident_count ?? data['incident_count'] ?? 0;
+            const baseline = crimeDetails.baseline_incidents || 500;
+            const countRatio = baseline > 0 ? incidentCount / baseline : 0;
+            document.getElementById('safetyVsBaseline').textContent = 
+                `${incidentCount} vs ${baseline} (${(countRatio * 100).toFixed(1)}%)`;
+            
+            // Extract scores
+            const countScore = crimeDetails.count_score ?? details.count_score;
+            const severityScore = crimeDetails.severity_score ?? details.severity_score;
+            document.getElementById('safetyCountScore').textContent = 
+                typeof countScore === 'number' ? `${countScore.toFixed(1)}/10` : '--';
+            document.getElementById('safetySeverityScore').textContent = 
+                typeof severityScore === 'number' ? `${severityScore.toFixed(1)}/10` : '--';
+            
+            // Populate top crimes list
+            const topCrimes = crimeDetails.incident_categories || details.incident_categories || {};
+            const topCrimesEl = document.getElementById('safetyTopCrimes');
+            
+            if (Object.keys(topCrimes).length > 0) {
+                // Sort by count and take top 5
+                const sortedCrimes = Object.entries(topCrimes)
+                    .sort((a, b) => (b[1].count || 0) - (a[1].count || 0))
+                    .slice(0, 5);
+                
+                const crimesHtml = sortedCrimes.map(([type, info]) => {
+                    const severity = info.severity || info.avg_severity || 0;
+                    const count = info.count || 0;
+                    return `<div style="margin: 2px 0;">• ${type}: ${count} incidents (severity: ${severity.toFixed(1)}/10)</div>`;
+                }).join('');
+                
+                topCrimesEl.innerHTML = crimesHtml;
+            } else {
+                topCrimesEl.innerHTML = '<div style="color: #666;">No crime data available</div>';
+            }
+            
+            document.getElementById('safetyFormulaText').textContent = 
+                'Safety score = 0.5 × Count Score + 0.5 × Severity Score. Count Score penalizes high incident volume relative to the SF baseline (500 incidents), while Severity Score penalizes neighborhoods with more severe crime mixes.';
+            
+            const breakdownEl = document.getElementById('safetyBreakdown');
+            if (breakdownEl) {
+                const manual = typeof details.manual_rating === 'number' ? details.manual_rating.toFixed(1) : '--';
+                const opendata = typeof details.opendata_rating === 'number' ? details.opendata_rating.toFixed(1) : '--';
+                breakdownEl.innerHTML = `Combined Safety Raw = (Manual ${manual} + OpenData ${opendata}) ÷ 2`;
             }
         }
 

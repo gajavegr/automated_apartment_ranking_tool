@@ -112,6 +112,18 @@ class LocationAnalyzer:
         result['safety_score_opendata'] = safety_data.get('safety_score', 5.0)
         result['crime_incidents'] = safety_data.get('incident_count', 0)
         
+        # Store detailed crime data as JSON for the sheet
+        crime_details = {
+            'incident_count': safety_data.get('incident_count', 0),
+            'avg_severity': safety_data.get('avg_severity', 0),
+            'count_score': safety_data.get('count_score'),
+            'severity_score': safety_data.get('severity_score'),
+            'incident_categories': safety_data.get('incident_categories', {}),
+            'search_radius_miles': 0.25,
+            'baseline_incidents': 500
+        }
+        result['crime_details'] = crime_details
+        
         # Nearby amenities
         amenities = self.get_nearby_amenities(coords[0], coords[1])
         result['restaurants_nearby'] = amenities.get('restaurants', 0)
@@ -622,7 +634,7 @@ class LocationAnalyzer:
         """
         print(f"\n🔒 Calculating safety score for coordinates: ({lat:.6f}, {lng:.6f})")
         
-        cache_key = f"safety_{lat}_{lng}"
+        cache_key = f"safety_v2_{lat}_{lng}"
         cached = self.cache.get(cache_key)
         if cached:
             score = cached.get('safety_score', 0)
@@ -682,11 +694,14 @@ class LocationAnalyzer:
                 for incident in incidents:
                     category = incident.get('incident_category', 'Miscellaneous')
                     
-                    # Track incident types
-                    incident_categories[category] = incident_categories.get(category, 0) + 1
-                    
                     # Get severity weight (default to 3.0 for unknown categories)
                     severity_weight = config.CRIME_SEVERITY_WEIGHTS.get(category, 3.0)
+                    
+                    # Track incident types with count and severity
+                    if category not in incident_categories:
+                        incident_categories[category] = {'count': 0, 'severity': severity_weight}
+                    incident_categories[category]['count'] += 1
+                    
                     severity_scores.append(severity_weight)
                 
                 # Calculate average severity
@@ -695,11 +710,10 @@ class LocationAnalyzer:
                 
                 # Show breakdown of top incident types
                 if incident_categories:
-                    sorted_categories = sorted(incident_categories.items(), key=lambda x: x[1], reverse=True)[:5]
+                    sorted_categories = sorted(incident_categories.items(), key=lambda x: x[1]['count'], reverse=True)[:5]
                     print(f"  Top incident types:")
-                    for category, count in sorted_categories:
-                        weight = config.CRIME_SEVERITY_WEIGHTS.get(category, 3.0)
-                        print(f"    - {category}: {count} (severity: {weight:.1f}/10)")
+                    for category, info in sorted_categories:
+                        print(f"    - {category}: {info['count']} (severity: {info['severity']:.1f}/10)")
                 
                 # Calculate safety score based on:
                 # 1. Incident count relative to SF baseline (50% weight)
@@ -721,6 +735,8 @@ class LocationAnalyzer:
                 result['avg_severity'] = round(avg_severity, 2)
                 result['weighted_incident_score'] = round(weighted_incident_score, 2)
                 result['safety_score'] = round(safety_score, 2)
+                result['count_score'] = round(count_score, 2)
+                result['severity_score'] = round(severity_score, 2)
                 result['incident_categories'] = incident_categories
                 
                 print(f"  Average severity: {avg_severity:.2f}/10")

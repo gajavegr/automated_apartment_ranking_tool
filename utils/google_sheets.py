@@ -213,9 +213,11 @@ class GoogleSheetsClient:
     @staticmethod
     def needs_commute_metadata_refresh(record: Dict[str, Any]) -> bool:
         """
-        Check whether a record is missing the richer commute metadata.
-        Returns True if route annoyingness or commute details are blank/absent,
-        or if commute details don't have the new AM/PM fields.
+        Check whether a record is missing enriched metadata (commute or crime details).
+        Returns True if any of these are missing:
+        - Route annoyingness or commute details
+        - Commute details without AM/PM structure
+        - Crime details
         """
         def _is_blank(value: Any, treat_empty_structs: bool = False) -> bool:
             if value is None:
@@ -230,6 +232,7 @@ class GoogleSheetsClient:
                     return True
             return False
 
+        # Check commute metadata
         route_annoy_col = config.SHEET_COLUMNS.get("route_annoyingness")
         commute_details_col = config.SHEET_COLUMNS.get("commute_details")
         route_annoy_value = record.get(route_annoy_col) if route_annoy_col else None
@@ -250,7 +253,12 @@ class GoogleSheetsClient:
             except:
                 pass
         
-        return missing_annoy or missing_details
+        # Check crime details
+        crime_details_col = config.SHEET_COLUMNS.get("crime_details")
+        crime_details_value = record.get(crime_details_col) if crime_details_col else None
+        missing_crime = _is_blank(crime_details_value, treat_empty_structs=True)
+        
+        return missing_annoy or missing_details or missing_crime
     
     def get_apartments_needing_analysis(self) -> List[Dict[str, Any]]:
         """
@@ -265,15 +273,37 @@ class GoogleSheetsClient:
         for i, record in enumerate(records):
             zillow_url = record.get(config.SHEET_COLUMNS["zillow_url"], "").strip()
             weighted_score = record.get(config.SHEET_COLUMNS["weighted_score"], "")
+            address = record.get(config.SHEET_COLUMNS["address"], "Unknown address")
             
             needs_analysis = False
+            reason = None
+            
             if zillow_url and not weighted_score:
                 needs_analysis = True
+                reason = "no score"
             elif zillow_url and self.needs_commute_metadata_refresh(record):
                 needs_analysis = True
+                # Determine specific reason
+                route_annoy_col = config.SHEET_COLUMNS.get("route_annoyingness")
+                commute_details_col = config.SHEET_COLUMNS.get("commute_details")
+                crime_details_col = config.SHEET_COLUMNS.get("crime_details")
+                
+                missing_parts = []
+                if not record.get(route_annoy_col):
+                    missing_parts.append("route annoyingness")
+                if not record.get(commute_details_col):
+                    missing_parts.append("commute details")
+                if not record.get(crime_details_col):
+                    missing_parts.append("crime details")
+                
+                if missing_parts:
+                    reason = f"missing {', '.join(missing_parts)}"
+                else:
+                    reason = "missing commute metadata"
             
             if needs_analysis:
                 record['_row_number'] = i + 2  # +2 for 1-indexed and header row
+                record['_analysis_reason'] = reason
                 needing_analysis.append(record)
         
         return needing_analysis
@@ -303,6 +333,7 @@ class GoogleSheetsClient:
             "commute_details_json": config.SHEET_COLUMNS["commute_details"],
             "safety_score_opendata": config.SHEET_COLUMNS["safety_score_opendata"],
             "combined_safety": config.SHEET_COLUMNS["combined_safety"],
+            "crime_details_json": config.SHEET_COLUMNS["crime_details"],
             "wfh_quality_score": config.SHEET_COLUMNS["wfh_quality_score"],
             "natural_light": config.SHEET_COLUMNS["natural_light"],
             "desk_space_quality": config.SHEET_COLUMNS["desk_space_quality"],
@@ -355,7 +386,17 @@ class GoogleSheetsClient:
                 try:
                     col_index = headers.index(column_name)
                     col_letter = col_index_to_letter(col_index)
-                    updates[f"{col_letter}{row_number}"] = data[data_key]
+                    value = data[data_key]
+                    
+                    # Serialize JSON fields
+                    if data_key in ['commute_details_json', 'crime_details_json'] and isinstance(value, dict):
+                        import json
+                        value = json.dumps(value)
+                    
+                    updates[f"{col_letter}{row_number}"] = value
+                    if data_key == 'crime_details_json':
+                        preview = value[:200] if isinstance(value, str) else str(value)
+                        print(f"  -> Writing crime details to {column_name} (row {row_number}): {preview}...")
                 except ValueError:
                     print(f"Warning: Column {column_name} not found in sheet")
         

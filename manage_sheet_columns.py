@@ -43,6 +43,7 @@ class SheetColumnManager:
             config.SHEET_COLUMNS["commute_details"],
             config.SHEET_COLUMNS["safety_score_opendata"],
             config.SHEET_COLUMNS["combined_safety"],
+            config.SHEET_COLUMNS["crime_details"],
             config.SHEET_COLUMNS["wfh_quality_score"],
             config.SHEET_COLUMNS["natural_light"],
             config.SHEET_COLUMNS["desk_space_quality"],
