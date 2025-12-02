@@ -20,6 +20,8 @@ GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
 # Work Locations
 YOUR_WORK_ADDRESS = os.getenv("YOUR_WORK_ADDRESS", "4100 E 3rd Ave, Foster City, CA 94404")
 PARTNER_WORK_ADDRESS = os.getenv("PARTNER_WORK_ADDRESS", "1355 Market St, San Francisco, CA 94103")
+PARTNER_COMMUTE_MODE = os.getenv("PARTNER_COMMUTE_MODE", "transit").lower()
+PARTNER_COMMUTE_FALLBACK_MODE = os.getenv("PARTNER_COMMUTE_FALLBACK_MODE", "walking").lower()
 
 # SF OpenData API
 SF_OPENDATA_API_ENDPOINT = os.getenv("SF_OPENDATA_API_ENDPOINT", "https://data.sfgov.org/resource/wg3w-h783.json")
@@ -46,6 +48,8 @@ SHEET_COLUMNS = {
     "commute_time_you": "Commute Time (You)",
     "commute_route": "Commute Route",
     "commute_time_partner": "Commute Time (Partner)",
+    "route_annoyingness": "Route Annoyingness (0-10)",
+    "commute_details": "Commute Details (JSON)",
     
     # Safety
     "safety_score_opendata": "Safety Score (OpenData)",
@@ -70,6 +74,7 @@ SHEET_COLUMNS = {
     "parking_type": "Parking Type",
     "parking_enclosure": "Parking Enclosure",
     "parking_distance": "Parking Distance",
+    "parking_cost": "Parking Cost ($/month)",
     "street_parking_ease": "Street Parking Ease",
     "visitor_parking_ease": "Visitor Parking Ease",
     "parking_score": "Parking Score",
@@ -105,6 +110,7 @@ SHEET_COLUMNS = {
     "weighted_score": "Weighted Score",
     "value_ratio": "Value Ratio",
     "last_updated": "Last Updated",
+    "last_analyzed": "Last Analyzed",
 }
 
 # San Francisco Neighborhoods
@@ -129,6 +135,7 @@ SCORE_COMPONENTS = {
             "acceptable_duration": 50,  # Minutes
             "preferred_route": "280",  # Highway preference
             "route_bonus": 1.5,  # Extra points for preferred route
+            "annoyingness_penalty_weight": 0.35,  # (10-annoy) * weight = penalty in points
         }
     },
     "wfh_quality": {

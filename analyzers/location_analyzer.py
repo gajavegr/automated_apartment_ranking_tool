@@ -62,6 +62,8 @@ class LocationAnalyzer:
         print(f"  Your work: {config.YOUR_WORK_ADDRESS}")
         print(f"  Partner work: {config.PARTNER_WORK_ADDRESS}")
         
+        commute_details = {}
+        
         if not config.YOUR_WORK_ADDRESS or config.YOUR_WORK_ADDRESS == "":
             print("  ⚠️  YOUR_WORK_ADDRESS not configured in .env file")
             result['commute_duration'] = 999
@@ -69,10 +71,14 @@ class LocationAnalyzer:
         else:
             commute_your_work = self.get_commute(
                 address,
-                config.YOUR_WORK_ADDRESS
+                config.YOUR_WORK_ADDRESS,
+                mode=config.GOOGLE_MAPS_TRAVEL_MODE,
+                allow_alternatives=True
             )
             result['commute_duration'] = commute_your_work.get('duration_mins', 999)
             result['commute_route'] = commute_your_work.get('route', '')
+            result['route_annoyingness'] = commute_your_work.get('annoyingness', {}).get('score', None)
+            commute_details['driver'] = commute_your_work
             if 'error' in commute_your_work:
                 result['commute_error'] = commute_your_work['error']
         
@@ -82,11 +88,17 @@ class LocationAnalyzer:
         else:
             commute_partner_work = self.get_commute(
                 address,
-                config.PARTNER_WORK_ADDRESS
+                config.PARTNER_WORK_ADDRESS,
+                mode=config.PARTNER_COMMUTE_MODE,
+                allow_alternatives=False,
+                fallback_modes=[config.PARTNER_COMMUTE_FALLBACK_MODE] if config.PARTNER_COMMUTE_FALLBACK_MODE else None
             )
             result['commute_duration_partner'] = commute_partner_work.get('duration_mins', 999)
+            commute_details['partner'] = commute_partner_work
             if 'error' in commute_partner_work:
                 result['commute_partner_error'] = commute_partner_work['error']
+        
+        result['commute_details'] = commute_details
         
         # Calculate elevation gain to work (for hill access penalty)
         work_coords = self.geocode_address(config.YOUR_WORK_ADDRESS)
@@ -203,7 +215,10 @@ class LocationAnalyzer:
     def get_commute(
         self,
         origin: str,
-        destination: str
+        destination: str,
+        mode: str = None,
+        allow_alternatives: bool = False,
+        fallback_modes: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Get commute time and route information
@@ -211,96 +226,388 @@ class LocationAnalyzer:
         Args:
             origin: Origin address
             destination: Destination address
+            mode: Preferred travel mode (driving, transit, walking, bicycling)
+            allow_alternatives: Whether to request alternate routes (driving only)
+            fallback_modes: Optional list of modes to try if the preferred mode fails
             
         Returns:
             Dictionary with commute information
         """
-        cache_key = f"commute_{origin}_{destination}"
+        travel_mode = (mode or config.GOOGLE_MAPS_TRAVEL_MODE).lower()
+        modes_to_try = [travel_mode]
+        if fallback_modes:
+            for fallback in fallback_modes:
+                if not fallback:
+                    continue
+                fallback_mode = fallback.lower()
+                if fallback_mode not in modes_to_try:
+                    modes_to_try.append(fallback_mode)
+        
+        cache_key = f"commute_v2_{origin}_{destination}_{'_'.join(modes_to_try)}"
         cached = self.cache.get(cache_key)
         if cached:
             return cached
         
-        result = {}
+        last_result: Dict[str, Any] = {
+            'success': False,
+            'duration_mins': 999,
+            'route': 'not_found',
+            'error': 'No route calculated'
+        }
         
-        try:
-            print(f"\n🚗 Calculating commute: {origin} → {destination}")
-            
-            # Get directions
-            url = "https://maps.googleapis.com/maps/api/directions/json"
-            params = {
-                'origin': origin,
-                'destination': destination,
-                'mode': config.GOOGLE_MAPS_TRAVEL_MODE,
-                'departure_time': 'now',
-                'traffic_model': config.GOOGLE_MAPS_TRAFFIC_MODEL,
-                'key': self.api_key,
-            }
-            
-            print(f"  Mode: {config.GOOGLE_MAPS_TRAVEL_MODE}, Traffic model: {config.GOOGLE_MAPS_TRAFFIC_MODEL}")
-            
-            response = requests.get(url, params=params, timeout=10)
-            data = response.json()
-            
-            print(f"  API Status: {data.get('status')}")
-            
-            if data['status'] == 'OK' and len(data['routes']) > 0:
-                route = data['routes'][0]
-                leg = route['legs'][0]
+        for current_mode in modes_to_try:
+            try:
+                print(f"\n🚗 Calculating commute ({current_mode}): {origin} → {destination}")
                 
-                # Duration in traffic
-                if 'duration_in_traffic' in leg:
-                    duration_seconds = leg['duration_in_traffic']['value']
-                    print(f"  Using duration_in_traffic: {duration_seconds}s")
+                # For driving mode, calculate both AM and PM peak times
+                if current_mode == 'driving':
+                    morning_ts, evening_ts = self._get_peak_departure_times()
+                    print(f"  📅 Using peak times: 8:30 AM and 6:00 PM")
+                    
+                    # Get AM commute
+                    directions_am = self._request_directions(
+                        origin,
+                        destination,
+                        current_mode,
+                        allow_alternatives and current_mode == 'driving',
+                        departure_time=str(morning_ts)
+                    )
+                    
+                    if not directions_am['success']:
+                        last_result = directions_am
+                        continue
+                    
+                    # Get PM commute
+                    directions_pm = self._request_directions(
+                        origin,
+                        destination,
+                        current_mode,
+                        allow_alternatives and current_mode == 'driving',
+                        departure_time=str(evening_ts)
+                    )
+                    
+                    if not directions_pm['success']:
+                        last_result = directions_pm
+                        continue
+                    
+                    # Combine AM and PM data for each route
+                    summaries_am = self._summarize_routes(directions_am['routes'], current_mode)
+                    summaries_pm = self._summarize_routes(directions_pm['routes'], current_mode)
+                    
+                    # Combine primary route
+                    combined_primary = self._combine_am_pm_routes(
+                        summaries_am['primary'],
+                        summaries_pm['primary']
+                    )
+                    
+                    # Combine alternatives (match routes by key)
+                    combined_alternatives = {}
+                    all_route_keys = set(summaries_am['alternatives'].keys()) | set(summaries_pm['alternatives'].keys())
+                    for route_key in all_route_keys:
+                        am_route = summaries_am['alternatives'].get(route_key)
+                        pm_route = summaries_pm['alternatives'].get(route_key)
+                        if am_route and pm_route:
+                            combined_alternatives[route_key] = self._combine_am_pm_routes(am_route, pm_route)
+                        elif am_route:
+                            # Only have AM data, duplicate it for PM
+                            combined_alternatives[route_key] = self._combine_am_pm_routes(am_route, am_route)
+                        else:
+                            # Only have PM data, duplicate it for AM
+                            combined_alternatives[route_key] = self._combine_am_pm_routes(pm_route, pm_route)
+                    
+                    result = {
+                        'success': True,
+                        'mode_used': current_mode,
+                        **combined_primary,
+                        'alternatives': combined_alternatives,
+                    }
                 else:
-                    duration_seconds = leg['duration']['value']
-                    print(f"  Using duration (no traffic): {duration_seconds}s")
-                
-                result['duration_mins'] = int(duration_seconds / 60)
-                result['distance_miles'] = leg['distance']['value'] / 1609.34
-                
-                # Determine route (101 or 280)
-                route_summary = route.get('summary', '')
-                if '280' in route_summary or 'I-280' in route_summary:
-                    result['route'] = '280'
-                elif '101' in route_summary or 'US-101' in route_summary:
-                    result['route'] = '101'
-                else:
-                    result['route'] = 'other'
-                
-                print(f"  ✓ Result: {result['duration_mins']} mins via {result['route']} ({result['distance_miles']:.1f} mi)")
+                    # For non-driving modes, use current time
+                    directions = self._request_directions(
+                        origin,
+                        destination,
+                        current_mode,
+                        allow_alternatives and current_mode == 'driving'
+                    )
+                    
+                    if not directions['success']:
+                        last_result = directions
+                        continue
+                    
+                    summaries = self._summarize_routes(directions['routes'], current_mode)
+                    result = {
+                        'success': True,
+                        'mode_used': current_mode,
+                        **summaries['primary'],
+                        'alternatives': summaries['alternatives'],
+                    }
                 
                 self.cache.set(cache_key, result)
-            elif data['status'] == 'ZERO_RESULTS':
-                print(f"  ⚠️  No route found between origin and destination")
-                result['duration_mins'] = 999
-                result['route'] = 'no_route'
-                result['error'] = 'No route found'
-            elif data['status'] == 'REQUEST_DENIED':
-                error_msg = data.get('error_message', 'API key issue')
-                print(f"  ❌ REQUEST_DENIED: {error_msg}")
-                print(f"  ⚠️  Please enable 'Directions API' in Google Cloud Console")
-                result['duration_mins'] = 999
-                result['route'] = 'api_error'
-                result['error'] = f'API denied: {error_msg}'
-            else:
-                error_msg = data.get('error_message', data['status'])
-                print(f"  ❌ API Error: {error_msg}")
-                result['duration_mins'] = 999
-                result['route'] = 'error'
-                result['error'] = error_msg
+                return result
+            except Exception as e:
+                print(f"  ❌ Exception fetching commute ({current_mode}): {e}")
+                last_result = {
+                    'success': False,
+                    'duration_mins': 999,
+                    'route': 'error',
+                    'error': str(e),
+                    'mode_used': current_mode
+                }
         
-        except requests.exceptions.Timeout:
-            print(f"  ❌ Timeout: Request took longer than 10 seconds")
-            result['duration_mins'] = 999
-            result['route'] = 'timeout'
-            result['error'] = 'Request timeout'
-        except Exception as e:
-            print(f"  ❌ Exception: {type(e).__name__}: {e}")
-            result['duration_mins'] = 999
-            result['route'] = 'unknown'
-            result['error'] = str(e)
+        return last_result
+    
+    @staticmethod
+    def _get_peak_departure_times() -> Tuple[int, int]:
+        """
+        Get Unix timestamps for typical peak commute times.
+        Returns (morning_8:30am_tomorrow, evening_6pm_today).
+        Uses next weekday to ensure we're not calculating for weekend.
+        """
+        now = datetime.now()
+        # Find next weekday (Monday-Friday)
+        target_date = now
+        while target_date.weekday() >= 5:  # Saturday=5, Sunday=6
+            target_date += timedelta(days=1)
+        
+        # Morning commute: 8:30 AM
+        morning = target_date.replace(hour=8, minute=30, second=0, microsecond=0)
+        if morning < now:
+            morning += timedelta(days=1)
+            # Make sure it's still a weekday
+            while morning.weekday() >= 5:
+                morning += timedelta(days=1)
+        
+        # Evening commute: 6:00 PM (same day as morning for consistency)
+        evening = morning.replace(hour=18, minute=0, second=0, microsecond=0)
+        
+        morning_timestamp = int(morning.timestamp())
+        evening_timestamp = int(evening.timestamp())
+        
+        return (morning_timestamp, evening_timestamp)
+    
+    @staticmethod
+    def _combine_am_pm_routes(am_route: Dict[str, Any], pm_route: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Combine AM and PM route data, storing both durations separately plus total.
+        Uses AM route for all non-duration fields (polyline, route label, etc).
+        """
+        combined = am_route.copy()
+        
+        # Store individual AM/PM durations
+        combined['duration_am_mins'] = am_route['duration_mins']
+        combined['duration_am_secs'] = am_route['duration_secs']
+        combined['duration_pm_mins'] = pm_route['duration_mins']
+        combined['duration_pm_secs'] = pm_route['duration_secs']
+        
+        # Calculate total daily commute (round-trip)
+        combined['duration_daily_mins'] = am_route['duration_mins'] + pm_route['duration_mins']
+        combined['duration_daily_secs'] = am_route['duration_secs'] + pm_route['duration_secs']
+        
+        # For backwards compatibility, set duration_mins to AM duration (morning commute)
+        # This is what scoring engine expects for the "commute time" metric
+        combined['duration_mins'] = am_route['duration_mins']
+        combined['duration_secs'] = am_route['duration_secs']
+        
+        return combined
+    
+    def _request_directions(
+        self,
+        origin: str,
+        destination: str,
+        mode: str,
+        allow_alternatives: bool,
+        departure_time: str = 'now'
+    ) -> Dict[str, Any]:
+        """Call the Google Directions API for a specific mode."""
+        params = {
+            'origin': origin,
+            'destination': destination,
+            'mode': mode,
+            'departure_time': departure_time,
+            'key': self.api_key,
+        }
+        
+        if mode == 'driving':
+            params['traffic_model'] = config.GOOGLE_MAPS_TRAFFIC_MODEL
+            if allow_alternatives:
+                params['alternatives'] = 'true'
+        elif mode == 'transit':
+            params['transit_routing_preference'] = 'less_walking'
+        
+        url = "https://maps.googleapis.com/maps/api/directions/json"
+        response = requests.get(url, params=params, timeout=15)
+        data = response.json()
+        
+        status = data.get('status')
+        print(f"  API Status ({mode}): {status}")
+        
+        if status == 'OK' and data.get('routes'):
+            return {'success': True, 'routes': data['routes']}
+        
+        error_msg = data.get('error_message', status)
+        print(f"  ⚠️  Directions ({mode}) failed: {error_msg}")
+        return {
+            'success': False,
+            'error': error_msg or 'Directions API error',
+            'status': status
+        }
+    
+    def _summarize_routes(self, routes: List[Dict[str, Any]], mode: str) -> Dict[str, Any]:
+        """Build summaries for the primary route plus best alternates (101/280)."""
+        primary_summary = None
+        alternatives: Dict[str, Dict[str, Any]] = {}
+        
+        for idx, route in enumerate(routes):
+            summary = self._build_route_summary(route, mode)
+            if idx == 0:
+                primary_summary = summary
+            route_key = summary['route']
+            existing = alternatives.get(route_key)
+            if not existing or summary['duration_mins'] < existing['duration_mins']:
+                alternatives[route_key] = summary
+        
+        if not primary_summary:
+            primary_summary = {
+                'duration_mins': 999,
+                'distance_miles': 0,
+                'route': 'no_route',
+                'route_label': 'No route',
+                'polyline': None,
+                'annoyingness': {},
+            }
+        
+        return {
+            'primary': primary_summary,
+            'alternatives': alternatives
+        }
+    
+    def _build_route_summary(self, route: Dict[str, Any], mode: str) -> Dict[str, Any]:
+        """Extract standardized information from a Directions API route."""
+        leg = route['legs'][0]
+        duration_in_traffic = leg.get('duration_in_traffic', leg['duration'])
+        duration_seconds = duration_in_traffic['value']
+        baseline_seconds = leg['duration']['value']
+        distance_meters = leg['distance']['value']
+        
+        summary_label = route.get('summary') or leg['steps'][0].get('html_instructions', 'Route')
+        route_key = self._categorize_route(summary_label)
+        polyline = route.get('overview_polyline', {}).get('points')
+        
+        result = {
+            'duration_mins': int(round(duration_seconds / 60)),
+            'duration_secs': duration_seconds,
+            'distance_miles': round(distance_meters / 1609.34, 2),
+            'route': route_key,
+            'route_label': summary_label,
+            'polyline': polyline,
+            'summary_html': summary_label,
+            'distance_text': leg['distance']['text'],
+            'duration_text': duration_in_traffic['text'],
+            'baseline_duration_secs': baseline_seconds,
+        }
+        
+        if mode == 'driving':
+            result['annoyingness'] = self._calculate_annoyingness(route, leg)
+        elif mode == 'transit':
+            result['transit_details'] = self._extract_transit_details(leg)
+        else:
+            result['annoyingness'] = {}
         
         return result
+    
+    def _categorize_route(self, summary: str) -> str:
+        """Identify whether a route primarily uses 101, 280, or neither."""
+        text = (summary or "").upper()
+        if '280' in text:
+            return '280'
+        if '101' in text:
+            return '101'
+        return 'other'
+    
+    def _calculate_annoyingness(self, route: Dict[str, Any], leg: Dict[str, Any]) -> Dict[str, Any]:
+        """Approximate how frustrating a route feels based on maneuvers and traffic."""
+        steps = leg.get('steps', [])
+        total_distance_miles = max(leg['distance']['value'] / 1609.34, 0.01)
+        left_turns_before_highway = 0
+        low_speed_segments = 0
+        highway_distance = 0.0
+        local_distance = 0.0
+        hit_highway = False
+        
+        for step in steps:
+            maneuver = (step.get('maneuver') or "").lower()
+            html = (step.get('html_instructions') or "").lower()
+            distance_miles = step.get('distance', {}).get('value', 0) / 1609.34
+            duration_secs = step.get('duration', {}).get('value', 0)
+            
+            is_highway = any(token in html for token in ['i-', 'us-', 'hwy', 'highway', 'freeway']) or 'merge' in maneuver or 'ramp' in maneuver
+            if is_highway:
+                hit_highway = True
+                highway_distance += distance_miles
+            else:
+                local_distance += distance_miles
+            
+            if not hit_highway and maneuver.startswith('turn-left'):
+                left_turns_before_highway += 1
+            
+            if duration_secs > 0:
+                speed_mph = (distance_miles / duration_secs) * 3600 if distance_miles > 0 else 0
+                if speed_mph and speed_mph < 15 and distance_miles >= 0.2:
+                    low_speed_segments += 1
+        
+        traffic_delay = max(0, leg.get('duration_in_traffic', leg['duration'])['value'] - leg['duration']['value'])
+        baseline = max(leg['duration']['value'], 1)
+        congestion_ratio = traffic_delay / baseline
+        
+        left_penalty = min(3.0, left_turns_before_highway * 0.6)
+        congestion_penalty = min(2.5, congestion_ratio * 10)
+        low_speed_penalty = min(2.0, low_speed_segments * 0.7)
+        lane_split_ratio = highway_distance / total_distance_miles
+        lane_penalty = min(2.5, (1 - lane_split_ratio) * 2.5)
+        
+        total_penalty = left_penalty + congestion_penalty + low_speed_penalty + lane_penalty
+        score = max(0.0, 10.0 - total_penalty)
+        
+        return {
+            'score': round(score, 2),
+            'left_turns_before_highway': left_turns_before_highway,
+            'low_speed_segments': low_speed_segments,
+            'lane_split_ratio': round(lane_split_ratio, 2),
+            'congestion_ratio': round(congestion_ratio, 2),
+            'penalties': {
+                'left_turns': round(left_penalty, 2),
+                'congestion': round(congestion_penalty, 2),
+                'low_speed': round(low_speed_penalty, 2),
+                'lane_choices': round(lane_penalty, 2),
+            }
+        }
+    
+    def _extract_transit_details(self, leg: Dict[str, Any]) -> Dict[str, Any]:
+        """Capture key transit lines / walking segments for partner commute display."""
+        steps = leg.get('steps', [])
+        transit_segments = []
+        walking_minutes = 0
+        
+        for step in steps:
+            mode = step.get('travel_mode')
+            duration_secs = step.get('duration', {}).get('value', 0)
+            if mode == 'TRANSIT':
+                transit_info = step.get('transit_details', {})
+                line = transit_info.get('line', {})
+                vehicle = line.get('vehicle', {})
+                transit_segments.append({
+                    'line_name': line.get('short_name') or line.get('name'),
+                    'vehicle_type': vehicle.get('type'),
+                    'agency': line.get('agencies', [{}])[0].get('name') if line.get('agencies') else None,
+                    'num_stops': transit_info.get('num_stops'),
+                })
+            elif mode == 'WALKING':
+                walking_minutes += int(round(duration_secs / 60))
+        
+        return {
+            'transit_segments': transit_segments,
+            'walking_minutes': walking_minutes
+        }
     
     def get_safety_score(self, lat: float, lng: float) -> Dict[str, Any]:
         """

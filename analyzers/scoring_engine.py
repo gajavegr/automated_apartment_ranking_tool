@@ -46,6 +46,7 @@ class CommuteScore(ScoreComponent):
     duration_mins: int = 0
     route: str = ""
     on_steep_hill: bool = False
+    route_annoyingness: float = 10.0
     
     def calculate(self, config_data: dict, **kwargs) -> float:
         """Calculate commute score based on duration and route"""
@@ -54,6 +55,7 @@ class CommuteScore(ScoreComponent):
         acceptable_duration = preferences.get("acceptable_duration", 50)
         preferred_route = preferences.get("preferred_route", "280")
         route_bonus = preferences.get("route_bonus", 1.5)
+        annoyingness_weight = preferences.get("annoyingness_penalty_weight", 0.0)
         
         # Adjust duration for hill access difficulty
         effective_duration = self.duration_mins
@@ -74,13 +76,19 @@ class CommuteScore(ScoreComponent):
         # Route preference bonus
         route_bonus_points = route_bonus if self.route == preferred_route else 0.0
         
-        self.raw_value = min(10.0, duration_score + route_bonus_points)
+        annoyingness_score = self.route_annoyingness if self.route_annoyingness is not None else 10.0
+        annoyingness_score = max(0.0, min(10.0, annoyingness_score))
+        annoying_penalty = (10.0 - annoyingness_score) * max(0.0, annoyingness_weight)
+        
+        self.raw_value = max(0.0, min(10.0, duration_score + route_bonus_points - annoying_penalty))
         self.details = {
             "duration_mins": self.duration_mins,
             "effective_duration": effective_duration,
             "duration_score": round(duration_score, 2),
             "route": self.route,
             "route_bonus": round(route_bonus_points, 2),
+            "annoyingness_score": round(annoyingness_score, 2),
+            "annoyingness_penalty": round(annoying_penalty, 2),
         }
         return self.raw_value
 
@@ -645,6 +653,7 @@ def build_scorecard(apartment_data: Dict[str, Any]) -> ApartmentScoreCard:
         duration_mins=apartment_data.get("commute_duration", 999),
         route=apartment_data.get("commute_route", ""),
         on_steep_hill=apartment_data.get("on_steep_hill_from_work", False),
+        route_annoyingness=apartment_data.get("route_annoyingness", 10.0),
     )
     commute.calculate(config.SCORE_COMPONENTS["commute"])
     components["commute"] = commute

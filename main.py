@@ -8,6 +8,7 @@ computer vision, and location APIs.
 
 import sys
 import argparse
+import json
 from typing import List, Dict, Any
 from datetime import datetime
 import traceback
@@ -112,6 +113,10 @@ class ApartmentAnalyzer:
                 result['commute_duration'] = location_data.get('commute_duration', 999)
                 result['commute_route'] = location_data.get('commute_route', '')
                 result['commute_duration_partner'] = location_data.get('commute_duration_partner', 999)
+                result['route_annoyingness'] = location_data.get('route_annoyingness', 10.0)
+                commute_details = location_data.get('commute_details', {})
+                result['commute_details'] = commute_details
+                result['commute_details_json'] = json.dumps(commute_details) if commute_details else ""
                 result['safety_score_opendata'] = location_data.get('safety_score_opendata', 5.0)
                 result['restaurants_nearby'] = location_data.get('restaurants_nearby', 0)
                 result['cafes_nearby'] = location_data.get('cafes_nearby', 0)
@@ -162,6 +167,8 @@ class ApartmentAnalyzer:
                 print(f"✓ Location analysis complete")
                 print(f"  Your commute: {result['commute_duration']} min via {result['commute_route']}")
                 print(f"  Partner commute: {result['commute_duration_partner']} min")
+                if result.get('route_annoyingness') is not None:
+                    print(f"  Route annoyingness: {result['route_annoyingness']:.1f}/10")
                 print(f"  Safety score: {result['safety_score_opendata']:.1f}/10")
                 print(f"  Amenities: {result['restaurants_nearby']} restaurants, {result['cafes_nearby']} cafes")
             else:
@@ -211,8 +218,9 @@ class ApartmentAnalyzer:
             result['criteria_met'] = criteria_met
             result['total_criteria_met'] = scorecard.count_criteria_met()
             
-            # Timestamp
-            result['last_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            # Timestamps
+            result['last_analyzed'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            # Don't update last_updated here - that's for manual edits
             
             print(f"\n✓ Analysis complete!")
             print(f"  Weighted Score: {result['weighted_score']:.1f}/100")

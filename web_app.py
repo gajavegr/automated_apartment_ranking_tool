@@ -55,6 +55,154 @@ def col_index_to_letter(col_idx):
     return result
 
 
+COMPONENT_LABELS = {
+    "commute": "Commute",
+    "safety": "Safety",
+    "wfh_quality": "WFH Quality",
+    "location_vibe": "Location Vibe",
+    "parking": "Parking",
+    "laundry": "Laundry",
+    "gym_nearby": "Gym",
+    "rent_control": "Rent Control",
+}
+
+
+def _safe_float(value, default=0.0):
+    """Convert sheet value to float, handling currency and commas."""
+    if value is None or value == "":
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        if isinstance(value, str):
+            cleaned = value.strip().replace("$", "").replace(",", "")
+            if cleaned == "":
+                return default
+            return float(cleaned)
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_int(value, default=0):
+    """Convert sheet value to int."""
+    try:
+        return int(round(_safe_float(value, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _sheet_bool(value, default=False):
+    """Convert Google Sheets truthy strings to boolean."""
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "y", "1", "checked", "✓", "☑"}:
+            return True
+        if normalized in {"false", "no", "n", "0", "unchecked", "✗", "x", ""}:
+            return False
+    return default
+
+
+def _get_value_from_row(row, column_name, fallback_keys=None, default=None):
+    """Fetch value from sheet row using primary column and optional fallbacks."""
+    keys_to_try = []
+    if column_name:
+        keys_to_try.append(column_name)
+    if fallback_keys:
+        keys_to_try.extend(fallback_keys)
+    for key in keys_to_try:
+        if key is None:
+            continue
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+    return default
+
+
+def _sheet_value(row, sheet_key, fallback_keys=None, default=None):
+    """Helper to fetch value using config sheet column mapping."""
+    column_name = config.SHEET_COLUMNS.get(sheet_key)
+    return _get_value_from_row(row, column_name, fallback_keys, default)
+
+def _parse_commute_details(value):
+    """Return commute details dict regardless of storage format."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return {}
+        try:
+            return json.loads(trimmed)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
+
+
+def _normalize_sheet_row_for_scoring(row):
+    """Normalize a sheet row into the structure expected by the scoring engine."""
+    data = {}
+    
+    data['address'] = (_sheet_value(row, "address", default="") or "").strip()
+    data['price'] = _safe_float(_sheet_value(row, "price"), 0.0)
+    data['bedrooms'] = _safe_float(_sheet_value(row, "bedrooms"), 0.0)
+    data['bathrooms'] = _safe_float(_sheet_value(row, "bathrooms"), 0.0)
+    data['sqft'] = _safe_float(_sheet_value(row, "sqft"), 0.0)
+    data['manual_safety_rating'] = _safe_float(_sheet_value(row, "manual_safety", ["manual_safety_rating"]), 5.0)
+    data['commute_duration'] = _safe_float(_sheet_value(row, "commute_time_you", ["commute_duration"]), 999)
+    data['commute_route'] = _sheet_value(row, "commute_route", ["commute_route"], "")
+    data['commute_duration_partner'] = _safe_float(_sheet_value(row, "commute_time_partner", ["commute_duration_partner"]), 999)
+    data['route_annoyingness'] = _safe_float(_sheet_value(row, "route_annoyingness"), 10.0)
+    data['safety_score_opendata'] = _safe_float(_sheet_value(row, "safety_score_opendata"), 5.0)
+    combined_safety = _safe_float(_sheet_value(row, "combined_safety"), None)
+    if combined_safety is None:
+        combined_safety = (data['manual_safety_rating'] + data['safety_score_opendata']) / 2.0
+    data['combined_safety'] = combined_safety
+    
+    data['natural_light'] = _safe_float(_sheet_value(row, "natural_light"), 5.0)
+    data['desk_space_quality'] = _safe_float(_sheet_value(row, "desk_space_quality"), 5.0)
+    data['kitchen_quality'] = _safe_float(_sheet_value(row, "kitchen_quality"), 5.0)
+    data['double_pane_windows'] = _sheet_bool(_sheet_value(row, "double_pane_windows"), False)
+    data['study_door_type'] = _sheet_value(row, "study_door_type", default="none") or "none"
+    data['street_noise_level'] = _safe_float(_get_value_from_row(row, "Street Noise Level", default=5.0), 5.0)
+    data['floor_level'] = (_sheet_value(row, "floor_level", default="ground") or "ground").lower()
+    
+    data['restaurants_nearby'] = _safe_int(_sheet_value(row, "restaurants_nearby"), 0)
+    data['cafes_nearby'] = _safe_int(_sheet_value(row, "cafes_nearby"), 0)
+    data['parks_nearby'] = _safe_int(_sheet_value(row, "parks_nearby"), 0)
+    
+    data['parking_type'] = _sheet_value(row, "parking_type", default="none") or "none"
+    data['parking_enclosure'] = _sheet_value(row, "parking_enclosure", default="") or ""
+    data['parking_distance'] = _sheet_value(row, "parking_distance", default="onsite") or "onsite"
+    
+    street_ease_value = _sheet_value(row, "street_parking_ease")
+    data['street_parking_ease'] = None if street_ease_value in (None, "") else str(street_ease_value)
+    visitor_ease = _sheet_value(row, "visitor_parking_ease")
+    data['visitor_parking_ease'] = None if visitor_ease in (None, "") else str(visitor_ease)
+    
+    data['apartment_elevation'] = _safe_float(_sheet_value(row, "apartment_elevation"), None)
+    data['elevation_to_gym'] = _safe_float(_sheet_value(row, "elevation_to_gym"), None)
+    data['gym_within_10min'] = _sheet_bool(_sheet_value(row, "gym_within_10min"), False)
+    data['gym_quality'] = _safe_float(_sheet_value(row, "gym_quality"), 0.0)
+    data['rent_control'] = _sheet_bool(_sheet_value(row, "rent_control"), False)
+    data['laundry_type'] = _sheet_value(row, "laundry_type", default="none") or "none"
+    data['parking_cost'] = _safe_float(_sheet_value(row, "parking_cost"), 0.0)
+    data['selected_gyms'] = _sheet_value(row, "selected_gyms", default="")
+    
+    # Derived/default fields
+    data['street_parking_ease'] = data['street_parking_ease'] or None
+    data['visitor_parking_ease'] = data['visitor_parking_ease'] or None
+    data['on_steep_hill_from_work'] = _sheet_bool(row.get("On Steep Hill From Work"), False)
+    
+    return data
+
+
 @app.route('/')
 def index():
     """Show the entry form"""
@@ -85,6 +233,17 @@ def get_apartment(row_number):
         if 0 <= row_number - 2 < len(records):
             apartment = records[row_number - 2]
             apartment['row_number'] = row_number
+            commute_details_raw = _sheet_value(apartment, "commute_details", default="")
+            apartment['commute_details'] = _parse_commute_details(commute_details_raw)
+            commute_details_raw = _sheet_value(apartment, "commute_details", default="")
+            apartment['commute_details'] = _parse_commute_details(commute_details_raw)
+            apartment['route_annoyingness'] = _safe_float(_sheet_value(apartment, "route_annoyingness"), None)
+            commute_details_raw = _sheet_value(apartment, "commute_details", default="")
+            try:
+                apartment['commute_details'] = json.loads(commute_details_raw) if commute_details_raw else {}
+            except (json.JSONDecodeError, TypeError):
+                apartment['commute_details'] = {}
+            apartment['route_annoyingness'] = _safe_float(_sheet_value(apartment, "route_annoyingness"), None)
             
             # Extract Zillow URL from Address column HYPERLINK formula
             sheet = sheets_client.spreadsheet.worksheet(sheets_client.MAIN_SHEET_NAME)
@@ -110,6 +269,114 @@ def get_apartment(row_number):
             return jsonify(apartment)
         return jsonify({'error': 'Not found'}), 404
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/get_apartment_detailed/<int:row_number>', methods=['GET'])
+def get_apartment_detailed(row_number):
+    """Get detailed data for a specific apartment including component scores"""
+    try:
+        from main import ApartmentAnalyzer
+        from analyzers.scoring_engine import build_scorecard
+        
+        records = sheets_client.read_main_sheet()
+        if 0 <= row_number - 2 < len(records):
+            apartment = records[row_number - 2]
+            apartment['row_number'] = row_number
+            
+            # Extract Zillow URL from Address column HYPERLINK formula
+            sheet = sheets_client.spreadsheet.worksheet(sheets_client.MAIN_SHEET_NAME)
+            headers = sheet.row_values(1)
+            address_col_name = config.SHEET_COLUMNS['address']
+            
+            if address_col_name in headers:
+                col_idx = headers.index(address_col_name)
+                # Handle columns beyond Z
+                def col_index_to_letter(col_index):
+                    result = ""
+                    while col_index >= 0:
+                        result = chr(65 + (col_index % 26)) + result
+                        col_index = col_index // 26 - 1
+                    return result
+                
+                col_letter = col_index_to_letter(col_idx)
+                cell_range = f'{col_letter}{row_number}'
+                
+                # Get the formula from the cell
+                cell_data = sheet.get(cell_range, value_render_option='FORMULA')
+                if cell_data and len(cell_data) > 0 and len(cell_data[0]) > 0:
+                    formula = cell_data[0][0]
+                    # Extract URL from HYPERLINK formula: =HYPERLINK("url", "text")
+                    if formula.startswith('=HYPERLINK('):
+                        import re
+                        match = re.search(r'=HYPERLINK\("([^"]+)"', formula)
+                        if match:
+                            apartment['Zillow URL'] = match.group(1)
+            
+            # Calculate component scores and contributions
+            component_scores = {}
+            component_contributions = []
+            total_recomputed_score = None
+            try:
+                normalized_input = _normalize_sheet_row_for_scoring(apartment)
+                scorecard = build_scorecard(normalized_input)
+                total_recomputed_score = round(scorecard.calculate_total(), 2)
+                
+                for component_name, component in scorecard.components.items():
+                    weight = scorecard.config_components.get(component_name, {}).get('weight', 0.0)
+                    raw_score = round(component.raw_value, 2)
+                    weighted_contribution = round(component.raw_value * weight * 10.0, 2)
+                    component_scores[component_name] = {
+                        'raw_score': raw_score,
+                        'weight': weight,
+                        'weighted_contribution': weighted_contribution,
+                        'label': COMPONENT_LABELS.get(component_name, component_name.replace('_', ' ').title()),
+                        'details': getattr(component, 'details', {}),
+                    }
+                    
+                    if weight > 0:
+                        component_contributions.append({
+                            'name': component_name,
+                            'label': component_scores[component_name]['label'],
+                            'raw_score': raw_score,
+                            'weight': weight,
+                            'weighted_contribution': max(0.0, weighted_contribution),
+                            'max_contribution': round(10.0 * weight * 10.0, 2),
+                        })
+            except Exception as e:
+                print(f"Error calculating component scores: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            component_contributions.sort(key=lambda c: c['weighted_contribution'], reverse=True)
+            
+            apartment['component_scores'] = component_scores
+            apartment['component_contributions'] = component_contributions
+            if total_recomputed_score is not None:
+                apartment['calculated_weighted_score'] = total_recomputed_score
+            
+            # Add current weights from config
+            apartment['scoring_weights'] = {
+                'commute': config.SCORE_COMPONENTS.get('commute', {}).get('weight', 0),
+                'safety': config.SCORE_COMPONENTS.get('safety', {}).get('weight', 0),
+                'wfh_quality': config.SCORE_COMPONENTS.get('wfh_quality', {}).get('weight', 0),
+                'location_vibe': config.SCORE_COMPONENTS.get('location_vibe', {}).get('weight', 0),
+                'parking': config.SCORE_COMPONENTS.get('parking', {}).get('weight', 0),
+                'gym': config.SCORE_COMPONENTS.get('gym_nearby', {}).get('weight', 0),
+                'laundry': config.SCORE_COMPONENTS.get('laundry', {}).get('weight', 0),
+                'quietness': config.SCORE_COMPONENTS.get('quietness', {}).get('weight', 0)
+            }
+            
+            # Parse commute metadata for frontend (uses snake_case keys)
+            commute_details_raw = _sheet_value(apartment, "commute_details", default="")
+            apartment['commute_details'] = _parse_commute_details(commute_details_raw)
+            apartment['route_annoyingness'] = _safe_float(_sheet_value(apartment, "route_annoyingness"), None)
+            
+            return jsonify(apartment)
+        return jsonify({'error': 'Not found'}), 404
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -386,6 +653,16 @@ def add_apartment():
             'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
         
+        # Parking cost
+        try:
+            parking_cost = request.form.get('parking_cost', '').strip()
+            if parking_cost:
+                data['parking_cost'] = int(parking_cost)
+            else:
+                data['parking_cost'] = 0
+        except ValueError:
+            data['parking_cost'] = 0
+        
         # Parse numeric fields
         try:
             data['price'] = int(request.form.get('price', 0))
@@ -519,6 +796,7 @@ def add_apartment():
             'sqft': config.SHEET_COLUMNS['sqft'],
             'parking_type': config.SHEET_COLUMNS['parking_type'],
             'parking_enclosure': config.SHEET_COLUMNS['parking_enclosure'],
+            'parking_cost': config.SHEET_COLUMNS['parking_cost'],
             'floor_level': config.SHEET_COLUMNS['floor_level'],
             'street_parking_ease': config.SHEET_COLUMNS['street_parking_ease'],
             'visitor_parking_ease': config.SHEET_COLUMNS['visitor_parking_ease'],
@@ -636,6 +914,99 @@ def delete_apartment(row_number):
         return jsonify({'error': str(e), 'success': False}), 500
 
 
+@app.route('/save_apartment_edits/<int:row_number>', methods=['POST'])
+def save_apartment_edits(row_number):
+    """Save manual edits to apartment scores and recalculate weighted score"""
+    try:
+        from main import ApartmentAnalyzer
+        from analyzers.scoring_engine import build_scorecard
+        from datetime import datetime
+        
+        edits = request.get_json()
+        
+        # Get current apartment data
+        records = sheets_client.read_main_sheet()
+        if not (0 <= row_number - 2 < len(records)):
+            return jsonify({'error': 'Apartment not found'}), 404
+        
+        apartment = records[row_number - 2]
+        original_score = apartment.get(config.SHEET_COLUMNS['weighted_score'], 0)
+        
+        # Track what changed for logging
+        changes = []
+        
+        # Map of edit field names to sheet column names
+        edit_field_mapping = {
+            'commute_you': 'commute_duration',
+            'commute_partner': 'commute_duration_partner',
+            'safety_opendata': 'safety_score_opendata',
+            'natural_light': 'natural_light',
+            'desk_space': 'desk_space_quality',
+            'quietness': 'quietness_score',
+            'kitchen': 'kitchen_quality',
+            'restaurants': 'restaurants_nearby',
+            'cafes': 'cafes_nearby',
+            'parks': 'parks_nearby',
+            'street_ease': 'street_parking_ease',
+            'visitor_ease': 'visitor_parking_ease',
+            'gym_quality': 'gym_quality'
+        }
+        
+        # Apply edits to apartment data
+        for edit_key, new_value in edits.items():
+            if edit_key in edit_field_mapping:
+                data_key = edit_field_mapping[edit_key]
+                old_value = apartment.get(config.SHEET_COLUMNS.get(data_key, data_key))
+                
+                if old_value != new_value:
+                    apartment[config.SHEET_COLUMNS.get(data_key, data_key)] = new_value
+                    changes.append({
+                        'field': data_key,
+                        'old_value': old_value,
+                        'new_value': new_value
+                    })
+        
+        # Recalculate weighted score with edited values
+        try:
+            scorecard = build_scorecard(apartment)
+            new_score = scorecard.calculate_total()
+            apartment[config.SHEET_COLUMNS['weighted_score']] = round(new_score, 2)
+            apartment[config.SHEET_COLUMNS['last_updated']] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        except Exception as e:
+            print(f"Error recalculating score: {e}")
+            return jsonify({'error': f'Error recalculating score: {str(e)}'}), 500
+        
+        # Write updated data back to sheet
+        try:
+            sheets_client.write_apartment_data(row_number, apartment)
+        except Exception as e:
+            print(f"Error writing to sheet: {e}")
+            return jsonify({'error': f'Error writing to sheet: {str(e)}'}), 500
+        
+        # Log the edits
+        if changes:
+            try:
+                sheets_client.log_user_edit(
+                    apartment_address=apartment.get(config.SHEET_COLUMNS['address'], 'Unknown'),
+                    changes=changes,
+                    original_score=original_score,
+                    new_score=new_score
+                )
+            except Exception as e:
+                print(f"Warning: Could not log edit: {e}")
+        
+        return jsonify({
+            'success': True,
+            'new_score': round(new_score, 2),
+            'changes_count': len(changes)
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
 @app.route('/run_analysis', methods=['POST'])
 def run_analysis():
     """Run analysis on all apartments (same as main.py --analyze-new)"""
@@ -645,14 +1016,58 @@ def run_analysis():
         analyzer = ApartmentAnalyzer()
         records = sheets_client.read_main_sheet()
         
-        # Find apartments that need analysis (those without a weighted score)
+        # Find apartments that need analysis
+        # 1. Those without a weighted score
+        # 2. Those where last_updated > last_analyzed (data changed after analysis)
         apartments_to_analyze = []
         for i, record in enumerate(records):
-            if not record.get(config.SHEET_COLUMNS['weighted_score']):
+            # Skip rows without an address (empty rows)
+            address = record.get(config.SHEET_COLUMNS['address'], '').strip()
+            if not address:
+                continue
+            
+            weighted_score = record.get(config.SHEET_COLUMNS['weighted_score'])
+            last_updated = record.get(config.SHEET_COLUMNS['last_updated'], '')
+            last_analyzed = record.get(config.SHEET_COLUMNS['last_analyzed'], '')
+            
+            needs_analysis = False
+            reason = ""
+            
+            if not weighted_score:
+                needs_analysis = True
+                reason = "no score"
+            elif last_updated and last_analyzed:
+                # Compare timestamps - if updated after analyzed, re-analyze
+                try:
+                    from datetime import datetime
+                    updated_dt = datetime.strptime(last_updated, '%Y-%m-%d %H:%M:%S')
+                    analyzed_dt = datetime.strptime(last_analyzed, '%Y-%m-%d %H:%M:%S')
+                    if updated_dt > analyzed_dt:
+                        needs_analysis = True
+                        reason = "data changed"
+                except (ValueError, TypeError):
+                    pass  # If timestamps can't be parsed, skip re-analysis
+            elif last_updated and not last_analyzed:
+                # Has data but never analyzed
+                needs_analysis = True
+                reason = "never analyzed"
+            
+            # Require re-run if commute metadata missing (new columns)
+            if GoogleSheetsClient.needs_commute_metadata_refresh(record):
+                needs_analysis = True
+                if not reason:
+                    reason = "missing commute metadata"
+
+            if needs_analysis:
                 record['_row_number'] = i + 2  # +2 for header row and 1-indexing
+                record['_analysis_reason'] = reason
                 apartments_to_analyze.append(record)
         
         print(f"Found {len(apartments_to_analyze)} apartments to analyze")
+        for apt in apartments_to_analyze:
+            reason = apt.get('_analysis_reason', 'unknown')
+            address = apt.get(config.SHEET_COLUMNS['address'], 'Unknown')
+            print(f"  - {address}: {reason}")
         
         results = []
         for apartment in apartments_to_analyze:
@@ -693,6 +1108,78 @@ def run_analysis():
         
         return jsonify({'success': True, 'analyzed': len(results)})
     except Exception as e:
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
+@app.route('/analyze_edits', methods=['GET'])
+def analyze_edits():
+    """Analyze user edits and return weight adjustment suggestions"""
+    try:
+        from analyzers.weight_adjuster import WeightAdjuster
+        
+        # Get edit history from User Edits Log
+        edit_history = sheets_client.get_user_edits()
+        
+        if not edit_history:
+            return jsonify({
+                'success': True,
+                'suggestions': {},
+                'message': 'No edit history found. Make some manual edits first to get weight suggestions.'
+            })
+        
+        # Create weight adjuster and analyze
+        adjuster = WeightAdjuster(edit_history)
+        suggestions = adjuster.suggest_weight_adjustments()
+        
+        # Get summary text
+        summary = adjuster.get_adjustment_summary()
+        
+        return jsonify({
+            'success': True,
+            'suggestions': suggestions,
+            'summary': summary,
+            'edit_count': len(edit_history)
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
+@app.route('/apply_weight_adjustments', methods=['POST'])
+def apply_weight_adjustments():
+    """Apply suggested weight adjustments (saves to a Scoring Weights sheet)"""
+    try:
+        from analyzers.weight_adjuster import WeightAdjuster
+        
+        # Get the suggestions from request
+        data = request.get_json()
+        suggestions = data.get('suggestions', {})
+        
+        if not suggestions:
+            return jsonify({'error': 'No suggestions provided', 'success': False}), 400
+        
+        # Get edit history to create adjuster
+        edit_history = sheets_client.get_user_edits()
+        adjuster = WeightAdjuster(edit_history)
+        
+        # Apply adjustments
+        new_weights = adjuster.apply_weight_adjustments(suggestions)
+        
+        # Save to Scoring Weights sheet (for now, just return them)
+        # TODO: Implement persistent weight storage in Google Sheets
+        # For now, we'll just return the new weights for manual update
+        
+        return jsonify({
+            'success': True,
+            'new_weights': new_weights,
+            'message': 'Weight adjustments calculated. To apply permanently, update config.py SCORING_WEIGHTS with these values.'
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e), 'success': False}), 500
 
 
@@ -746,6 +1233,150 @@ def stats():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/admin/check_schema', methods=['GET'])
+def admin_check_schema():
+    """Check schema differences between config and sheet"""
+    try:
+        from manage_sheet_columns import SheetColumnManager
+        
+        manager = SheetColumnManager()
+        expected = manager.get_expected_columns()
+        current = manager.get_current_columns()
+        differences = manager.analyze_differences()
+        
+        return jsonify({
+            'success': True,
+            'expected_count': len(expected),
+            'current_count': len(current),
+            'expected': expected,
+            'current': current,
+            'missing': [{'name': col, 'after': expected[expected.index(col) - 1] if expected.index(col) > 0 else None} 
+                       for col in differences['missing']],
+            'extra': differences['extra'],
+            'misplaced': differences['misplaced'],
+            'in_sync': not (differences['missing'] or differences['extra'] or differences['misplaced'])
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
+@app.route('/admin/sync_schema', methods=['POST'])
+def admin_sync_schema():
+    """Sync schema by adding missing columns"""
+    try:
+        from manage_sheet_columns import SheetColumnManager
+        
+        manager = SheetColumnManager()
+        differences = manager.analyze_differences()
+        
+        if not differences['missing']:
+            return jsonify({
+                'success': True,
+                'added': [],
+                'message': 'Sheet is already up to date'
+            })
+        
+        # Add missing columns
+        expected = manager.get_expected_columns()
+        current = manager.get_current_columns()
+        added = []
+        
+        for col_name in differences['missing']:
+            # Find where this column should be inserted
+            expected_idx = expected.index(col_name)
+            
+            # Find the insertion point in current sheet
+            insert_after_idx = 0
+            for i in range(expected_idx - 1, -1, -1):
+                prev_col = expected[i]
+                if prev_col in current:
+                    insert_after_idx = current.index(prev_col) + 1
+                    break
+            
+            col_letter = manager._col_index_to_letter(insert_after_idx)
+            
+            # Insert column
+            manager.sheet.spreadsheet.batch_update({
+                'requests': [{
+                    'insertDimension': {
+                        'range': {
+                            'sheetId': manager.sheet.id,
+                            'dimension': 'COLUMNS',
+                            'startIndex': insert_after_idx,
+                            'endIndex': insert_after_idx + 1
+                        }
+                    }
+                }]
+            })
+            
+            # Set header
+            print(f"  Adding column: {col_name} at position {insert_after_idx + 1} (column {col_letter})")
+            manager.sheet.update(f'{col_letter}1', [[col_name]])
+            
+            # Format header
+            manager.sheet.format(f'{col_letter}1', {
+                'backgroundColor': {'red': 0.2, 'green': 0.4, 'blue': 0.8},
+                'textFormat': {'bold': True, 'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}},
+                'horizontalAlignment': 'CENTER'
+            })
+            print(f"  ✓ Header formatted")
+            
+            # Set default values only for rows with addresses (primary key)
+            if manager.sheet.row_count > 1:
+                # Get the Address column to check which rows have data
+                address_col_name = config.SHEET_COLUMNS.get("address", "Address")
+                current_headers = manager.get_current_columns()
+                
+                if address_col_name in current_headers:
+                    address_col_idx = current_headers.index(address_col_name)
+                    
+                    # Get all addresses
+                    all_addresses = manager.sheet.col_values(address_col_idx + 1)
+                    
+                    # Build list of updates only for rows with addresses
+                    default_value = 0 if ('cost' in col_name.lower() or 'score' in col_name.lower()) else ''
+                    updates = []
+                    
+                    # Start from index 1 (skip header at index 0)
+                    for idx, address in enumerate(all_addresses[1:], start=2):
+                        if address and address.strip():  # Only if address exists
+                            updates.append({
+                                'range': f'{col_letter}{idx}',
+                                'values': [[default_value]]
+                            })
+                    
+                    # Batch update all rows with addresses
+                    if updates:
+                        manager.sheet.batch_update(updates)
+                        print(f"    ✓ Set default values for {len(updates)} row(s) with addresses")
+                    else:
+                        print(f"    ℹ️  No rows with addresses found, skipping default values")
+                else:
+                    print(f"    ⚠️  Warning: Address column not found, skipping default values")
+            
+            # Update current list for next iteration
+            current.insert(insert_after_idx, col_name)
+            
+            added.append({
+                'name': col_name,
+                'position': insert_after_idx + 1
+            })
+        
+        return jsonify({
+            'success': True,
+            'added': added,
+            'message': f'Successfully added {len(added)} column(s)'
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e), 'success': False}), 500
 
 
 def open_browser():

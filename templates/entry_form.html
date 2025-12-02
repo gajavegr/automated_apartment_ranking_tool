@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Add Apartment - Manual Entry</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=places"></script>
+    <script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=places,geometry"></script>
 </head>
 <body>
     <div class="container">
@@ -17,6 +17,7 @@
         <div class="tabs">
             <button class="tab active" onclick="showTab('entry')">Entry</button>
             <button class="tab" onclick="showTab('analysis')">Analysis</button>
+            <button class="tab" onclick="showTab('admin')">Admin</button>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -41,7 +42,11 @@
                         <input type="url" 
                                id="zillow_url" 
                                name="zillow_url" 
-                               placeholder="https://www.zillow.com/homedetails/...">
+                               placeholder="https://www.zillow.com/homedetails/..."
+                               oninput="updateZillowLink()">
+                        <a id="zillow_link_preview" href="#" target="_blank" style="display: none; margin-left: 10px; color: #0066cc; text-decoration: none;">
+                            🔗 Open Zillow Listing
+                        </a>
                         <small>💡 Paste the Zillow link here - it will be embedded in the address for easy access to photos and details</small>
                     </div>
 
@@ -151,6 +156,17 @@
                     </div>
 
                     <div class="form-group">
+                        <label for="parking_cost">Parking Cost ($/month)</label>
+                        <input type="number" 
+                               id="parking_cost" 
+                               name="parking_cost" 
+                               min="0" 
+                               step="1"
+                               placeholder="0 if included in rent">
+                        <small>Additional monthly cost for parking (0 if included in base rent). If > 0, Street Parking Ease becomes required.</small>
+                    </div>
+
+                    <div class="form-group">
                         <label>Laundry *</label>
                         <div class="multi-select-wrapper">
                             <div class="multi-select-options">
@@ -195,7 +211,7 @@
                     </div>
 
                     <div class="form-group">
-                        <label for="street_parking_ease">Street Parking Ease (if street parking is your primary option)</label>
+                        <label for="street_parking_ease">Street Parking Ease <span id="street_parking_required_indicator" style="color: red; display: none;">*</span></label>
                         <div class="rating-scale">
                             <input type="radio" id="parking_ease_5" name="street_parking_ease" value="5">
                             <label for="parking_ease_5" title="Very Easy">★</label>
@@ -212,7 +228,7 @@
                             <input type="radio" id="parking_ease_1" name="street_parking_ease" value="1">
                             <label for="parking_ease_1" title="Very Difficult">★</label>
                         </div>
-                        <small>Only relevant if street parking is selected above</small>
+                        <small id="street_parking_help">If street parking is your primary option. <strong>Required if parking has additional cost.</strong></small>
                     </div>
 
                     <div class="form-group">
@@ -375,19 +391,331 @@
 
             <!-- Analysis Tab -->
             <div id="analysisTab" class="tab-content" style="display: none;">
-                <div class="analysis-container">
-                    <div class="analysis-header">
-                        <h2>Apartment Analysis</h2>
-                        <button id="runAnalysisBtn" class="btn btn-primary" onclick="runAnalysis()">
-                            Run Analysis
-                        </button>
+                <div class="analysis-header">
+                    <h2 style="margin-right: 20px;">Apartment Analysis</h2>
+                    <button id="runAnalysisBtn" class="btn btn-primary" onclick="runAnalysis()">
+                        Run Analysis
+                    </button>
+                    <button id="adjustWeightsBtn" class="btn btn-secondary" onclick="showWeightAdjustments()" style="margin-left: 10px;">
+                        Adjust Weights
+                    </button>
+                </div>
+
+                <div id="analysisLoading" class="loading-spinner" style="display: none;">
+                    <p>⏳ Analyzing apartments... This may take a few minutes.</p>
+                </div>
+
+                <div id="analysisResults" class="analysis-grid hidden">
+                    <!-- Detail Panel (Left when shown, first in DOM) -->
+                    <div id="detailPanel" class="detail-panel">
+                        <div class="detail-panel-header">
+                            <button class="close-panel-btn" onclick="closeDetailPanel()">&times;</button>
+                            <h3 id="detailAddress">Select an apartment</h3>
+                            <a id="detailZillowLink" href="#" target="_blank" style="display: none;">View on Zillow</a>
+                        </div>
+
+                        <div class="detail-panel-content">
+                            <!-- Overall Score -->
+                            <div class="detail-section">
+                                <h4>Overall Score</h4>
+                                <div class="score-summary">
+                                    <div class="overall-score-card">
+                                        <div class="score-display">
+                                            <span id="detailWeightedScore" class="score-large">--</span>
+                                            <span class="score-range" id="detailScoreRange"></span>
+                                        </div>
+                                        <button id="enableEditBtn" class="btn btn-secondary" onclick="enableEditing()">Edit Scores</button>
+                                        <div id="editControls" style="display: none;">
+                                            <button class="btn btn-primary" onclick="saveEdits()">Save Changes</button>
+                                            <button class="btn btn-secondary" onclick="cancelEdits()">Cancel</button>
+                                        </div>
+                                    </div>
+                                    <div class="score-sankey-card">
+                                        <div id="scoreSankey" class="score-sankey">
+                                            <p class="sankey-empty">Select an apartment to view score flow.</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="score-contributions" id="scoreContributionsContainer">
+                                    <h5>Contribution Breakdown</h5>
+                                    <ul id="scoreContributionList">
+                                        <li class="empty">Select an apartment to view contributions.</li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <!-- Score Breakdown -->
+                            <div class="detail-section">
+                                <h4>Score Breakdown</h4>
+                                
+                                <!-- Commute Score -->
+                                <div class="score-component">
+                                    <div class="component-header">
+                                        <strong>Commute</strong>
+                                        <span id="commuteScore" class="component-score">--</span>
+                                    </div>
+                                    <div class="component-meta" id="commuteMeta"></div>
+                                    <div class="component-details">
+                                        <div class="field-row">
+                                            <label>Your Commute (AM):</label>
+                                            <span id="commuteYouAM" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Your Commute (PM):</label>
+                                            <span id="commuteYouPM" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row" style="font-weight: 600; border-top: 1px solid #e0e0e0; padding-top: 4px; margin-top: 4px;">
+                                            <label>Daily Total:</label>
+                                            <span id="commuteYouDaily" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row field-row-with-subtext" style="margin-top: 12px;">
+                                            <div class="field-main">
+                                                <label>Partner Commute:</label>
+                                                <span id="commutePartner" class="field-value">--</span>
+                                                <input type="number" id="editCommutePartner" class="edit-field" style="display: none;" min="0" max="999">
+                                            </div>
+                                            <div class="field-subtext" id="partnerCommuteMode"></div>
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Route:</label>
+                                            <span id="commuteRoute" class="field-value">--</span>
+                                        </div>
+                                        <div class="route-preview-card">
+                                            <div class="route-map">
+                                                <div id="routePreviewMap" class="route-map-canvas"></div>
+                                                <div id="routeMapPlaceholder" class="route-map-placeholder">
+                                                    Select an apartment to preview the commute.
+                                                </div>
+                                            </div>
+                                            <div class="route-options">
+                                                <h5>Highway Options</h5>
+                                                <div id="routeOptionList" class="route-options-list">
+                                                    <p class="route-option-empty">Waiting for data…</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Route Annoyingness:</label>
+                                            <span id="routeAnnoyingness" class="field-value">--</span>
+                                        </div>
+                                        <div id="routeAnnoyingnessNotes" class="field-breakdown"></div>
+                                    </div>
+                                </div>
+
+                                <!-- Safety Score -->
+                                <div class="score-component">
+                                    <div class="component-header">
+                                        <strong>Safety</strong>
+                                        <span id="safetyScore" class="component-score">--</span>
+                                    </div>
+                                    <div class="component-meta" id="safetyMeta"></div>
+                                    <div class="component-details">
+                                        <div class="field-row">
+                                            <label>OpenData Score:</label>
+                                            <span id="safetyOpenData" class="field-value">--</span>
+                                            <input type="number" id="editSafetyOpenData" class="edit-field" style="display: none;" min="0" max="10" step="0.1">
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Crime Incidents:</label>
+                                            <span id="safetyIncidents" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Avg Severity:</label>
+                                            <span id="safetySeverity" class="field-value">--</span>
+                                        </div>
+                                        <div id="safetyBreakdown" class="field-breakdown"></div>
+                                    </div>
+                                </div>
+
+                                <!-- WFH Quality Score -->
+                                <div class="score-component">
+                                    <div class="component-header">
+                                        <strong>WFH Quality</strong>
+                                        <span id="wfhScore" class="component-score">--</span>
+                                    </div>
+                                    <div class="component-meta" id="wfhMeta"></div>
+                                    <div class="component-details">
+                                        <div class="field-row">
+                                            <label>Natural Light:</label>
+                                            <span id="wfhNaturalLight" class="field-value">--</span>
+                                            <input type="number" id="editWfhNaturalLight" class="edit-field" style="display: none;" min="0" max="10" step="0.1">
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Desk Space:</label>
+                                            <span id="wfhDeskSpace" class="field-value">--</span>
+                                            <input type="number" id="editWfhDeskSpace" class="edit-field" style="display: none;" min="0" max="10" step="0.1">
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Quietness:</label>
+                                            <span id="wfhQuietness" class="field-value">--</span>
+                                            <input type="number" id="editWfhQuietness" class="edit-field" style="display: none;" min="0" max="10" step="0.1">
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Kitchen Quality:</label>
+                                            <span id="wfhKitchen" class="field-value">--</span>
+                                            <input type="number" id="editWfhKitchen" class="edit-field" style="display: none;" min="0" max="10" step="0.1">
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Double Pane Windows:</label>
+                                            <span id="wfhWindows" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Study Door:</label>
+                                            <span id="wfhStudyDoor" class="field-value">--</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Location Vibe Score -->
+                                <div class="score-component">
+                                    <div class="component-header">
+                                        <strong>Location Vibe</strong>
+                                        <span id="vibeScore" class="component-score">--</span>
+                                    </div>
+                                    <div class="component-meta" id="vibeMeta"></div>
+                                    <div class="component-details">
+                                        <div class="field-row">
+                                            <label>Restaurants Nearby:</label>
+                                            <span id="vibeRestaurants" class="field-value">--</span>
+                                            <input type="number" id="editVibeRestaurants" class="edit-field" style="display: none;" min="0" max="100">
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Cafes Nearby:</label>
+                                            <span id="vibeCafes" class="field-value">--</span>
+                                            <input type="number" id="editVibeCafes" class="edit-field" style="display: none;" min="0" max="100">
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Parks Nearby:</label>
+                                            <span id="vibeParks" class="field-value">--</span>
+                                            <input type="number" id="editVibeParks" class="edit-field" style="display: none;" min="0" max="100">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Parking Score -->
+                                <div class="score-component">
+                                    <div class="component-header">
+                                        <strong>Parking</strong>
+                                        <span id="parkingScore" class="component-score">--</span>
+                                    </div>
+                                    <div class="component-meta" id="parkingMeta"></div>
+                                    <div class="component-details">
+                                        <div class="field-row">
+                                            <label>Type:</label>
+                                            <span id="parkingType" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Enclosure:</label>
+                                            <span id="parkingEnclosure" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Distance:</label>
+                                            <span id="parkingDistance" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Street Parking Ease:</label>
+                                            <span id="parkingStreetEase" class="field-value">--</span>
+                                            <input type="number" id="editParkingStreetEase" class="edit-field" style="display: none;" min="1" max="5">
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Visitor Parking Ease:</label>
+                                            <span id="parkingVisitorEase" class="field-value">--</span>
+                                            <input type="number" id="editParkingVisitorEase" class="edit-field" style="display: none;" min="1" max="5">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Gym Score -->
+                                <div class="score-component">
+                                    <div class="component-header">
+                                        <strong>Gym</strong>
+                                        <span id="gymScore" class="component-score">--</span>
+                                    </div>
+                                    <div class="component-meta" id="gymMeta"></div>
+                                    <div class="component-details">
+                                        <div class="field-row">
+                                            <label>Within 10 min:</label>
+                                            <span id="gymWithin10" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Quality:</label>
+                                            <span id="gymQuality" class="field-value">--</span>
+                                            <input type="number" id="editGymQuality" class="edit-field" style="display: none;" min="0" max="10" step="0.1">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Laundry Score -->
+                                <div class="score-component">
+                                    <div class="component-header">
+                                        <strong>Laundry</strong>
+                                        <span id="laundryScore" class="component-score">--</span>
+                                    </div>
+                                    <div class="component-meta" id="laundryMeta"></div>
+                                    <div class="component-details">
+                                        <div class="field-row">
+                                            <label>Type:</label>
+                                            <span id="laundryType" class="field-value">--</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Raw Data (Collapsible) -->
+                            <div class="detail-section">
+                                <h4 onclick="toggleRawData()" style="cursor: pointer;">
+                                    Raw Data <span id="rawDataToggle">▼</span>
+                                </h4>
+                                <div id="rawDataContent" style="display: none;">
+                                    <div class="field-row">
+                                        <label>Price:</label>
+                                        <span id="rawPrice" class="field-value">--</span>
+                                    </div>
+                                    <div class="field-row">
+                                        <label>Bedrooms:</label>
+                                        <span id="rawBedrooms" class="field-value">--</span>
+                                    </div>
+                                    <div class="field-row">
+                                        <label>Bathrooms:</label>
+                                        <span id="rawBathrooms" class="field-value">--</span>
+                                    </div>
+                                    <div class="field-row">
+                                        <label>Square Feet:</label>
+                                        <span id="rawSqft" class="field-value">--</span>
+                                    </div>
+                                    <div class="field-row">
+                                        <label>Floor Level:</label>
+                                        <span id="rawFloorLevel" class="field-value">--</span>
+                                    </div>
+                                    <div class="field-row">
+                                        <label>View Quality:</label>
+                                        <span id="rawViewQuality" class="field-value">--</span>
+                                    </div>
+                                    <div class="field-row">
+                                        <label>Year Built:</label>
+                                        <span id="rawYearBuilt" class="field-value">--</span>
+                                    </div>
+                                    <div class="field-row">
+                                        <label>Neighborhoods:</label>
+                                        <span id="rawNeighborhoods" class="field-value">--</span>
+                                    </div>
+                                    <div class="field-row">
+                                        <label>Rent Control:</label>
+                                        <span id="rawRentControl" class="field-value">--</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Component Weights -->
+                            <div class="detail-section">
+                                <h4>Current Scoring Weights</h4>
+                                <div id="componentWeights" class="weights-display"></div>
+                            </div>
+                        </div>
                     </div>
 
-                    <div id="analysisLoading" class="loading-spinner" style="display: none;">
-                        <p>⏳ Analyzing apartments... This may take a few minutes.</p>
-                    </div>
-
-                    <div id="analysisResults" style="display: none;">
+                    <!-- Right Column: Scatter Plot + Ranked List (second in DOM) -->
+                    <div class="analysis-left">
                         <div class="analysis-section">
                             <h3>Score vs Price</h3>
                             <canvas id="scatterPlot"></canvas>
@@ -406,16 +734,48 @@
                 </div>
             </div>
 
-            <!-- Apartment Profile Modal -->
-            <div id="apartmentModal" class="modal" style="display: none;">
-                <div class="modal-content">
-                    <span class="modal-close" onclick="closeModal()">&times;</span>
-                    <div id="modalBody"></div>
+            <!-- Admin Tab -->
+            <div id="adminTab" class="tab-content" style="display: none;">
+                <div class="admin-container">
+                    <h2>Admin Tools</h2>
+                    
+                    <!-- Schema Management Section -->
+                    <div class="admin-section">
+                        <h3>📋 Sheet Schema Management</h3>
+                        <p>Sync your Google Sheet columns with the application configuration.</p>
+                        
+                        <div class="admin-actions">
+                            <button id="checkSchemaBtn" class="btn btn-secondary" onclick="checkSchema()">
+                                Check Schema
+                            </button>
+                            <button id="syncSchemaBtn" class="btn btn-primary" onclick="syncSchema()">
+                                Sync Schema
+                            </button>
+                        </div>
+                        
+                        <div id="schemaStatus" class="schema-status" style="display: none;">
+                            <h4>Schema Analysis</h4>
+                            <div id="schemaDetails"></div>
+                        </div>
+                    </div>
+
+                    <!-- Future Admin Features -->
+                    <div class="admin-section">
+                        <h3>🔧 Other Tools</h3>
+                        <p>Additional admin features coming soon:</p>
+                        <ul>
+                            <li>Bulk data operations</li>
+                            <li>Data validation & cleanup</li>
+                            <li>Export/import functionality</li>
+                            <li>API key management</li>
+                        </ul>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script>
         let map;
@@ -423,6 +783,9 @@
         let marker;
         let autocomplete;
         let scatterChart = null;
+        let selectedScatterPoint = null; // Track selected scatter plot point
+        let routePreviewMap = null;
+        let routePreviewPolylines = [];
 
         function initMaps() {
             // Initialize map (centered on SF)
@@ -454,6 +817,9 @@
             
             // Load apartments for selector
             loadApartmentsList();
+            
+            // Initialize button visibility (default to "Add" mode for new apartments)
+            updateButtonVisibility(false);
         }
 
         // Load apartments list for dropdown
@@ -517,6 +883,7 @@
             
             // Basic fields
             document.getElementById('zillow_url').value = data['Zillow URL'] || '';
+            updateZillowLink(); // Update the link preview
             document.getElementById('address').value = data['Address'] || '';
             document.getElementById('manual_safety_rating').value = data['Manual Safety Rating'] || 5;
             document.getElementById('safetyValue').textContent = data['Manual Safety Rating'] || 5;
@@ -535,6 +902,14 @@
             document.querySelectorAll('input[name="parking_enclosure"]').forEach(cb => {
                 cb.checked = parkingEnclosures.includes(cb.value);
             });
+            
+            // Parking cost
+            const parkingCost = data['Parking Cost ($/month)'];
+            if (parkingCost !== undefined && parkingCost !== null && parkingCost !== '') {
+                document.getElementById('parking_cost').value = parkingCost;
+                // Trigger the input event to update the required indicator
+                document.getElementById('parking_cost').dispatchEvent(new Event('input'));
+            }
             
             // Laundry
             const laundryTypes = (data['Laundry Type'] || '').split('\n').filter(v => v);
@@ -607,6 +982,15 @@
             document.getElementById('apartmentForm').reset();
             document.getElementById('safetyValue').textContent = '5';
             document.getElementById('hillinessOverrideContainer').style.display = 'none';
+            
+            // Reset to "Add" mode
+            updateButtonVisibility(false);
+            
+            // Reset selector to "New Apartment"
+            document.getElementById('apartment_selector').value = '';
+            
+            // Hide Zillow link preview
+            updateZillowLink();
         }
 
         // Update button visibility
@@ -623,6 +1007,20 @@
                 addBtn.style.display = 'inline-block';
                 updateBtn.style.display = 'none';
                 deleteBtn.style.display = 'none';
+            }
+        }
+
+        // Update Zillow link preview
+        function updateZillowLink() {
+            const urlInput = document.getElementById('zillow_url');
+            const linkPreview = document.getElementById('zillow_link_preview');
+            const url = urlInput.value.trim();
+            
+            if (url && url.startsWith('http')) {
+                linkPreview.href = url;
+                linkPreview.style.display = 'inline';
+            } else {
+                linkPreview.style.display = 'none';
             }
         }
 
@@ -1128,6 +1526,21 @@
         });
 
         // Form validation
+        // Parking cost change handler - show/hide required indicator
+        document.getElementById('parking_cost').addEventListener('input', function() {
+            const parkingCost = parseFloat(this.value) || 0;
+            const requiredIndicator = document.getElementById('street_parking_required_indicator');
+            const helpText = document.getElementById('street_parking_help');
+            
+            if (parkingCost > 0) {
+                requiredIndicator.style.display = 'inline';
+                helpText.innerHTML = '<strong>Required because parking has additional cost.</strong> How easy is street parking as an alternative?';
+            } else {
+                requiredIndicator.style.display = 'none';
+                helpText.innerHTML = 'If street parking is your primary option. <strong>Required if parking has additional cost.</strong>';
+            }
+        });
+
         document.getElementById('apartmentForm').addEventListener('submit', function(e) {
             const address = document.getElementById('address').value.trim();
             if (!address) {
@@ -1151,6 +1564,17 @@
                 alert('Please select at least one laundry type');
                 return false;
             }
+            
+            // Check if street parking ease is required (when parking has cost)
+            const parkingCost = parseFloat(document.getElementById('parking_cost').value) || 0;
+            if (parkingCost > 0) {
+                const streetParkingEaseChecked = document.querySelector('input[name="street_parking_ease"]:checked');
+                if (!streetParkingEaseChecked) {
+                    e.preventDefault();
+                    alert('Street Parking Ease is required when parking has an additional cost. Please rate how easy it is to find street parking as an alternative.');
+                    return false;
+                }
+            }
         });
 
         // Tab switching
@@ -1172,10 +1596,14 @@
             } else if (tabName === 'analysis') {
                 document.getElementById('analysisTab').style.display = 'block';
                 document.querySelectorAll('.tab')[1].classList.add('active');
+                const analysisResults = document.getElementById('analysisResults');
                 // Load analysis data if not already loaded
-                if (!document.getElementById('analysisResults').style.display || document.getElementById('analysisResults').style.display === 'none') {
+                if (analysisResults.classList.contains('hidden')) {
                     loadAnalysisData();
                 }
+            } else if (tabName === 'admin') {
+                document.getElementById('adminTab').style.display = 'block';
+                document.querySelectorAll('.tab')[2].classList.add('active');
             }
         }
 
@@ -1188,7 +1616,8 @@
             btn.disabled = true;
             btn.textContent = 'Running...';
             loading.style.display = 'block';
-            results.style.display = 'none';
+            results.classList.add('hidden');
+            results.classList.remove('detail-shown');
             
             try {
                 const response = await fetch('/run_analysis', {
@@ -1215,6 +1644,10 @@
 
         // Load analysis data
         async function loadAnalysisData() {
+            const resultsContainer = document.getElementById('analysisResults');
+            const rankedListContainer = document.getElementById('rankedList');
+            const criteriaMatrixContainer = document.getElementById('criteriaMatrix');
+            
             try {
                 const response = await fetch('/get_analysis_data');
                 const data = await response.json();
@@ -1223,15 +1656,31 @@
                     renderScatterPlot(data.scatter);
                     renderRankedList(data.ranked);
                     renderCriteriaMatrix(data.criteria_matrix);
-                    document.getElementById('analysisResults').style.display = 'block';
                 } else {
-                    document.getElementById('analysisResults').innerHTML = '<p>No analyzed apartments found. Please run analysis first.</p>';
-                    document.getElementById('analysisResults').style.display = 'block';
+                    if (scatterChart) {
+                        scatterChart.destroy();
+                        scatterChart = null;
+                    }
+                    rankedListContainer.innerHTML = '<p>No analyzed apartments found. Please run analysis first.</p>';
+                    criteriaMatrixContainer.innerHTML = '<p>No criteria matrix data available</p>';
+                    document.getElementById('detailAddress').textContent = 'Select an apartment';
+                    document.getElementById('detailZillowLink').style.display = 'none';
+                    resultsContainer.classList.remove('detail-shown');
                 }
+                
+                resultsContainer.classList.remove('hidden');
             } catch (error) {
                 console.error('Error loading analysis data:', error);
-                document.getElementById('analysisResults').innerHTML = '<p>Error loading analysis data</p>';
-                document.getElementById('analysisResults').style.display = 'block';
+                if (scatterChart) {
+                    scatterChart.destroy();
+                    scatterChart = null;
+                }
+                rankedListContainer.innerHTML = '<p>Error loading analysis data.</p>';
+                criteriaMatrixContainer.innerHTML = '<p>Please try running the analysis again.</p>';
+                document.getElementById('detailAddress').textContent = 'Select an apartment';
+                document.getElementById('detailZillowLink').style.display = 'none';
+                resultsContainer.classList.remove('detail-shown');
+                resultsContainer.classList.remove('hidden');
             }
         }
 
@@ -1243,6 +1692,9 @@
             if (scatterChart) {
                 scatterChart.destroy();
             }
+            
+            // Reset selection when chart is re-rendered with new data
+            selectedScatterPoint = null;
             
             scatterChart = new Chart(ctx, {
                 type: 'scatter',
@@ -1257,9 +1709,22 @@
                             score_min: d.score_min,
                             score_max: d.score_max
                         })),
-                        backgroundColor: 'rgba(0, 102, 204, 0.6)',
-                        borderColor: 'rgba(0, 102, 204, 1)',
-                        pointRadius: 6,
+                        backgroundColor: (context) => {
+                            const index = context.dataIndex;
+                            return selectedScatterPoint === index ? 'rgba(255, 152, 0, 0.8)' : 'rgba(0, 102, 204, 0.6)';
+                        },
+                        borderColor: (context) => {
+                            const index = context.dataIndex;
+                            return selectedScatterPoint === index ? 'rgba(255, 152, 0, 1)' : 'rgba(0, 102, 204, 1)';
+                        },
+                        borderWidth: (context) => {
+                            const index = context.dataIndex;
+                            return selectedScatterPoint === index ? 3 : 1;
+                        },
+                        pointRadius: (context) => {
+                            const index = context.dataIndex;
+                            return selectedScatterPoint === index ? 8 : 6;
+                        },
                         pointHoverRadius: 8
                     }]
                 },
@@ -1270,7 +1735,9 @@
                         if (elements.length > 0) {
                             const index = elements[0].index;
                             const apartment = scatterData[index];
-                            showApartmentModal(apartment.row);
+                            selectedScatterPoint = index;
+                            scatterChart.update(); // Redraw to show selection
+                            showDetailPanel(apartment.row);
                         }
                     },
                     plugins: {
@@ -1331,13 +1798,13 @@
                     </thead>
                     <tbody>
                         ${rankedData.map((apt, idx) => `
-                            <tr>
+                            <tr class="apartment-row" onclick="showDetailPanel(${apt.row})" data-row="${apt.row}">
                                 <td>${idx + 1}</td>
                                 <td>${apt.address}</td>
                                 <td>$${apt.price}</td>
                                 <td>${apt.score ? apt.score.toFixed(1) : 'N/A'}</td>
                                 <td>
-                                    <button class="btn-small" onclick="showApartmentModal(${apt.row})">View</button>
+                                    <button class="btn-small" onclick="event.stopPropagation(); showDetailPanel(${apt.row})">View</button>
                                 </td>
                             </tr>
                         `).join('')}
@@ -1404,6 +1871,988 @@
             const modal = document.getElementById('apartmentModal');
             if (event.target === modal) {
                 modal.style.display = 'none';
+            }
+        }
+
+        // Detail Panel Functions
+        let currentApartmentRow = null;
+        let originalApartmentData = null;
+
+        async function showDetailPanel(rowNumber) {
+            currentApartmentRow = rowNumber;
+            const grid = document.getElementById('analysisResults');
+            
+            // Highlight selected row
+            document.querySelectorAll('.apartment-row').forEach(row => {
+                row.classList.remove('selected');
+            });
+            const selectedRow = document.querySelector(`.apartment-row[data-row="${rowNumber}"]`);
+            if (selectedRow) {
+                selectedRow.classList.add('selected');
+            }
+            
+            // Show loading state and switch to 60/40 layout
+            grid.classList.add('detail-shown');
+            document.getElementById('detailAddress').textContent = 'Loading...';
+            
+            try {
+                const response = await fetch(`/get_apartment_detailed/${rowNumber}`);
+                const data = await response.json();
+                
+                if (data.error) {
+                    alert('Error loading apartment: ' + data.error);
+                    return;
+                }
+                
+                originalApartmentData = data;
+                populateDetailPanel(data);
+                
+            } catch (error) {
+                console.error('Error loading apartment details:', error);
+                alert('Error loading apartment details');
+            }
+        }
+
+        function populateDetailPanel(data) {
+            // Header
+            document.getElementById('detailAddress').textContent = data['Address'] || 'Unknown';
+            const zillowLink = document.getElementById('detailZillowLink');
+            if (data['Zillow URL']) {
+                zillowLink.href = data['Zillow URL'];
+                zillowLink.style.display = 'inline';
+            } else {
+                zillowLink.style.display = 'none';
+            }
+            
+            // Overall Score
+            const weightedScore = data['Weighted Score'] ?? data['weighted_score'] ?? data.calculated_weighted_score;
+            const numericWeightedScore = typeof weightedScore === 'number' ? weightedScore : parseFloat(weightedScore);
+            document.getElementById('detailWeightedScore').textContent = !isNaN(numericWeightedScore) ? numericWeightedScore.toFixed(1) : '--';
+            
+            const scoreMin = typeof data['Score Min'] === 'number' ? data['Score Min'] : parseFloat(data['Score Min']);
+            const scoreMax = typeof data['Score Max'] === 'number' ? data['Score Max'] : parseFloat(data['Score Max']);
+            if (!isNaN(scoreMin) && !isNaN(scoreMax)) {
+                document.getElementById('detailScoreRange').textContent = `(${scoreMin.toFixed(1)} - ${scoreMax.toFixed(1)})`;
+            } else {
+                document.getElementById('detailScoreRange').textContent = '';
+            }
+            
+            // Component Scores
+            const components = data.component_scores || {};
+            
+            const commuteDetails = data['commute_details'] || {};
+            const driverRouteDetails = commuteDetails.driver || {};
+            updateComponentScoreDisplay('commuteScore', components['commute']);
+            updateComponentMeta('commuteMeta', components['commute']);
+            
+            // Display AM, PM, and daily total commute times
+            const amMins = driverRouteDetails.duration_am_mins;
+            const pmMins = driverRouteDetails.duration_pm_mins;
+            const dailyMins = driverRouteDetails.duration_daily_mins;
+            
+            document.getElementById('commuteYouAM').textContent = 
+                (typeof amMins === 'number') ? formatMinutes(amMins) : formatMinutes(data['Commute Time (You)']);
+            document.getElementById('commuteYouPM').textContent = 
+                (typeof pmMins === 'number') ? formatMinutes(pmMins) : '--';
+            document.getElementById('commuteYouDaily').textContent = 
+                (typeof dailyMins === 'number') ? formatMinutes(dailyMins) : '--';
+            
+            document.getElementById('commutePartner').textContent = formatMinutes(data['Commute Time (Partner)']);
+            document.getElementById('commuteRoute').textContent = formatRouteLabel(driverRouteDetails, data['Commute Route']);
+            updatePartnerCommuteMode(commuteDetails);
+            renderRoutePreview(commuteDetails);
+            renderRouteAlternatives(commuteDetails);
+            const routeAnnoyScore = typeof data['route_annoyingness'] === 'number'
+                ? data['route_annoyingness']
+                : (driverRouteDetails.annoyingness && typeof driverRouteDetails.annoyingness.score === 'number'
+                    ? driverRouteDetails.annoyingness.score
+                    : null);
+            document.getElementById('routeAnnoyingness').textContent = routeAnnoyScore !== null ? `${routeAnnoyScore.toFixed(1)} / 10` : '--';
+            renderAnnoyingnessNotes(commuteDetails, routeAnnoyScore);
+            
+            updateComponentScoreDisplay('safetyScore', components['safety']);
+            updateComponentMeta('safetyMeta', components['safety']);
+            document.getElementById('safetyOpenData').textContent = data['Safety Score (OpenData)'] ? data['Safety Score (OpenData)'].toFixed(1) : '--';
+            document.getElementById('safetyIncidents').textContent = data['incident_count'] || '--';
+            document.getElementById('safetySeverity').textContent = data['avg_severity'] ? data['avg_severity'].toFixed(2) : '--';
+            
+            updateComponentScoreDisplay('wfhScore', components['wfh_quality']);
+            updateComponentMeta('wfhMeta', components['wfh_quality']);
+            document.getElementById('wfhNaturalLight').textContent = data['Natural Light'] ? data['Natural Light'].toFixed(1) : '--';
+            document.getElementById('wfhDeskSpace').textContent = data['Desk Space Quality'] ? data['Desk Space Quality'].toFixed(1) : '--';
+            document.getElementById('wfhQuietness').textContent = data['Quietness Score'] ? data['Quietness Score'].toFixed(1) : '--';
+            document.getElementById('wfhKitchen').textContent = data['Kitchen Quality'] ? data['Kitchen Quality'].toFixed(1) : '--';
+            document.getElementById('wfhWindows').textContent = data['Double Pane Windows'] ? 'Yes' : 'No';
+            document.getElementById('wfhStudyDoor').textContent = data['Study Door Type'] || '--';
+            
+            updateComponentScoreDisplay('vibeScore', components['location_vibe']);
+            updateComponentMeta('vibeMeta', components['location_vibe']);
+            document.getElementById('vibeRestaurants').textContent = data['Restaurants Nearby'] || '--';
+            document.getElementById('vibeCafes').textContent = data['Cafes Nearby'] || '--';
+            document.getElementById('vibeParks').textContent = data['Parks Nearby'] || '--';
+            
+            updateComponentScoreDisplay('parkingScore', components['parking']);
+            updateComponentMeta('parkingMeta', components['parking']);
+            document.getElementById('parkingType').textContent = data['Parking Type'] || '--';
+            document.getElementById('parkingEnclosure').textContent = data['Parking Enclosure'] || '--';
+            document.getElementById('parkingDistance').textContent = data['Parking Distance'] || '--';
+            document.getElementById('parkingStreetEase').textContent = data['Street Parking Ease'] || '--';
+            document.getElementById('parkingVisitorEase').textContent = data['Visitor Parking Ease'] || '--';
+            
+            updateComponentScoreDisplay('gymScore', components['gym_nearby']);
+            updateComponentMeta('gymMeta', components['gym_nearby']);
+            document.getElementById('gymWithin10').textContent = data['Gym Within 10min'] ? 'Yes' : 'No';
+            document.getElementById('gymQuality').textContent = data['Gym Quality'] ? data['Gym Quality'].toFixed(1) : '--';
+            
+            updateComponentScoreDisplay('laundryScore', components['laundry']);
+            updateComponentMeta('laundryMeta', components['laundry']);
+            document.getElementById('laundryType').textContent = data['Laundry Type'] || '--';
+            
+            // Raw Data
+            document.getElementById('rawPrice').textContent = data['Price'] ? `$${data['Price']}` : '--';
+            document.getElementById('rawBedrooms').textContent = data['Bedrooms'] || '--';
+            document.getElementById('rawBathrooms').textContent = data['Bathrooms'] || '--';
+            document.getElementById('rawSqft').textContent = data['Square Feet'] || '--';
+            document.getElementById('rawFloorLevel').textContent = data['Floor Level'] || '--';
+            document.getElementById('rawViewQuality').textContent = data['View Quality'] || '--';
+            document.getElementById('rawYearBuilt').textContent = data['Year Built'] || '--';
+            document.getElementById('rawNeighborhoods').textContent = data['Neighborhoods'] || '--';
+            document.getElementById('rawRentControl').textContent = data['Rent Control Protected'] ? 'Yes' : 'No';
+            
+            // Component Weights
+            const weights = data.scoring_weights || {};
+            const weightsHtml = Object.entries(weights).map(([key, value]) => `
+                <div class="weight-item">
+                    <strong>${key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong>
+                    <span class="weight-value">${(value * 100).toFixed(0)}%</span>
+                </div>
+            `).join('');
+            document.getElementById('componentWeights').innerHTML = weightsHtml;
+            
+            // Populate edit fields with current values
+            // Note: Commute times (AM/PM) are calculated from API, not manually editable
+            document.getElementById('editCommutePartner').value = data['Commute Time (Partner)'] || '';
+            document.getElementById('editSafetyOpenData').value = data['Safety Score (OpenData)'] || '';
+            document.getElementById('editWfhNaturalLight').value = data['Natural Light'] || '';
+            document.getElementById('editWfhDeskSpace').value = data['Desk Space Quality'] || '';
+            document.getElementById('editWfhQuietness').value = data['Quietness Score'] || '';
+            document.getElementById('editWfhKitchen').value = data['Kitchen Quality'] || '';
+            document.getElementById('editVibeRestaurants').value = data['Restaurants Nearby'] || '';
+            document.getElementById('editVibeCafes').value = data['Cafes Nearby'] || '';
+            document.getElementById('editVibeParks').value = data['Parks Nearby'] || '';
+            document.getElementById('editParkingStreetEase').value = data['Street Parking Ease'] || '';
+            document.getElementById('editParkingVisitorEase').value = data['Visitor Parking Ease'] || '';
+            document.getElementById('editGymQuality').value = data['Gym Quality'] || '';
+
+            renderScoreContributions(data.component_contributions || [], data.calculated_weighted_score || data['Weighted Score']);
+            renderScoreSankey(data.component_contributions || []);
+        }
+
+        function updateComponentScoreDisplay(elementId, componentData) {
+            const el = document.getElementById(elementId);
+            if (!el) return;
+            if (componentData && typeof componentData.raw_score === 'number') {
+                el.textContent = componentData.raw_score.toFixed(1);
+            } else if (componentData && typeof componentData.score === 'number') {
+                el.textContent = componentData.score.toFixed(1);
+            } else {
+                el.textContent = '--';
+            }
+        }
+
+        function formatMinutes(value) {
+            if (value === null || value === undefined) {
+                return '--';
+            }
+            if (typeof value === 'number' && !isNaN(value)) {
+                const rounded = Number.isInteger(value) ? value.toString() : value.toFixed(1);
+                const suffix = Math.abs(value) === 1 ? 'min' : 'mins';
+                return `${rounded} ${suffix}`;
+            }
+            if (typeof value === 'string') {
+                const trimmed = value.trim();
+                if (trimmed === '') return '--';
+                if (/[a-zA-Z]/.test(trimmed)) {
+                    return trimmed;
+                }
+                const numeric = parseFloat(trimmed);
+                if (!isNaN(numeric)) {
+                    const rounded = Number.isInteger(numeric) ? numeric.toString() : numeric.toFixed(1);
+                    const suffix = Math.abs(numeric) === 1 ? 'min' : 'mins';
+                    return `${rounded} ${suffix}`;
+                }
+                return trimmed;
+            }
+            return '--';
+        }
+
+        function formatWeightPercentage(weight) {
+            if (typeof weight !== 'number' || isNaN(weight)) {
+                return '--';
+            }
+            const pct = weight * 100;
+            const decimals = (pct >= 10 || pct === 0) ? 0 : 1;
+            return `${pct.toFixed(decimals)}%`;
+        }
+        
+        function formatRouteLabel(routeDetails, fallbackRoute) {
+            const fallback = fallbackRoute || '--';
+            if (!routeDetails || Object.keys(routeDetails).length === 0) {
+                return fallback;
+            }
+            const routeKey = routeDetails.route;
+            const label = routeDetails.route_label || fallback;
+            if (!routeKey) {
+                return label || fallback;
+            }
+            if (routeKey === '280') {
+                return label || 'I-280';
+            }
+            if (routeKey === '101') {
+                return label || 'US-101';
+            }
+            return label || routeKey.toUpperCase();
+        }
+        
+        function updatePartnerCommuteMode(commuteDetails) {
+            const el = document.getElementById('partnerCommuteMode');
+            if (!el) return;
+            const description = describePartnerCommute(commuteDetails);
+            if (description) {
+                el.textContent = description;
+                el.style.display = 'block';
+            } else {
+                el.textContent = '';
+                el.style.display = 'none';
+            }
+        }
+        
+        function describePartnerCommute(commuteDetails) {
+            if (!commuteDetails || !commuteDetails.partner) {
+                return '';
+            }
+            const partner = commuteDetails.partner;
+            const mode = (partner.mode_used || 'transit').toLowerCase();
+            if (mode === 'transit') {
+                const segments = (partner.transit_details && partner.transit_details.transit_segments) || [];
+                const lineNames = segments.map(seg => seg.line_name || seg.vehicle_type).filter(Boolean);
+                const base = lineNames.length ? lineNames.join(' → ') : 'Transit route';
+                const walking = partner.transit_details && partner.transit_details.walking_minutes;
+                return walking ? `${base} • ${walking} min walk` : base;
+            }
+            return mode.charAt(0).toUpperCase() + mode.slice(1);
+        }
+        
+        function renderRoutePreview(commuteDetails) {
+            const container = document.getElementById('routePreviewMap');
+            const placeholder = document.getElementById('routeMapPlaceholder');
+            if (!container) return;
+            
+            const driver = commuteDetails && commuteDetails.driver;
+            const alternatives = driver && driver.alternatives;
+            
+            // Check if we have any routes to display (either primary or alternatives with polylines)
+            const hasRoutes = alternatives && Object.values(alternatives).some(alt => alt.polyline);
+            
+            if (!driver || !hasRoutes || typeof google === 'undefined' || !google.maps) {
+                if (placeholder) {
+                    placeholder.textContent = 'Route preview unavailable.';
+                    placeholder.style.display = 'flex';
+                }
+                // Clear any existing polylines
+                if (routePreviewPolylines && routePreviewPolylines.length > 0) {
+                    routePreviewPolylines.forEach(p => p.setMap(null));
+                    routePreviewPolylines = [];
+                }
+                return;
+            }
+            
+            if (!google.maps.geometry || !google.maps.geometry.encoding) {
+                if (placeholder) {
+                    placeholder.textContent = 'Unable to render route (missing geometry library).';
+                    placeholder.style.display = 'flex';
+                }
+                return;
+            }
+            
+            if (!routePreviewMap) {
+                routePreviewMap = new google.maps.Map(container, {
+                    center: { lat: 37.7749, lng: -122.4194 },
+                    zoom: 12,
+                    disableDefaultUI: true
+                });
+            }
+            
+            if (placeholder) {
+                placeholder.style.display = 'none';
+            }
+            
+            // Clear existing polylines
+            if (routePreviewPolylines && routePreviewPolylines.length > 0) {
+                routePreviewPolylines.forEach(p => p.setMap(null));
+                routePreviewPolylines = [];
+            }
+            
+            const bounds = new google.maps.LatLngBounds();
+            const routeColors = {
+                '101': '#0050a4',  // Blue for 101
+                '280': '#d9534f',  // Red for 280
+                'other': '#5cb85c'  // Green for other routes
+            };
+            
+            // Render all alternative routes with polylines
+            const preferredOrder = ['280', '101']; // Draw 280 first so 101 appears on top
+            preferredOrder.forEach(routeKey => {
+                const route = alternatives[routeKey];
+                if (!route || !route.polyline) return;
+                
+                try {
+                    const path = google.maps.geometry.encoding.decodePath(route.polyline);
+                    const polyline = new google.maps.Polyline({
+                        path,
+                        strokeColor: routeColors[routeKey] || routeColors['other'],
+                        strokeOpacity: 0.8,
+                        strokeWeight: 4,
+                        map: routePreviewMap
+                    });
+                    routePreviewPolylines.push(polyline);
+                    path.forEach(point => bounds.extend(point));
+                } catch (error) {
+                    console.warn(`Unable to decode ${routeKey} route path:`, error);
+                }
+            });
+            
+            // If we successfully added routes, fit bounds
+            if (routePreviewPolylines.length > 0) {
+                google.maps.event.trigger(routePreviewMap, 'resize');
+                routePreviewMap.fitBounds(bounds);
+            } else if (placeholder) {
+                placeholder.textContent = 'Unable to decode route paths.';
+                placeholder.style.display = 'flex';
+            }
+        }
+        
+        function renderRouteAlternatives(commuteDetails) {
+            const list = document.getElementById('routeOptionList');
+            if (!list) return;
+            const driver = commuteDetails && commuteDetails.driver;
+            const alternatives = driver && driver.alternatives;
+            if (!driver || !alternatives || Object.keys(alternatives).length === 0) {
+                list.innerHTML = '<p class="route-option-empty">Route data unavailable.</p>';
+                return;
+            }
+            
+            const preferredOrder = ['280', '101'];
+            const ordered = [];
+            preferredOrder.forEach(key => {
+                if (alternatives[key]) {
+                    ordered.push({ key, ...alternatives[key] });
+                }
+            });
+            Object.entries(alternatives).forEach(([key, value]) => {
+                if (!preferredOrder.includes(key)) {
+                    ordered.push({ key, ...value });
+                }
+            });
+            
+            if (ordered.length === 0) {
+                list.innerHTML = '<p class="route-option-empty">Route data unavailable.</p>';
+                return;
+            }
+            
+            const html = ordered.map(option => {
+                const label = formatHighwayLabel(option);
+                const isPrimary = option.key === driver.route;
+                const distanceText = typeof option.distance_miles === 'number'
+                    ? `${option.distance_miles.toFixed(1)} mi`
+                    : '';
+                
+                // Format time display based on available data
+                let timeDisplay;
+                if (typeof option.duration_am_mins === 'number' && typeof option.duration_pm_mins === 'number') {
+                    const am = option.duration_am_mins;
+                    const pm = option.duration_pm_mins;
+                    const daily = option.duration_daily_mins || (am + pm);
+                    timeDisplay = `AM: ${am} min • PM: ${pm} min • Daily: ${daily} min`;
+                } else if (typeof option.duration_mins === 'number') {
+                    timeDisplay = `${option.duration_mins} mins`;
+                } else {
+                    timeDisplay = '--';
+                }
+                
+                return `
+                    <div class="route-option ${isPrimary ? 'primary' : ''}">
+                        <div class="route-option-header">
+                            <span class="route-option-label">${label}</span>
+                            ${isPrimary ? '<span class="route-option-pill">Fastest AM</span>' : ''}
+                        </div>
+                        <div class="route-option-value">
+                            ${timeDisplay}${distanceText ? ` • ${distanceText}` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            list.innerHTML = html;
+        }
+        
+        function formatHighwayLabel(option) {
+            if (!option) return '--';
+            if (option.key === '280') return 'I-280';
+            if (option.key === '101') return 'US-101';
+            return option.route_label || (option.key ? option.key.toUpperCase() : 'Alternate');
+        }
+        
+        function renderAnnoyingnessNotes(commuteDetails, routeAnnoyScore) {
+            const notesEl = document.getElementById('routeAnnoyingnessNotes');
+            if (!notesEl) return;
+            const driver = commuteDetails && commuteDetails.driver;
+            const annoyingness = driver && driver.annoyingness;
+            if (!annoyingness || Object.keys(annoyingness).length === 0) {
+                notesEl.textContent = '';
+                notesEl.style.display = 'none';
+                return;
+            }
+            
+            const items = [];
+            items.push(`Left turns before highway: ${annoyingness.left_turns_before_highway || 0}`);
+            items.push(`Low-speed segments: ${annoyingness.low_speed_segments || 0}`);
+            if (typeof annoyingness.lane_split_ratio === 'number') {
+                items.push(`Highway distance: ${(annoyingness.lane_split_ratio * 100).toFixed(0)}%`);
+            }
+            if (typeof annoyingness.congestion_ratio === 'number') {
+                items.push(`Traffic delay: ${(annoyingness.congestion_ratio * 100).toFixed(0)}% slower`);
+            }
+            if (routeAnnoyScore !== null && routeAnnoyScore !== undefined) {
+                items.push(`Score impact: ${routeAnnoyScore.toFixed(1)} / 10`);
+            }
+            
+            notesEl.innerHTML = items.map(item => `<div>${item}</div>`).join('');
+            notesEl.style.display = 'block';
+        }
+
+        function updateComponentMeta(elementId, componentData) {
+            const metaEl = document.getElementById(elementId);
+            if (!metaEl) return;
+            const details = componentData && componentData.details;
+
+            if (!componentData || typeof componentData.weight !== 'number') {
+                metaEl.innerHTML = '';
+                metaEl.classList.remove('active');
+                return;
+            }
+
+            const weightText = formatWeightPercentage(componentData.weight);
+            const contributionValue = typeof componentData.weighted_contribution === 'number'
+                ? componentData.weighted_contribution.toFixed(1)
+                : null;
+            const maxContribution = typeof componentData.weight === 'number'
+                ? (componentData.weight * 100).toFixed(1)
+                : null;
+            const rawScore = typeof componentData.raw_score === 'number'
+                ? componentData.raw_score.toFixed(1)
+                : (typeof componentData.score === 'number' ? componentData.score.toFixed(1) : null);
+
+            let pillHtml = `<span class="meta-pill">${weightText} weight</span>`;
+            if (contributionValue) {
+                const maxText = maxContribution ? ` of ${maxContribution} max` : '';
+                pillHtml += `<span class="meta-pill">${contributionValue} pts${maxText}</span>`;
+            }
+
+            const formula = rawScore && contributionValue
+                ? `${rawScore} raw x ${weightText} weight x 10 = ${contributionValue} pts`
+                : '';
+
+            const detailLines = [];
+            if (details && typeof details.route_bonus === 'number' && details.route_bonus > 0) {
+                detailLines.push(`Route bonus: +${details.route_bonus.toFixed(2)} pts`);
+            }
+            if (details && typeof details.annoyingness_penalty === 'number' && details.annoyingness_penalty > 0) {
+                detailLines.push(`Annoyingness penalty: -${details.annoyingness_penalty.toFixed(2)} pts`);
+            }
+            
+            metaEl.innerHTML = `
+                <div class="meta-pill-row">
+                    ${pillHtml}
+                </div>
+                ${formula ? `<div class="meta-formula">${formula}</div>` : ''}
+                ${detailLines.length ? `<div class="meta-details">${detailLines.join(' • ')}</div>` : ''}
+            `;
+            metaEl.classList.add('active');
+        }
+
+        function renderScoreContributions(contributions, totalScore) {
+            const list = document.getElementById('scoreContributionList');
+            if (!list) return;
+            
+            if (!contributions || contributions.length === 0) {
+                list.innerHTML = '<li class="empty">Component breakdown not available.</li>';
+                return;
+            }
+            
+            const rows = contributions.map(contribution => {
+                const weightText = formatWeightPercentage(contribution.weight);
+                const rawScoreText = typeof contribution.raw_score === 'number' ? contribution.raw_score.toFixed(1) : '--';
+                const weightedText = typeof contribution.weighted_contribution === 'number' ? contribution.weighted_contribution.toFixed(1) : '--';
+                const maxText = typeof contribution.max_contribution === 'number' ? ` • max ${contribution.max_contribution.toFixed(1)} pts` : '';
+                const hasRaw = rawScoreText !== '--';
+                const hasWeight = weightText !== '--';
+                const parts = [];
+                if (hasRaw) {
+                    parts.push(`${rawScoreText} raw`);
+                }
+                if (hasWeight) {
+                    parts.push(`${weightText} weight`);
+                }
+                parts.push('x 10');
+                const formula = `${parts.join(' x ')} = ${weightedText} pts`;
+                
+                return `
+                    <li>
+                        <div class="contrib-row">
+                            <span class="contrib-label">${contribution.label}</span>
+                            <span class="contrib-value">${weightedText} pts</span>
+                        </div>
+                        <div class="contrib-formula">${formula}${maxText}</div>
+                    </li>
+                `;
+            });
+            
+            list.innerHTML = rows.join('');
+        }
+
+        function renderScoreSankey(contributions) {
+            const container = document.getElementById('scoreSankey');
+            if (!container) return;
+
+            if (!contributions || contributions.length === 0) {
+                container.innerHTML = '<p class="sankey-empty">Component breakdown not available.</p>';
+                return;
+            }
+
+            if (typeof Plotly === 'undefined') {
+                container.innerHTML = '<p class="sankey-empty">Plotly library is unavailable.</p>';
+                return;
+            }
+
+            const filtered = contributions.filter(c => c.weighted_contribution > 0.05);
+            if (filtered.length === 0) {
+                container.innerHTML = '<p class="sankey-empty">Component breakdown not available.</p>';
+                return;
+            }
+
+            const labels = filtered.map(c => c.label);
+            labels.push('Overall Score');
+            const targetIndex = labels.length - 1;
+            const sources = filtered.map((_, idx) => idx);
+            const targets = filtered.map(() => targetIndex);
+            const values = filtered.map(c => Math.max(c.weighted_contribution, 0.01));
+
+            container.innerHTML = '';
+            Plotly.newPlot(container, [{
+                type: 'sankey',
+                orientation: 'h',
+                arrangement: 'snap',
+                node: {
+                    label: labels,
+                    pad: 15,
+                    thickness: 18,
+                    color: labels.map((_, idx) => idx === targetIndex ? '#0050a4' : '#7bb6ff')
+                },
+                link: {
+                    source: sources,
+                    target: targets,
+                    value: values,
+                    color: filtered.map(() => '#a5c6ff')
+                }
+            }], {
+                height: 260,
+                margin: {l: 0, r: 0, t: 10, b: 10},
+                paper_bgcolor: 'transparent',
+                plot_bgcolor: 'transparent'
+            }, {displayModeBar: false, responsive: true});
+        }
+
+        function closeDetailPanel() {
+            const grid = document.getElementById('analysisResults');
+            
+            grid.classList.remove('detail-shown');
+            currentApartmentRow = null;
+            originalApartmentData = null;
+            
+            // Remove highlighting
+            document.querySelectorAll('.apartment-row').forEach(row => {
+                row.classList.remove('selected');
+            });
+            
+            // Reset edit mode
+            if (document.getElementById('editControls').style.display !== 'none') {
+                cancelEdits();
+            }
+        }
+
+        function toggleRawData() {
+            const content = document.getElementById('rawDataContent');
+            const toggle = document.getElementById('rawDataToggle');
+            
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                toggle.classList.add('expanded');
+            } else {
+                content.style.display = 'none';
+                toggle.classList.remove('expanded');
+            }
+        }
+
+        function enableEditing() {
+            // Hide view mode, show edit mode
+            document.querySelectorAll('.field-value').forEach(el => el.style.display = 'none');
+            document.querySelectorAll('.edit-field').forEach(el => el.style.display = 'inline-block');
+            
+            document.getElementById('enableEditBtn').style.display = 'none';
+            document.getElementById('editControls').style.display = 'flex';
+        }
+
+        async function saveEdits() {
+            if (!currentApartmentRow) return;
+            
+            // Collect edited values
+            const edits = {
+                // Note: commute_you is now calculated from AM/PM API data, not manually editable
+                commute_partner: parseFloat(document.getElementById('editCommutePartner').value) || null,
+                safety_opendata: parseFloat(document.getElementById('editSafetyOpenData').value) || null,
+                natural_light: parseFloat(document.getElementById('editWfhNaturalLight').value) || null,
+                desk_space: parseFloat(document.getElementById('editWfhDeskSpace').value) || null,
+                quietness: parseFloat(document.getElementById('editWfhQuietness').value) || null,
+                kitchen: parseFloat(document.getElementById('editWfhKitchen').value) || null,
+                restaurants: parseInt(document.getElementById('editVibeRestaurants').value) || null,
+                cafes: parseInt(document.getElementById('editVibeCafes').value) || null,
+                parks: parseInt(document.getElementById('editVibeParks').value) || null,
+                street_ease: parseInt(document.getElementById('editParkingStreetEase').value) || null,
+                visitor_ease: parseInt(document.getElementById('editParkingVisitorEase').value) || null,
+                gym_quality: parseFloat(document.getElementById('editGymQuality').value) || null
+            };
+            
+            // Remove null values
+            Object.keys(edits).forEach(key => {
+                if (edits[key] === null) delete edits[key];
+            });
+            
+            try {
+                const response = await fetch(`/save_apartment_edits/${currentApartmentRow}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(edits)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert(`✓ Saved ${result.changes_count} change(s). New score: ${result.new_score}`);
+                    
+                    // Reload the detail panel with updated data
+                    await showDetailPanel(currentApartmentRow);
+                    
+                    // Reload the analysis data to update the scatter plot
+                    await loadAnalysisData();
+                    
+                    // Exit edit mode
+                    cancelEdits();
+                } else {
+                    alert('Error saving edits: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error saving edits:', error);
+                alert('Error saving edits');
+            }
+        }
+
+        function cancelEdits() {
+            // Show view mode, hide edit mode
+            document.querySelectorAll('.field-value').forEach(el => el.style.display = 'inline');
+            document.querySelectorAll('.edit-field').forEach(el => el.style.display = 'none');
+            
+            document.getElementById('enableEditBtn').style.display = 'inline-block';
+            document.getElementById('editControls').style.display = 'none';
+            
+            // Reset edit fields to original values
+            if (originalApartmentData) {
+                populateDetailPanel(originalApartmentData);
+            }
+        }
+
+        // Weight Adjustment Functions
+        async function showWeightAdjustments() {
+            try {
+                const response = await fetch('/analyze_edits');
+                const data = await response.json();
+                
+                if (!data.success) {
+                    alert('Error analyzing edits: ' + (data.error || 'Unknown error'));
+                    return;
+                }
+                
+                if (!data.suggestions || Object.keys(data.suggestions).length === 0) {
+                    alert(data.message || 'No weight adjustments suggested. Make at least 3 consistent edits per component to get suggestions.');
+                    return;
+                }
+                
+                // Build modal content
+                let html = '<div class="weight-adjustment-modal">';
+                html += '<h2>Suggested Weight Adjustments</h2>';
+                html += `<p>Based on ${data.edit_count} edit(s) in your history:</p>`;
+                html += '<div class="suggestions-container">';
+                
+                for (const [component, suggestion] of Object.entries(data.suggestions)) {
+                    const current = suggestion.current_weight;
+                    const suggested = suggestion.suggested_weight_normalized || suggestion.suggested_weight;
+                    const changePct = ((suggested - current) / current * 100).toFixed(1);
+                    const arrow = changePct > 0 ? '↑' : '↓';
+                    const color = changePct > 0 ? '#28a745' : '#dc3545';
+                    
+                    html += '<div class="suggestion-card">';
+                    html += `<h3>${component.replace(/_/g, ' ').toUpperCase()}</h3>`;
+                    html += '<div class="weight-comparison">';
+                    html += `<div class="weight-current">Current: ${(current * 100).toFixed(1)}%</div>`;
+                    html += `<div class="weight-arrow" style="color: ${color}">${arrow} ${Math.abs(changePct)}%</div>`;
+                    html += `<div class="weight-suggested">Suggested: ${(suggested * 100).toFixed(1)}%</div>`;
+                    html += '</div>';
+                    html += `<div class="suggestion-reasoning">${suggestion.reasoning}</div>`;
+                    html += `<div class="suggestion-confidence">Confidence: ${(suggestion.confidence * 100).toFixed(0)}%</div>`;
+                    html += '</div>';
+                }
+                
+                html += '</div>';
+                html += '<div class="modal-actions">';
+                html += '<button class="btn btn-primary" onclick="applyWeightAdjustments()">Apply Adjustments</button>';
+                html += '<button class="btn btn-secondary" onclick="closeWeightModal()">Cancel</button>';
+                html += '</div>';
+                html += '<p class="weight-note"><strong>Note:</strong> Applying adjustments will show you the new weights. You\'ll need to manually update config.py to make them permanent.</p>';
+                html += '</div>';
+                
+                // Show in a modal
+                const modal = document.createElement('div');
+                modal.id = 'weightAdjustmentModal';
+                modal.className = 'modal';
+                modal.style.display = 'block';
+                modal.innerHTML = `
+                    <div class="modal-content" style="max-width: 800px;">
+                        <span class="modal-close" onclick="closeWeightModal()">&times;</span>
+                        ${html}
+                    </div>
+                `;
+                document.body.appendChild(modal);
+                
+                // Store suggestions for later use
+                window.currentSuggestions = data.suggestions;
+                
+            } catch (error) {
+                console.error('Error loading weight adjustments:', error);
+                alert('Error loading weight adjustments');
+            }
+        }
+        
+        async function applyWeightAdjustments() {
+            if (!window.currentSuggestions) {
+                alert('No suggestions to apply');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/apply_weight_adjustments', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        suggestions: window.currentSuggestions
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Show the new weights
+                    let weightsText = 'New Scoring Weights:\n\n';
+                    for (const [component, weight] of Object.entries(result.new_weights)) {
+                        weightsText += `${component}: ${(weight * 100).toFixed(1)}%\n`;
+                    }
+                    weightsText += '\n' + result.message;
+                    
+                    alert(weightsText);
+                    closeWeightModal();
+                } else {
+                    alert('Error applying adjustments: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error applying weight adjustments:', error);
+                alert('Error applying weight adjustments');
+            }
+        }
+        
+        function closeWeightModal() {
+            const modal = document.getElementById('weightAdjustmentModal');
+            if (modal) {
+                modal.remove();
+            }
+            window.currentSuggestions = null;
+        }
+
+        // Schema Management Functions
+        async function checkSchema() {
+            const btn = document.getElementById('checkSchemaBtn');
+            const statusDiv = document.getElementById('schemaStatus');
+            const detailsDiv = document.getElementById('schemaDetails');
+            
+            btn.disabled = true;
+            btn.textContent = 'Checking...';
+            statusDiv.style.display = 'block';
+            detailsDiv.innerHTML = '<p>Analyzing schema...</p>';
+            
+            try {
+                const response = await fetch('/admin/check_schema');
+                const data = await response.json();
+                
+                if (!data.success) {
+                    detailsDiv.innerHTML = `<p class="error">Error: ${data.error}</p>`;
+                    return;
+                }
+                
+                // Build HTML for results
+                let html = '<div class="schema-results">';
+                
+                // Summary
+                html += '<div class="schema-summary">';
+                html += `<p><strong>Expected columns:</strong> ${data.expected_count}</p>`;
+                html += `<p><strong>Current columns:</strong> ${data.current_count}</p>`;
+                html += '</div>';
+                
+                // Missing columns
+                if (data.missing && data.missing.length > 0) {
+                    html += '<div class="schema-issue missing">';
+                    html += `<h5>❌ Missing Columns (${data.missing.length})</h5>`;
+                    html += '<ul>';
+                    data.missing.forEach(col => {
+                        html += `<li>${col.name}`;
+                        if (col.after) {
+                            html += ` <small>(should be after: ${col.after})</small>`;
+                        }
+                        html += '</li>';
+                    });
+                    html += '</ul>';
+                    html += '</div>';
+                }
+                
+                // Extra columns
+                if (data.extra && data.extra.length > 0) {
+                    html += '<div class="schema-issue extra">';
+                    html += `<h5>⚠️ Extra Columns (${data.extra.length})</h5>`;
+                    html += '<p>These columns exist in the sheet but not in config:</p>';
+                    html += '<ul>';
+                    data.extra.forEach(col => {
+                        html += `<li>${col} <small>(position ${data.current.indexOf(col) + 1})</small></li>`;
+                    });
+                    html += '</ul>';
+                    html += '</div>';
+                }
+                
+                // Misplaced columns
+                if (data.misplaced && data.misplaced.length > 0) {
+                    html += '<div class="schema-issue misplaced">';
+                    html += `<h5>⚠️ Misplaced Columns (${data.misplaced.length})</h5>`;
+                    html += '<p>These columns exist but are in the wrong position:</p>';
+                    html += '<ul>';
+                    data.misplaced.forEach(col => {
+                        const expectedIdx = data.expected.indexOf(col);
+                        const currentIdx = data.current.indexOf(col);
+                        html += `<li>${col} <small>(expected: ${expectedIdx + 1}, current: ${currentIdx + 1})</small></li>`;
+                    });
+                    html += '</ul>';
+                    html += '</div>';
+                }
+                
+                // All good
+                if (data.in_sync) {
+                    html += '<div class="schema-success">';
+                    html += '<h5>✅ Schema is in sync!</h5>';
+                    html += '<p>All columns are present and in the correct order.</p>';
+                    html += '</div>';
+                } else {
+                    html += '<div class="schema-action">';
+                    html += '<p><strong>💡 Tip:</strong> Click "Sync Schema" to add missing columns.</p>';
+                    html += '</div>';
+                }
+                
+                html += '</div>';
+                detailsDiv.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Error checking schema:', error);
+                detailsDiv.innerHTML = `<p class="error">Error checking schema: ${error.message}</p>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Check Schema';
+            }
+        }
+
+        async function syncSchema() {
+            if (!confirm('This will add missing columns to your Google Sheet. Your existing data will be preserved. Continue?')) {
+                return;
+            }
+            
+            const btn = document.getElementById('syncSchemaBtn');
+            const statusDiv = document.getElementById('schemaStatus');
+            const detailsDiv = document.getElementById('schemaDetails');
+            
+            btn.disabled = true;
+            btn.textContent = 'Syncing...';
+            statusDiv.style.display = 'block';
+            detailsDiv.innerHTML = '<p>Syncing schema...</p>';
+            
+            try {
+                const response = await fetch('/admin/sync_schema', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (!data.success) {
+                    detailsDiv.innerHTML = `<p class="error">Error: ${data.error}</p>`;
+                    return;
+                }
+                
+                // Build HTML for results
+                let html = '<div class="schema-results">';
+                
+                if (data.added && data.added.length > 0) {
+                    html += '<div class="schema-success">';
+                    html += `<h5>✅ Added ${data.added.length} column(s)</h5>`;
+                    html += '<ul>';
+                    data.added.forEach(col => {
+                        html += `<li>${col.name} <small>(position ${col.position})</small></li>`;
+                    });
+                    html += '</ul>';
+                    html += '</div>';
+                } else {
+                    html += '<div class="schema-success">';
+                    html += '<h5>✅ Nothing to sync</h5>';
+                    html += '<p>Sheet is already up to date!</p>';
+                    html += '</div>';
+                }
+                
+                html += '<div class="schema-action">';
+                html += '<p><strong>💡 Tip:</strong> Click "Check Schema" to verify changes.</p>';
+                html += '</div>';
+                
+                html += '</div>';
+                detailsDiv.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Error syncing schema:', error);
+                detailsDiv.innerHTML = `<p class="error">Error syncing schema: ${error.message}</p>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Sync Schema';
             }
         }
     </script>

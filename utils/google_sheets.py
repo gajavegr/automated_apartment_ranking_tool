@@ -32,6 +32,7 @@ class GoogleSheetsClient:
     SCATTER_PLOT_SHEET_NAME = "Price vs Score"
     CRITERIA_MATRIX_SHEET_NAME = "Criteria Matrix"
     APPROVED_GYMS_SHEET_NAME = "Approved Gyms"
+    USER_EDITS_LOG_SHEET_NAME = "User Edits Log"
     
     def __init__(self, credentials_path: str = None, sheet_id: str = None):
         """
@@ -104,6 +105,8 @@ class GoogleSheetsClient:
             config.SHEET_COLUMNS["commute_time_you"],
             config.SHEET_COLUMNS["commute_route"],
             config.SHEET_COLUMNS["commute_time_partner"],
+            config.SHEET_COLUMNS["route_annoyingness"],
+            config.SHEET_COLUMNS["commute_details"],
             config.SHEET_COLUMNS["safety_score_opendata"],
             config.SHEET_COLUMNS["combined_safety"],
             config.SHEET_COLUMNS["wfh_quality_score"],
@@ -120,6 +123,7 @@ class GoogleSheetsClient:
             config.SHEET_COLUMNS["parking_type"],
             config.SHEET_COLUMNS["parking_enclosure"],
             config.SHEET_COLUMNS["parking_distance"],
+            config.SHEET_COLUMNS["parking_cost"],
             config.SHEET_COLUMNS["street_parking_ease"],
             config.SHEET_COLUMNS["visitor_parking_ease"],
             config.SHEET_COLUMNS["parking_score"],
@@ -136,12 +140,13 @@ class GoogleSheetsClient:
             config.SHEET_COLUMNS["weighted_score"],
             config.SHEET_COLUMNS["value_ratio"],
             config.SHEET_COLUMNS["last_updated"],
+            config.SHEET_COLUMNS["last_analyzed"],
         ]
         
-        sheet.update('A1:AO1', [headers])
+        sheet.update('A1:AQ1', [headers])
         
         # Apply formatting
-        sheet.format('A1:AO1', {
+        sheet.format('A1:AQ1', {
             'textFormat': {'bold': True},
             'backgroundColor': {'red': 0.8, 'green': 0.8, 'blue': 0.8}
         })
@@ -204,6 +209,48 @@ class GoogleSheetsClient:
         sheet = self._get_or_create_worksheet(self.MAIN_SHEET_NAME)
         records = sheet.get_all_records()
         return records
+
+    @staticmethod
+    def needs_commute_metadata_refresh(record: Dict[str, Any]) -> bool:
+        """
+        Check whether a record is missing the richer commute metadata.
+        Returns True if route annoyingness or commute details are blank/absent,
+        or if commute details don't have the new AM/PM fields.
+        """
+        def _is_blank(value: Any, treat_empty_structs: bool = False) -> bool:
+            if value is None:
+                return True
+            if isinstance(value, (int, float)):
+                return False
+            if isinstance(value, str):
+                trimmed = value.strip()
+                if trimmed == "":
+                    return True
+                if treat_empty_structs and trimmed in {"{}", "[]"}:
+                    return True
+            return False
+
+        route_annoy_col = config.SHEET_COLUMNS.get("route_annoyingness")
+        commute_details_col = config.SHEET_COLUMNS.get("commute_details")
+        route_annoy_value = record.get(route_annoy_col) if route_annoy_col else None
+        commute_details_value = record.get(commute_details_col) if commute_details_col else None
+
+        missing_annoy = _is_blank(route_annoy_value)
+        missing_details = _is_blank(commute_details_value, treat_empty_structs=True)
+        
+        # Check if commute_details has the new AM/PM structure
+        if not missing_details and commute_details_value:
+            try:
+                import json
+                details = json.loads(commute_details_value) if isinstance(commute_details_value, str) else commute_details_value
+                driver = details.get('driver', {})
+                # If it's missing AM/PM fields, we need to refresh
+                if 'duration_am_mins' not in driver or 'duration_pm_mins' not in driver:
+                    return True
+            except:
+                pass
+        
+        return missing_annoy or missing_details
     
     def get_apartments_needing_analysis(self) -> List[Dict[str, Any]]:
         """
@@ -219,8 +266,13 @@ class GoogleSheetsClient:
             zillow_url = record.get(config.SHEET_COLUMNS["zillow_url"], "").strip()
             weighted_score = record.get(config.SHEET_COLUMNS["weighted_score"], "")
             
-            # Check if has URL but no score
+            needs_analysis = False
             if zillow_url and not weighted_score:
+                needs_analysis = True
+            elif zillow_url and self.needs_commute_metadata_refresh(record):
+                needs_analysis = True
+            
+            if needs_analysis:
                 record['_row_number'] = i + 2  # +2 for 1-indexed and header row
                 needing_analysis.append(record)
         
@@ -247,6 +299,8 @@ class GoogleSheetsClient:
             "commute_duration": config.SHEET_COLUMNS["commute_time_you"],  # Map commute_duration -> commute_time_you
             "commute_route": config.SHEET_COLUMNS["commute_route"],
             "commute_duration_partner": config.SHEET_COLUMNS["commute_time_partner"],  # Map commute_duration_partner -> commute_time_partner
+            "route_annoyingness": config.SHEET_COLUMNS["route_annoyingness"],
+            "commute_details_json": config.SHEET_COLUMNS["commute_details"],
             "safety_score_opendata": config.SHEET_COLUMNS["safety_score_opendata"],
             "combined_safety": config.SHEET_COLUMNS["combined_safety"],
             "wfh_quality_score": config.SHEET_COLUMNS["wfh_quality_score"],
@@ -263,6 +317,7 @@ class GoogleSheetsClient:
             "parking_type": config.SHEET_COLUMNS["parking_type"],
             "parking_enclosure": config.SHEET_COLUMNS["parking_enclosure"],
             "parking_distance": config.SHEET_COLUMNS["parking_distance"],
+            "parking_cost": config.SHEET_COLUMNS["parking_cost"],
             "street_parking_ease": config.SHEET_COLUMNS["street_parking_ease"],
             "visitor_parking_ease": config.SHEET_COLUMNS["visitor_parking_ease"],
             "parking_score": config.SHEET_COLUMNS["parking_score"],
@@ -279,6 +334,7 @@ class GoogleSheetsClient:
             "weighted_score": config.SHEET_COLUMNS["weighted_score"],
             "value_ratio": config.SHEET_COLUMNS["value_ratio"],
             "last_updated": config.SHEET_COLUMNS["last_updated"],
+            "last_analyzed": config.SHEET_COLUMNS["last_analyzed"],
         }
         
         # Get header row to determine column positions
@@ -326,13 +382,19 @@ class GoogleSheetsClient:
         if plot_data:
             # Clear existing data (except headers)
             if scatter_sheet.row_count > 1:
-                # Delete all rows except header (but keep at least one empty row to avoid the API error)
+                # Delete all rows except header
                 try:
-                    scatter_sheet.delete_rows(2, scatter_sheet.row_count)
+                    # Only delete if there are actually rows to delete (row_count must be > 1)
+                    num_rows_to_delete = scatter_sheet.row_count - 1
+                    if num_rows_to_delete > 0:
+                        scatter_sheet.delete_rows(2, num_rows_to_delete)
                 except Exception as e:
-                    # If we can't delete (e.g., only 1 row left), clear the data instead
-                    print(f"  Note: Clearing scatter plot data via resize method")
-                    scatter_sheet.resize(rows=1)  # Keep only header
+                    # If we can't delete, try clearing the range instead
+                    print(f"  Note: Could not delete rows, clearing range instead (error: {e})")
+                    try:
+                        scatter_sheet.batch_clear(['A2:Z1000'])
+                    except:
+                        pass  # If clearing fails, we'll just append
             
             # Add new data
             scatter_sheet.append_rows(plot_data)
@@ -375,13 +437,17 @@ class GoogleSheetsClient:
         if matrix_data:
             # Clear existing data (except headers)
             if criteria_sheet.row_count > 1:
-                # Delete all rows except header (but keep at least one empty row to avoid the API error)
+                # Delete all rows except header
                 try:
                     criteria_sheet.delete_rows(2, criteria_sheet.row_count)
                 except Exception as e:
-                    # If we can't delete (e.g., only 1 row left), clear the data instead
-                    print(f"  Note: Clearing criteria matrix data via resize method")
-                    criteria_sheet.resize(rows=1)  # Keep only header
+                    # If we can't delete (e.g., only header row exists), just clear any data
+                    print(f"  Note: Clearing criteria matrix data (error: {e})")
+                    # Clear range from row 2 onwards if it exists
+                    try:
+                        criteria_sheet.batch_clear(['A2:Z1000'])
+                    except:
+                        pass  # If clearing fails, we'll just append
             
             # Add new data
             criteria_sheet.append_rows(matrix_data)
@@ -487,4 +553,102 @@ class GoogleSheetsClient:
                 gym_data.get('lng')
             ]
             worksheet.append_row(new_row)
+    
+    def _initialize_user_edits_log_sheet(self) -> None:
+        """Initialize User Edits Log sheet with headers"""
+        try:
+            worksheet = self.spreadsheet.worksheet(self.USER_EDITS_LOG_SHEET_NAME)
+        except WorksheetNotFound:
+            worksheet = self.spreadsheet.add_worksheet(
+                title=self.USER_EDITS_LOG_SHEET_NAME,
+                rows=1000,
+                cols=7
+            )
+        
+        # Set headers
+        headers = [
+            'Timestamp',
+            'Apartment Address',
+            'Field Changed',
+            'Original Value',
+            'New Value',
+            'Original Weighted Score',
+            'New Weighted Score'
+        ]
+        worksheet.update('A1:G1', [headers])
+        
+        # Format header row
+        worksheet.format('A1:G1', {
+            'backgroundColor': {'red': 0.2, 'green': 0.4, 'blue': 0.8},
+            'textFormat': {'bold': True, 'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}},
+            'horizontalAlignment': 'CENTER'
+        })
+    
+    def log_user_edit(self, apartment_address: str, changes: List[Dict[str, Any]], 
+                     original_score: float, new_score: float) -> None:
+        """
+        Log user edits to tracking sheet
+        
+        Args:
+            apartment_address: Address of the apartment
+            changes: List of dicts with 'field', 'old_value', 'new_value'
+            original_score: Weighted score before edits
+            new_score: Weighted score after edits
+        """
+        try:
+            # Get or create worksheet
+            try:
+                worksheet = self.spreadsheet.worksheet(self.USER_EDITS_LOG_SHEET_NAME)
+            except WorksheetNotFound:
+                self._initialize_user_edits_log_sheet()
+                worksheet = self.spreadsheet.worksheet(self.USER_EDITS_LOG_SHEET_NAME)
+            
+            # Add a row for each changed field
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            rows_to_add = []
+            
+            for change in changes:
+                row = [
+                    timestamp,
+                    apartment_address,
+                    change.get('field', ''),
+                    str(change.get('old_value', '')),
+                    str(change.get('new_value', '')),
+                    round(original_score, 2) if original_score else '',
+                    round(new_score, 2) if new_score else ''
+                ]
+                rows_to_add.append(row)
+            
+            if rows_to_add:
+                worksheet.append_rows(rows_to_add)
+                print(f"Logged {len(rows_to_add)} edit(s) for {apartment_address}")
+        
+        except Exception as e:
+            print(f"Error logging user edit: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def get_user_edits(self, apartment_address: str = None) -> List[Dict[str, Any]]:
+        """
+        Get user edit history
+        
+        Args:
+            apartment_address: Optional filter by apartment address
+            
+        Returns:
+            List of edit records
+        """
+        try:
+            worksheet = self.spreadsheet.worksheet(self.USER_EDITS_LOG_SHEET_NAME)
+            records = worksheet.get_all_records()
+            
+            if apartment_address:
+                records = [r for r in records if r.get('Apartment Address') == apartment_address]
+            
+            return records
+        except WorksheetNotFound:
+            return []
+        except Exception as e:
+            print(f"Error reading user edits: {e}")
+            return []
 
