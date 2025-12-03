@@ -52,10 +52,15 @@
 
                     <div class="form-group">
                         <label for="apartment_selector">Load Existing Apartment</label>
-                        <select id="apartment_selector" onchange="onApartmentSelected()">
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <select id="apartment_selector" style="flex: 1;" onkeypress="handleSelectorKeypress(event)">
                             <option value="">-- New Apartment --</option>
                         </select>
-                        <small>Select an existing apartment to view or edit</small>
+                            <button type="button" id="loadApartmentBtn" class="btn btn-primary" onclick="loadSelectedApartment()" style="white-space: nowrap;">
+                                📂 Load
+                            </button>
+                        </div>
+                        <small>Select an apartment from the dropdown, then click "Load" (or press Enter) to fetch all data</small>
                     </div>
 
                     <input type="hidden" id="row_number" name="row_number" value="">
@@ -198,6 +203,64 @@
                         </div>
                     </div>
 
+                    <!-- Work From Home Details Section -->
+                    <div class="form-group">
+                        <button type="button" class="collapsible-section">
+                            💼 Work From Home Details (Optional)
+                        </button>
+                        <div class="collapsible-content" style="display: none;">
+                            <div class="form-group">
+                                <label for="natural_light">Natural Light (1-10)</label>
+                                <input type="number" id="natural_light" name="natural_light" min="1" max="10" step="0.5">
+                                <small>How bright? Window size and exposure. 1=dark room, 10=bright with large windows</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="desk_space_quality">Desk Space Quality (1-10)</label>
+                                <input type="number" id="desk_space_quality" name="desk_space_quality" min="1" max="10" step="0.5">
+                                <small>Space for desk + chair, areas near windows. 1=no space, 10=dedicated office</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="work_area_quietness">Work Area Quietness (1-10)</label>
+                                <input type="number" id="work_area_quietness" name="work_area_quietness" min="1" max="10" step="0.5">
+                                <small>0=loud street traffic, 10=very quiet and isolated</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="kitchen_quality">Kitchen Quality (1-10)</label>
+                                <input type="number" id="kitchen_quality" name="kitchen_quality" min="1" max="10" step="0.5">
+                                <small>Appliances, counter space, storage, condition. 1=minimal, 10=chef's kitchen</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="double_pane_windows" name="double_pane_windows" value="true">
+                                    Has Double-Pane Windows
+                                </label>
+                                <small>Check if windows appear to be double-pane (modern construction, better insulation)</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Study Door Type</label>
+                                <div class="multi-select-wrapper">
+                                    <div class="multi-select-options">
+                                        <label><input type="checkbox" name="study_door_type" value="solid_door"> Solid Door</label>
+                                        <label><input type="checkbox" name="study_door_type" value="sliding_door"> Sliding Door</label>
+                                        <label><input type="checkbox" name="study_door_type" value="open"> Open (no door)</label>
+                                        <label><input type="checkbox" name="study_door_type" value="none"> None (no dedicated space)</label>
+                                    </div>
+                                </div>
+                                <small>Select all that apply if uncertain about study/office area door type</small>
+                            </div>
+
+                            <label class="tour-question-checkbox">
+                                <input type="checkbox" name="wfh_tour_question" value="true">
+                                Mark WFH details as tour question
+                            </label>
+                        </div>
+                    </div>
+
                     <div class="form-group">
                         <label for="floor_level">Floor Level *</label>
                         <select id="floor_level" name="floor_level" required>
@@ -249,7 +312,7 @@
                             <input type="radio" id="visitor_ease_1" name="visitor_parking_ease" value="1">
                             <label for="visitor_ease_1" title="Very Difficult">★</label>
                         </div>
-                        <small>How easy is it for visitors to find parking nearby? (Street parking, guest spots, etc.)</small>
+                        <small>How easy is it for visitors to find parking nearby? (SFMTA garages, street parking, guest spots, etc.)</small>
                     </div>
 
                     <h2>Additional Details</h2>
@@ -317,10 +380,47 @@
                     <!-- Gym Selection Section -->
                     <div class="form-group" id="gymSelectionSection" style="display: none;">
                         <label>Nearby Gyms (Select ones you'd use)</label>
+                        
+                        <!-- Mini map for gym locations -->
+                        <div id="gymMapContainer" style="margin-bottom: 15px; border: 1px solid #ddd; border-radius: 4px; overflow: hidden;">
+                            <div id="gymMap" style="height: 300px; width: 100%;"></div>
+                            <div style="padding: 8px; background: #f8f9fa; font-size: 0.85em; color: #666;">
+                                <strong>Map Legend:</strong> 
+                                <span style="color: #ff0000;">● Red</span> = Apartment location | 
+                                <span style="color: #0066cc;">● Blue</span> = Gym location | 
+                                Click markers for details
+                            </div>
+                        </div>
+                        
                         <div id="gymsList" class="gyms-list">
                             <!-- Populated by JavaScript -->
                         </div>
-                        <small>Checked gyms will be saved for future apartments</small>
+                        <div style="margin-top: 10px; display: flex; gap: 10px; align-items: center;">
+                            <button type="button" id="extendGymSearchBtn" class="btn btn-secondary btn-sm" onclick="extendGymSearch()">
+                                🔍 Extend Search Radius
+                            </button>
+                            <button type="button" id="clearGymCacheBtn" class="btn btn-secondary btn-sm" onclick="clearGymCacheAndResearch()">
+                                🔄 Clear Cache & Re-search
+                            </button>
+                            <span id="gymSearchRadiusText" style="font-size: 0.9em; color: #666;">
+                                Current radius: <span id="currentGymRadius">default</span>
+                            </span>
+                        </div>
+                        <div id="gymSearchDebug" style="margin-top: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 0.85em; color: #666; display: none;">
+                            <!-- Debug info populated by JS -->
+                        </div>
+                        <div style="margin-top: 12px; padding: 10px; background-color: #fff3cd; border-left: 3px solid #ffc107; border-radius: 4px;">
+                            <label style="display: flex; align-items: center; margin: 0; cursor: pointer;">
+                                <input type="checkbox" id="officeGymOnly" name="office_gym_only" style="margin-right: 8px;">
+                                <span style="font-weight: normal;">
+                                    No suitable gyms nearby - will only use office gym
+                                </span>
+                            </label>
+                            <small style="display: block; margin-top: 6px; color: #856404;">
+                                ⚠️ Check this if no nearby gyms work for you. This will apply a negative score (-5) since relying on office gym is less convenient.
+                            </small>
+                        </div>
+                        <small>Checked gyms will be saved for future apartments. Map shows straight-line distances.</small>
                     </div>
 
                     <!-- Hidden fields for gym data -->
@@ -410,8 +510,20 @@
                     <div id="detailPanel" class="detail-panel">
                         <div class="detail-panel-header">
                             <button class="close-panel-btn" onclick="closeDetailPanel()">&times;</button>
-                            <h3 id="detailAddress">Select an apartment</h3>
-                            <a id="detailZillowLink" href="#" target="_blank" style="display: none;">View on Zillow</a>
+                            <h3 class="detail-address">
+                                <span id="detailAddressText" class="detail-address-text">
+                                    Select an apartment
+                                </span>
+                            </h3>
+                            <div style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
+                            <a id="detailZillowLink" href="#" target="_blank" rel="noopener noreferrer" style="display: none;">View on Zillow</a>
+                                <button id="enableEditBtn" class="btn btn-secondary btn-sm" onclick="enableEditing()" style="display: inline-block;">✏️ Edit Scores</button>
+                                <div id="editControls" style="display: none; gap: 5px;">
+                                    <button class="btn btn-primary btn-sm" onclick="saveEdits()">💾 Save</button>
+                                    <button class="btn btn-secondary btn-sm" onclick="cancelEdits()">✖ Cancel</button>
+                                </div>
+                                <span id="tourQuestionsIcon" style="cursor: help; font-size: 1.2em; color: #0066cc; display: none;" title="Tour questions for this apartment">ℹ️</span>
+                            </div>
                         </div>
 
                         <div class="detail-panel-content">
@@ -423,11 +535,6 @@
                                         <div class="score-display">
                                             <span id="detailWeightedScore" class="score-large">--</span>
                                             <span class="score-range" id="detailScoreRange"></span>
-                                        </div>
-                                        <button id="enableEditBtn" class="btn btn-secondary" onclick="enableEditing()">Edit Scores</button>
-                                        <div id="editControls" style="display: none;">
-                                            <button class="btn btn-primary" onclick="saveEdits()">Save Changes</button>
-                                            <button class="btn btn-secondary" onclick="cancelEdits()">Cancel</button>
                                         </div>
                                     </div>
                                     <div class="score-sankey-card">
@@ -575,30 +682,83 @@
                                         <div class="field-row">
                                             <label>Natural Light:</label>
                                             <span id="wfhNaturalLight" class="field-value">--</span>
-                                            <input type="number" id="editWfhNaturalLight" class="edit-field" style="display: none;" min="0" max="10" step="0.1">
+                                            <input type="number" id="editWfhNaturalLight" class="edit-field" style="display: none;" min="1" max="10" step="0.5" 
+                                                   title="Rate 1-10: Window size, brightness, sun exposure" 
+                                                   placeholder="1-10">
+                                            <small class="field-help" id="helpWfhNaturalLight" style="display: none;">1=dark room, 10=bright with large windows</small>
                                         </div>
                                         <div class="field-row">
                                             <label>Desk Space:</label>
                                             <span id="wfhDeskSpace" class="field-value">--</span>
-                                            <input type="number" id="editWfhDeskSpace" class="edit-field" style="display: none;" min="0" max="10" step="0.1">
+                                            <input type="number" id="editWfhDeskSpace" class="edit-field" style="display: none;" min="1" max="10" step="0.5"
+                                                   title="Rate 1-10: Space for desk + chair, areas near windows"
+                                                   placeholder="1-10">
+                                            <small class="field-help" id="helpWfhDeskSpace" style="display: none;">1=no space, 10=dedicated office room</small>
                                         </div>
-                                        <div class="field-row">
-                                            <label>Quietness:</label>
-                                            <span id="wfhQuietness" class="field-value">--</span>
-                                            <input type="number" id="editWfhQuietness" class="edit-field" style="display: none;" min="0" max="10" step="0.1">
+                                        <div class="field-row field-row-with-subtext">
+                                            <div class="field-main">
+                                                <label>Work Area Quietness:</label>
+                                                <span id="wfhQuietness" class="field-value">--</span>
+                                                <input type="number" id="editWfhQuietness" class="edit-field" style="display: none;" min="1" max="10" step="0.5"
+                                                       title="Rate 1-10: Noise level, 1=loud street, 10=very quiet"
+                                                       placeholder="1-10">
+                                                <small class="field-help" id="helpWfhQuietness" style="display: none;">1=loud street traffic, 10=very quiet and isolated</small>
+                                            </div>
                                         </div>
                                         <div class="field-row">
                                             <label>Kitchen Quality:</label>
                                             <span id="wfhKitchen" class="field-value">--</span>
-                                            <input type="number" id="editWfhKitchen" class="edit-field" style="display: none;" min="0" max="10" step="0.1">
+                                            <input type="number" id="editWfhKitchen" class="edit-field" style="display: none;" min="1" max="10" step="0.5"
+                                                   title="Rate 1-10: Appliances, counter space, storage, condition"
+                                                   placeholder="1-10">
+                                            <small class="field-help" id="helpWfhKitchen" style="display: none;">1=minimal, 10=chef's kitchen</small>
+                                        </div>
+                                        <div class="field-row field-row-with-subtext" style="margin-top: 12px;">
+                                            <button type="button" id="photoSelectorButton" class="btn btn-secondary btn-sm">
+                                                Analyze Photos for WFH
+                                            </button>
+                                            <div id="photoSelectorHelperText" class="field-subtext">
+                                                Click to copy: Automated photo analyzer for WFH attributes
+                                            </div>
+                                        </div>
+                                        <div class="field-row">
+                                            <button type="button" id="clearWfhButton" class="btn btn-outline-danger btn-sm">
+                                                Clear WFH Data
+                                            </button>
                                         </div>
                                         <div class="field-row">
                                             <label>Double Pane Windows:</label>
                                             <span id="wfhWindows" class="field-value">--</span>
+                                            <div id="editWfhWindows" class="edit-field" style="display: none;">
+                                                <label style="font-weight: normal;">
+                                                    <input type="checkbox" id="editWfhWindowsCheckbox">
+                                                    Has double-pane windows
+                                                </label>
+                                            </div>
                                         </div>
                                         <div class="field-row">
-                                            <label>Study Door:</label>
+                                            <label>Study Door Type:</label>
                                             <span id="wfhStudyDoor" class="field-value">--</span>
+                                            <div id="editWfhStudyDoor" class="edit-field" style="display: none;">
+                                                <div style="display: flex; flex-direction: column; gap: 4px;">
+                                                    <label style="font-weight: normal;"><input type="checkbox" name="edit_study_door_type" value="solid_door"> Solid Door</label>
+                                                    <label style="font-weight: normal;"><input type="checkbox" name="edit_study_door_type" value="sliding_door"> Sliding Door</label>
+                                                    <label style="font-weight: normal;"><input type="checkbox" name="edit_study_door_type" value="open"> Open (no door)</label>
+                                                    <label style="font-weight: normal;"><input type="checkbox" name="edit_study_door_type" value="none"> None (no space)</label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Quietness Score Breakdown -->
+                                        <div style="margin-top: 16px; padding: 10px; background-color: #f8f9fa; border-radius: 4px; font-size: 0.9em;">
+                                            <div style="font-weight: 600; margin-bottom: 8px; color: #495057;">Work Area Quietness Breakdown:</div>
+                                            <div id="quietnessBreakdown" style="color: #555; line-height: 1.6;">
+                                                <!-- Populated by JS -->
+                                            </div>
+                                        </div>
+                                        
+                                        <div id="wfhFormulaText" style="margin-top: 10px; color: #555; font-size: 0.85em;">
+                                            <!-- populated via JS -->
                                         </div>
                                     </div>
                                 </div>
@@ -626,6 +786,10 @@
                                             <span id="vibeParks" class="field-value">--</span>
                                             <input type="number" id="editVibeParks" class="edit-field" style="display: none;" min="0" max="100">
                                         </div>
+                                        <div id="vibeFormulaText" style="margin-top: 10px; color: #555; font-size: 0.85em;">
+                                            <strong>How it's calculated:</strong> Each count is normalized to 0-10 scale, then weighted:
+                                            Restaurants (40%) + Cafes (40%) + Parks (20%). More restaurants/cafes = more happening neighborhood.
+                                        </div>
                                     </div>
                                 </div>
 
@@ -652,12 +816,17 @@
                                         <div class="field-row">
                                             <label>Street Parking Ease:</label>
                                             <span id="parkingStreetEase" class="field-value">--</span>
-                                            <input type="number" id="editParkingStreetEase" class="edit-field" style="display: none;" min="1" max="5">
+                                            <input type="number" id="editParkingStreetEase" class="edit-field" style="display: none;" min="1" max="10" step="1">
                                         </div>
                                         <div class="field-row">
                                             <label>Visitor Parking Ease:</label>
                                             <span id="parkingVisitorEase" class="field-value">--</span>
-                                            <input type="number" id="editParkingVisitorEase" class="edit-field" style="display: none;" min="1" max="5">
+                                            <input type="number" id="editParkingVisitorEase" class="edit-field" style="display: none;" min="1" max="5" step="1">
+                                        </div>
+                                        <div id="parkingFormulaText" style="margin-top: 10px; color: #555; font-size: 0.85em;">
+                                            <strong>How it's calculated:</strong> Base score from parking type (dedicated assigned = 10, street only = 0). 
+                                            Bonuses for: garage enclosure, close distance, easy street/visitor parking. 
+                                            Penalties for: steep hills (harder to access), poor neighborhood safety (affects street parking).
                                         </div>
                                     </div>
                                 </div>
@@ -679,6 +848,14 @@
                                             <span id="gymQuality" class="field-value">--</span>
                                             <input type="number" id="editGymQuality" class="edit-field" style="display: none;" min="0" max="10" step="0.1">
                                         </div>
+                                        <div id="gymFormulaText" style="margin-top: 10px; color: #555; font-size: 0.85em;">
+                                            <strong>How it's calculated:</strong> 
+                                            Good gym within 10min (rating ≥7) = 10 points. 
+                                            OK gym within 10min (rating <7) = 6 points. 
+                                            No nearby gym = 0 points. 
+                                            Office gym only = -5 points (inconvenient, limited hours). 
+                                            Penalty applied for steep hills (makes gym feel farther).
+                                        </div>
                                     </div>
                                 </div>
 
@@ -693,6 +870,14 @@
                                         <div class="field-row">
                                             <label>Type:</label>
                                             <span id="laundryType" class="field-value">--</span>
+                                        </div>
+                                        <div id="laundryFormulaText" style="margin-top: 10px; color: #555; font-size: 0.85em;">
+                                            <strong>How it's calculated:</strong> 
+                                            In-unit washer/dryer = 10 points. 
+                                            In-unit combo = 8 points. 
+                                            Shared (good ratio) = 7 points. 
+                                            Shared (poor ratio, wait times) = 4 points. 
+                                            None/laundromat = 0 points.
                                         </div>
                                     </div>
                                 </div>
@@ -763,10 +948,14 @@
                             <div id="rankedList"></div>
                         </div>
 
-                        <div class="analysis-section">
-                            <h3>Criteria Matrix</h3>
-                            <div id="criteriaMatrix"></div>
-                        </div>
+                <div class="analysis-section">
+                    <h3>Criteria Matrix</h3>
+                    <p style="color: #666; font-size: 0.9em; margin-bottom: 16px;">
+                        Compare apartments side-by-side. 🏆 = Best value in category. 
+                        Value Ratio = Score per $1000 rent (higher is better deal).
+                    </p>
+                    <div id="criteriaMatrix"></div>
+                </div>
                     </div>
                 </div>
             </div>
@@ -823,6 +1012,9 @@
         let selectedScatterPoint = null; // Track selected scatter plot point
         let routePreviewMap = null;
         let routePreviewPolylines = [];
+        let currentApartmentZillowUrl = '';
+        let currentApartmentAddress = '';
+        let currentApartmentRowNumber = null;
 
         function initMaps() {
             // Initialize map (centered on SF)
@@ -886,10 +1078,11 @@
             }
         }
 
-        // Handle apartment selection
-        async function onApartmentSelected() {
+        // Handle apartment loading when button is clicked
+        async function loadSelectedApartment() {
             const selector = document.getElementById('apartment_selector');
             const rowNumber = selector.value;
+            const loadBtn = document.getElementById('loadApartmentBtn');
             
             if (!rowNumber) {
                 // "New Apartment" selected - clear form
@@ -897,6 +1090,11 @@
                 updateButtonVisibility(false);
                 return;
             }
+            
+            // Show loading state
+            const originalText = loadBtn.innerHTML;
+            loadBtn.innerHTML = '⏳ Loading...';
+            loadBtn.disabled = true;
             
             // Load apartment data
             try {
@@ -906,10 +1104,28 @@
                 if (data) {
                     populateForm(data);
                     updateButtonVisibility(true);
+                    loadBtn.innerHTML = '✓ Loaded';
+                    setTimeout(() => {
+                        loadBtn.innerHTML = originalText;
+                    }, 2000);
                 }
             } catch (error) {
                 console.error('Error loading apartment:', error);
                 alert('Error loading apartment data');
+                loadBtn.innerHTML = '❌ Error';
+                setTimeout(() => {
+                    loadBtn.innerHTML = originalText;
+                }, 2000);
+            } finally {
+                loadBtn.disabled = false;
+            }
+        }
+        
+        // Handle Enter key on apartment selector
+        function handleSelectorKeypress(event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                loadSelectedApartment();
             }
         }
 
@@ -995,6 +1211,54 @@
             document.querySelector('input[name="parking_type_tour_question"]').checked = tourQuestions.includes('Parking type');
             document.querySelector('input[name="parking_enclosure_tour_question"]').checked = tourQuestions.includes('Parking enclosure');
             document.querySelector('input[name="laundry_type_tour_question"]').checked = tourQuestions.includes('Laundry type');
+            
+            // WFH tour question checkbox
+            const wfhTourCheckbox = document.querySelector('input[name="wfh_tour_question"]');
+            if (wfhTourCheckbox) {
+                wfhTourCheckbox.checked = tourQuestions.includes('WFH details');
+            }
+            
+            // WFH fields
+            const naturalLight = data['Natural Light'];
+            if (naturalLight !== undefined && naturalLight !== null && naturalLight !== '') {
+                document.getElementById('natural_light').value = naturalLight;
+            }
+            
+            const deskSpace = data['Desk Space Quality'];
+            if (deskSpace !== undefined && deskSpace !== null && deskSpace !== '') {
+                document.getElementById('desk_space_quality').value = deskSpace;
+            }
+            
+            const quietness = data['Quietness Score'];
+            if (quietness !== undefined && quietness !== null && quietness !== '') {
+                document.getElementById('work_area_quietness').value = quietness;
+            }
+            
+            const kitchen = data['Kitchen Quality'];
+            if (kitchen !== undefined && kitchen !== null && kitchen !== '') {
+                document.getElementById('kitchen_quality').value = kitchen;
+            }
+            
+            // Double pane windows checkbox
+            const doublePaneCheckbox = document.getElementById('double_pane_windows');
+            if (doublePaneCheckbox) {
+                const doublePaneValue = data['Double Pane Windows'];
+                doublePaneCheckbox.checked = doublePaneValue === true || doublePaneValue === 'TRUE' || doublePaneValue === 'True';
+            }
+            
+            // Study door type multi-select
+            const studyDoorValue = (data['Study Door Type'] || '').toString();
+            const studyDoorTypes = studyDoorValue.split('\n').map(v => v.trim()).filter(v => v);
+            document.querySelectorAll('input[name="study_door_type"]').forEach(cb => {
+                cb.checked = studyDoorTypes.includes(cb.value);
+            });
+            
+            // Office gym only checkbox
+            const officeGymOnlyCheckbox = document.getElementById('officeGymOnly');
+            if (officeGymOnlyCheckbox) {
+                const officeGymOnlyValue = data['Office Gym Only'];
+                officeGymOnlyCheckbox.checked = officeGymOnlyValue === true || officeGymOnlyValue === 'TRUE' || officeGymOnlyValue === 'True';
+            }
             
             // Update maps and fetch additional data if address is present
             const address = data['Address'];
@@ -1093,6 +1357,9 @@
         // Update maps and fetch data for a given lat/lng
         function updateMapsAndData(lat, lng, address) {
             const location = new google.maps.LatLng(lat, lng);
+            
+            // Store apartment location for gym map
+            currentApartmentLocation = { lat, lng };
             
             // Update map
             map.setCenter(location);
@@ -1271,36 +1538,130 @@
         });
 
         // Gym selection functionality
-        async function fetchNearbyGyms() {
+        let currentGymSearchRadius = null; // null means default, otherwise in miles
+        
+        async function fetchNearbyGyms(radiusMiles = null, clearCache = false) {
             const address = document.getElementById('address').value.trim();
             if (!address) return;
             
+            const isExpansion = (radiusMiles !== null && currentGymSearchRadius !== null);
+            
             try {
+                const requestBody = { address };
+                if (radiusMiles !== null) {
+                    requestBody.radius_miles = radiusMiles;
+                }
+                if (clearCache) {
+                    requestBody.clear_cache = true;
+                }
+                
                 const response = await fetch('/get_gyms', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ address })
+                    body: JSON.stringify(requestBody)
                 });
                 
                 const data = await response.json();
                 
                 if (data.success && data.gyms.length > 0) {
-                    displayGyms(data.gyms);
+                    displayGyms(data.gyms, isExpansion);
                     document.getElementById('gymSelectionSection').style.display = 'block';
+                    
+                    // Update radius display
+                    const actualRadius = data.radius_used || radiusMiles || 'default';
+                    document.getElementById('currentGymRadius').textContent = 
+                        actualRadius === 'default' ? 'default (2 mi)' : `${actualRadius} miles`;
+                    currentGymSearchRadius = radiusMiles;
+                    
+                    // Show debug info
+                    const debugEl = document.getElementById('gymSearchDebug');
+                    if (debugEl) {
+                        const radiusText = actualRadius === 'default' ? '2 miles' : `${actualRadius} miles`;
+                        const newCount = data.gyms.filter(g => !allLoadedGyms.slice(0, -data.gyms.length).some(lg => lg.place_id === g.place_id)).length;
+                        debugEl.innerHTML = `
+                            <strong>Search Info:</strong> 
+                            Found ${data.gyms.length} gyms within ${radiusText} of "${address}". 
+                            ${isExpansion ? `Added ${newCount} new gyms. ` : ''}
+                            Total loaded: ${allLoadedGyms.length}
+                            ${data.total_found ? `(${data.total_found} total found before limiting to closest ${data.gyms.length})` : ''}
+                            ${clearCache ? '<span style="color: #28a745;"> ✓ Cache cleared</span>' : ''}
+                        `;
+                        debugEl.style.display = 'block';
+                    }
+                } else if (data.gyms && data.gyms.length === 0) {
+                    const debugEl = document.getElementById('gymSearchDebug');
+                    if (debugEl) {
+                        const radiusText = radiusMiles || 'default (2 mi)';
+                        debugEl.innerHTML = `<strong style="color: #dc3545;">No gyms found</strong> within ${radiusText} of "${address}". Try extending the radius or check "Office gym only".`;
+                        debugEl.style.display = 'block';
+                    }
+                    alert('No gyms found in the search area. Try extending the radius or check "Office gym only".');
                 }
             } catch (error) {
                 console.error('Error fetching gyms:', error);
+                alert('Error fetching gyms: ' + error.message);
             }
         }
+        
+        async function extendGymSearch() {
+            // Increase radius by 1 mile each time, starting from default (2 mi)
+            const newRadius = currentGymSearchRadius === null ? 3 : currentGymSearchRadius + 1;
+            
+            if (newRadius > 10) {
+                alert('Search radius is already at maximum (10 miles). Consider checking "Office gym only" if no suitable gyms are available.');
+                return;
+            }
+            
+            await fetchNearbyGyms(newRadius);
+        }
+        
+        async function clearGymCacheAndResearch() {
+            const currentRadius = currentGymSearchRadius;
+            await fetchNearbyGyms(currentRadius, true);
+        }
 
-        function displayGyms(gyms) {
+        let gymMap = null;
+        let gymMapMarkers = [];
+        let currentApartmentLocation = null;
+        let allLoadedGyms = [];  // Keep track of all gyms loaded across radius expansions
+        
+        function displayGyms(gyms, isExpansion = false) {
             const gymsList = document.getElementById('gymsList');
             const hiddenFields = document.getElementById('gymHiddenFields');
             
+            if (!isExpansion) {
+                // Fresh search - clear everything and reset
             gymsList.innerHTML = '';
             hiddenFields.innerHTML = '';
+                allLoadedGyms = [];
+                
+                // Add all gyms sorted by distance
+                gyms.sort((a, b) => a.distance_miles - b.distance_miles);
+                allLoadedGyms = [...gyms];
             
             gyms.forEach(gym => {
+                    appendGymCard(gym, gymsList, hiddenFields);
+                });
+            } else {
+                // Expansion - only add NEW gyms that are farther than what we have
+                const existingPlaceIds = new Set(allLoadedGyms.map(g => g.place_id));
+                const newGyms = gyms.filter(g => !existingPlaceIds.has(g.place_id));
+                
+                // Sort new gyms by distance and append them
+                newGyms.sort((a, b) => a.distance_miles - b.distance_miles);
+                allLoadedGyms.push(...newGyms);
+                
+                // Append new gyms to the end (maintains scroll position)
+                newGyms.forEach(gym => {
+                    appendGymCard(gym, gymsList, hiddenFields);
+                });
+            }
+            
+            // Render map with all gyms
+            renderGymMap(allLoadedGyms);
+        }
+        
+        function appendGymCard(gym, gymsList, hiddenFields) {
                 // Create gym card
                 const card = document.createElement('div');
                 card.className = 'gym-card';
@@ -1322,7 +1683,7 @@
                 label.innerHTML = `
                     <div class="gym-header">
                         <strong>${gym.name}</strong>
-                        <span class="gym-distance">${gym.distance_miles} mi</span>
+                    <span class="gym-distance">${gym.distance_miles} mi (straight-line)</span>
                     </div>
                     <div class="gym-rating">
                         ${starsHTML} ${gym.rating}/5 (${gym.user_ratings_total} reviews)
@@ -1345,7 +1706,114 @@
                     <input type="hidden" name="gym_lng_${gym.place_id}" value="${gym.lng}">
                     <input type="hidden" name="gym_types_${gym.place_id}" value="${gym.types.join(',')}">
                 `;
+        }
+        
+        function renderGymMap(gyms) {
+            if (!currentApartmentLocation) return;
+            
+            // Initialize map if not already done
+            if (!gymMap) {
+                gymMap = new google.maps.Map(document.getElementById('gymMap'), {
+                    zoom: 14,
+                    center: currentApartmentLocation,
+                    mapTypeId: 'roadmap'
+                });
+            }
+            
+            // Clear existing markers
+            gymMapMarkers.forEach(marker => marker.setMap(null));
+            gymMapMarkers = [];
+            
+            // Add apartment marker (red)
+            const aptMarker = new google.maps.Marker({
+                position: currentApartmentLocation,
+                map: gymMap,
+                title: 'Apartment Location',
+                icon: {
+                    url: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png'
+                }
             });
+            gymMapMarkers.push(aptMarker);
+            
+            const aptInfo = new google.maps.InfoWindow({
+                content: '<div style="padding: 5px;"><strong>Apartment Location</strong></div>'
+            });
+            aptMarker.addListener('click', () => {
+                aptInfo.open(gymMap, aptMarker);
+            });
+            
+            // Add gym markers (blue)
+            const bounds = new google.maps.LatLngBounds();
+            bounds.extend(currentApartmentLocation);
+            
+            gyms.forEach((gym, index) => {
+                const position = { lat: gym.lat, lng: gym.lng };
+                const marker = new google.maps.Marker({
+                    position: position,
+                    map: gymMap,
+                    title: gym.name,
+                    label: {
+                        text: (index + 1).toString(),
+                        color: 'white',
+                        fontSize: '12px',
+                        fontWeight: 'bold'
+                    },
+                    icon: {
+                        url: 'http://maps.google.com/mapfiles/ms/icons/blue-dot.png'
+                    }
+                });
+                
+                const infoContent = `
+                    <div style="padding: 8px; max-width: 250px;">
+                        <strong>${gym.name}</strong><br>
+                        <span style="color: #666;">${gym.distance_miles} mi (straight-line)</span><br>
+                        <span>⭐ ${gym.rating}/5 (${gym.user_ratings_total} reviews)</span><br>
+                        <span style="font-size: 0.9em;">${gym.address}</span>
+                    </div>
+                `;
+                
+                const infoWindow = new google.maps.InfoWindow({
+                    content: infoContent
+                });
+                
+                marker.addListener('click', () => {
+                    // Close all info windows
+                    gymMapMarkers.forEach(m => {
+                        if (m.infoWindow) m.infoWindow.close();
+                    });
+                    infoWindow.open(gymMap, marker);
+                });
+                
+                marker.infoWindow = infoWindow;
+                gymMapMarkers.push(marker);
+                bounds.extend(position);
+                
+                // Draw a line from apartment to gym to visualize distance
+                const line = new google.maps.Polyline({
+                    path: [currentApartmentLocation, position],
+                    geodesic: true,
+                    strokeColor: '#0066cc',
+                    strokeOpacity: 0.3,
+                    strokeWeight: 1,
+                    map: gymMap
+                });
+                gymMapMarkers.push(line);
+            });
+            
+            // Fit map to show all markers
+            if (gyms.length > 0) {
+                gymMap.fitBounds(bounds);
+                // Add a bit of padding
+                google.maps.event.addListenerOnce(gymMap, 'bounds_changed', () => {
+                    const currentZoom = gymMap.getZoom();
+                    if (currentZoom > 15) {
+                        gymMap.setZoom(15);
+                    }
+                });
+            } else {
+                gymMap.setCenter(currentApartmentLocation);
+                gymMap.setZoom(14);
+            }
         }
 
         // Trigger gym fetch when address changes (debounced)
@@ -1479,7 +1947,7 @@
             }).join('');
         }
         
-        // Fetch visitor parking ease
+        // Fetch visitor and street parking ease
         async function fetchParkingEase() {
             const address = document.getElementById('address').value.trim();
             if (!address) {
@@ -1490,31 +1958,64 @@
             console.log('Fetching parking ease for:', address);
             
             try {
-                const response = await fetch('/get_parking_ease', {
+                // Fetch visitor parking (with SFMTA garages)
+                const visitorResponse = await fetch('/get_parking_ease', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ address })
+                    body: JSON.stringify({ address, type: 'visitor' })
                 });
                 
-                const data = await response.json();
-                console.log('Parking ease response:', data);
+                const visitorData = await visitorResponse.json();
+                console.log('Visitor parking response:', visitorData);
                 
-                if (data.success && data.parking_ease) {
+                if (visitorData.success && visitorData.parking_ease) {
+                    // Map 1-10 scale to 1-5 star scale
+                    // 1-2 -> 1, 3-4 -> 2, 5-6 -> 3, 7-8 -> 4, 9-10 -> 5
+                    const starRating = Math.ceil(visitorData.parking_ease / 2);
+                    
                     // Auto-select the visitor parking ease rating
-                    const radioButton = document.querySelector(`input[name="visitor_parking_ease"][value="${data.parking_ease}"]`);
+                    const radioButton = document.querySelector(`input[name="visitor_parking_ease"][value="${starRating}"]`);
                     if (radioButton) {
                         radioButton.checked = true;
-                        console.log(`✓ Auto-selected visitor parking ease: ${data.parking_ease}/5 stars`);
+                        console.log(`✓ Auto-selected visitor parking ease: ${starRating}/5 stars (API: ${visitorData.parking_ease}/10)`);
                     } else {
-                        console.warn(`Radio button not found for value: ${data.parking_ease}`);
+                        console.warn(`Radio button not found for value: ${starRating}`);
                     }
                     
-                    // Show reasoning
-                    if (data.reasoning) {
-                        console.log(`Reasoning: ${data.reasoning}`);
+                    // Show reasoning and garage info
+                    if (visitorData.reasoning) {
+                        console.log(`Visitor parking reasoning: ${visitorData.reasoning}`);
                     }
-                } else if (data.error) {
-                    console.error('Parking ease API error:', data.error);
+                    
+                    if (visitorData.public_garages && visitorData.public_garages.length > 0) {
+                        console.log(`Found ${visitorData.public_garages.length} SFMTA/public garage(s):`);
+                        visitorData.public_garages.forEach(g => {
+                            console.log(`  - ${g.name} (${g.distance_miles} mi)`);
+                        });
+                    }
+                }
+                
+                // Fetch street parking (residential feasibility)
+                const streetResponse = await fetch('/get_parking_ease', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address, type: 'street' })
+                });
+                
+                const streetData = await streetResponse.json();
+                console.log('Street parking response:', streetData);
+                
+                if (streetData.success && streetData.parking_ease) {
+                    // Auto-select the street parking ease rating
+                    const radioButton = document.querySelector(`input[name="street_parking_ease"][value="${streetData.parking_ease}"]`);
+                    if (radioButton) {
+                        radioButton.checked = true;
+                        console.log(`✓ Auto-selected street parking ease: ${streetData.parking_ease}/10`);
+                    }
+                    
+                    if (streetData.reasoning) {
+                        console.log(`Street parking reasoning: ${streetData.reasoning}`);
+                    }
                 }
             } catch (error) {
                 console.error('Error fetching parking ease:', error);
@@ -1692,7 +2193,7 @@
                 if (data.scatter && data.scatter.length > 0) {
                     renderScatterPlot(data.scatter);
                     renderRankedList(data.ranked);
-                    renderCriteriaMatrix(data.criteria_matrix);
+                    renderCriteriaMatrix(data.comparison || []);
                 } else {
                     if (scatterChart) {
                         scatterChart.destroy();
@@ -1700,8 +2201,9 @@
                     }
                     rankedListContainer.innerHTML = '<p>No analyzed apartments found. Please run analysis first.</p>';
                     criteriaMatrixContainer.innerHTML = '<p>No criteria matrix data available</p>';
-                    document.getElementById('detailAddress').textContent = 'Select an apartment';
+                    setDetailAddress('Select an apartment');
                     document.getElementById('detailZillowLink').style.display = 'none';
+                    updatePhotoSelectorHelper();
                     resultsContainer.classList.remove('detail-shown');
                 }
                 
@@ -1714,8 +2216,9 @@
                 }
                 rankedListContainer.innerHTML = '<p>Error loading analysis data.</p>';
                 criteriaMatrixContainer.innerHTML = '<p>Please try running the analysis again.</p>';
-                document.getElementById('detailAddress').textContent = 'Select an apartment';
+                setDetailAddress('Select an apartment');
                 document.getElementById('detailZillowLink').style.display = 'none';
+                updatePhotoSelectorHelper();
                 resultsContainer.classList.remove('detail-shown');
                 resultsContainer.classList.remove('hidden');
             }
@@ -1744,25 +2247,58 @@
                             address: d.address,
                             row: d.row,
                             score_min: d.score_min,
-                            score_max: d.score_max
+                            score_max: d.score_max,
+                            is_complete: d.is_complete,
+                            has_uncertainty: d.has_uncertainty,
+                            missing_fields: d.missing_fields || []
                         })),
                         backgroundColor: (context) => {
                             const index = context.dataIndex;
-                            return selectedScatterPoint === index ? 'rgba(255, 152, 0, 0.8)' : 'rgba(0, 102, 204, 0.6)';
+                            const point = scatterData[index];
+                            
+                            if (selectedScatterPoint === index) {
+                                return 'rgba(255, 152, 0, 0.8)';  // Selected: orange
+                            } else if (!point.is_complete) {
+                                return 'rgba(220, 53, 69, 0.6)';  // Incomplete: red
+                            } else if (point.has_uncertainty) {
+                                return 'rgba(255, 193, 7, 0.6)';  // Uncertain: yellow
+                            } else {
+                                return 'rgba(0, 102, 204, 0.6)';  // Complete: blue
+                            }
                         },
                         borderColor: (context) => {
                             const index = context.dataIndex;
-                            return selectedScatterPoint === index ? 'rgba(255, 152, 0, 1)' : 'rgba(0, 102, 204, 1)';
+                            const point = scatterData[index];
+                            
+                            if (selectedScatterPoint === index) {
+                                return 'rgba(255, 152, 0, 1)';
+                            } else if (!point.is_complete) {
+                                return 'rgba(220, 53, 69, 1)';
+                            } else if (point.has_uncertainty) {
+                                return 'rgba(255, 193, 7, 1)';
+                            } else {
+                                return 'rgba(0, 102, 204, 1)';
+                            }
                         },
                         borderWidth: (context) => {
                             const index = context.dataIndex;
-                            return selectedScatterPoint === index ? 3 : 1;
+                            return selectedScatterPoint === index ? 3 : 2;
                         },
                         pointRadius: (context) => {
                             const index = context.dataIndex;
                             return selectedScatterPoint === index ? 8 : 6;
                         },
-                        pointHoverRadius: 8
+                        pointHoverRadius: 8,
+                        pointStyle: (context) => {
+                            const index = context.dataIndex;
+                            const point = scatterData[index];
+                            
+                            if (!point.is_complete) {
+                                return 'triangle';  // Incomplete data
+                            } else {
+                                return 'circle';  // Complete data
+                            }
+                        }
                     }]
                 },
                 options: {
@@ -1782,12 +2318,28 @@
                             callbacks: {
                                 label: (context) => {
                                     const apt = scatterData[context.dataIndex];
-                                    return [
+                                    const labels = [
                                         apt.address,
                                         `Price: $${apt.price}`,
-                                        `Score: ${apt.score.toFixed(1)}`,
-                                        apt.score_min && apt.score_max ? `Range: ${apt.score_min.toFixed(1)} - ${apt.score_max.toFixed(1)}` : ''
-                                    ].filter(Boolean);
+                                        `Score: ${apt.score.toFixed(1)}`
+                                    ];
+                                    
+                                    if (apt.score_min && apt.score_max && apt.score_min !== apt.score_max) {
+                                        labels.push(`Range: ${apt.score_min.toFixed(1)} - ${apt.score_max.toFixed(1)}`);
+                                    }
+                                    
+                                    if (!apt.is_complete) {
+                                        labels.push('');
+                                        labels.push('⚠️ Incomplete Data:');
+                                        apt.missing_fields.forEach(field => {
+                                            labels.push(`  • ${field}`);
+                                        });
+                                    } else if (apt.has_uncertainty) {
+                                        labels.push('');
+                                        labels.push('⚠️ Uncertain (multiple options selected)');
+                                    }
+                                    
+                                    return labels;
                                 }
                             }
                         },
@@ -1811,6 +2363,51 @@
                     }
                 }
             });
+            
+            // Manually draw error bars after chart renders
+            const originalDraw = scatterChart.draw;
+            scatterChart.draw = function() {
+                originalDraw.apply(this, arguments);
+                
+                const chart = this;
+                const ctx = chart.ctx;
+                const meta = chart.getDatasetMeta(0);
+                
+                scatterData.forEach((apt, idx) => {
+                    if (apt.has_uncertainty && apt.score_min !== apt.score_max) {
+                        const element = meta.data[idx];
+                        if (element) {
+                            const x = element.x;
+                            const yMin = chart.scales.y.getPixelForValue(apt.score_min);
+                            const yMax = chart.scales.y.getPixelForValue(apt.score_max);
+                            
+                            ctx.save();
+                            ctx.strokeStyle = apt.is_complete ? 'rgba(255, 193, 7, 0.8)' : 'rgba(220, 53, 69, 0.8)';
+                            ctx.lineWidth = 2;
+                            
+                            // Vertical error bar
+                            ctx.beginPath();
+                            ctx.moveTo(x, yMin);
+                            ctx.lineTo(x, yMax);
+                            ctx.stroke();
+                            
+                            // Top cap
+                            ctx.beginPath();
+                            ctx.moveTo(x - 4, yMax);
+                            ctx.lineTo(x + 4, yMax);
+                            ctx.stroke();
+                            
+                            // Bottom cap
+                            ctx.beginPath();
+                            ctx.moveTo(x - 4, yMin);
+                            ctx.lineTo(x + 4, yMin);
+                            ctx.stroke();
+                            
+                            ctx.restore();
+                        }
+                    }
+                });
+            };
         }
 
         // Render ranked list
@@ -1834,35 +2431,233 @@
                         </tr>
                     </thead>
                     <tbody>
-                        ${rankedData.map((apt, idx) => `
-                            <tr class="apartment-row" onclick="showDetailPanel(${apt.row})" data-row="${apt.row}">
+                        ${rankedData.map((apt, idx) => {
+                            // Check if apartment has tour questions
+                            const tourQuestions = apt.tour_questions || '';
+                            const hasTourQuestions = tourQuestions.split('\n').filter(q => q.trim()).length > 0;
+                            const tourIcon = hasTourQuestions 
+                                ? `<span style="cursor: help; color: #0066cc; margin-left: 5px; font-size: 1.1em;" title="Tour Questions:\n${tourQuestions.split('\n').filter(q => q.trim()).map(q => '• ' + q).join('\n')}">ℹ️</span>`
+                                : '';
+                            
+                            // Data completeness indicators
+                            let statusIcon = '';
+                            let rowStyle = '';
+                            let scoreDisplay = apt.score ? apt.score.toFixed(1) : 'N/A';
+                            
+                            if (!apt.is_complete) {
+                                statusIcon = `<span style="color: #dc3545; font-size: 1.2em; cursor: help;" title="Incomplete Data:\n${(apt.missing_fields || []).map(f => '• ' + f).join('\n')}">▲</span> `;
+                                rowStyle = 'style="background-color: rgba(220, 53, 69, 0.05);"';
+                            } else if (apt.has_uncertainty) {
+                                statusIcon = `<span style="color: #ffc107; font-size: 1.2em; cursor: help;" title="Uncertain: Multiple options selected\nRange: ${apt.score_min?.toFixed(1)} - ${apt.score_max?.toFixed(1)}">⚠️</span> `;
+                                rowStyle = 'style="background-color: rgba(255, 193, 7, 0.05);"';
+                                if (apt.score_min && apt.score_max && apt.score_min !== apt.score_max) {
+                                    scoreDisplay += ` <span style="font-size: 0.85em; color: #666;">(${apt.score_min.toFixed(1)}-${apt.score_max.toFixed(1)})</span>`;
+                                }
+                            }
+                            
+                            return `
+                            <tr class="apartment-row" onclick="showDetailPanel(${apt.row})" data-row="${apt.row}" ${rowStyle}>
                                 <td>${idx + 1}</td>
-                                <td>${apt.address}</td>
+                                <td>${statusIcon}${apt.address}${tourIcon}</td>
                                 <td>$${apt.price}</td>
-                                <td>${apt.score ? apt.score.toFixed(1) : 'N/A'}</td>
+                                <td>${scoreDisplay}</td>
                                 <td>
                                     <button class="btn-small" onclick="event.stopPropagation(); showDetailPanel(${apt.row})">View</button>
                                 </td>
                             </tr>
-                        `).join('')}
+                        `;
+                        }).join('')}
                     </tbody>
                 </table>
+                <div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px; font-size: 0.9em;">
+                    <strong>Legend:</strong>
+                    <span style="margin-left: 15px;"><span style="color: #0066cc;">●</span> Complete Data</span>
+                    <span style="margin-left: 15px;"><span style="color: #ffc107;">⚠️</span> Uncertain (range shown)</span>
+                    <span style="margin-left: 15px;"><span style="color: #dc3545;">▲</span> Incomplete (hover for details)</span>
+                    <span style="margin-left: 15px;"><span style="color: #0066cc;">ℹ️</span> Tour Questions</span>
+                </div>
             `;
             
             container.innerHTML = html;
         }
 
         // Render criteria matrix
-        function renderCriteriaMatrix(matrixData) {
+        function renderCriteriaMatrix(comparisonData) {
             const container = document.getElementById('criteriaMatrix');
             
-            if (!matrixData || Object.keys(matrixData).length === 0) {
-                container.innerHTML = '<p>No criteria matrix data available</p>';
+            if (!comparisonData || comparisonData.length === 0) {
+                container.innerHTML = '<p>No comparison data available</p>';
                 return;
             }
             
-            // This is a simplified version - you can enhance it based on your criteria matrix structure
-            container.innerHTML = '<p>Criteria matrix visualization coming soon...</p>';
+            // Helper function to get best value for highlighting
+            const getBest = (apartments, key, higherIsBetter = true) => {
+                const values = apartments.map(a => parseFloat(a[key]) || 0).filter(v => v > 0);
+                if (values.length === 0) return null;
+                return higherIsBetter ? Math.max(...values) : Math.min(...values);
+            };
+            
+            // Helper to format cell with highlighting
+            const formatCell = (value, best, higherIsBetter = true, isCurrency = false, suffix = '') => {
+                const numValue = parseFloat(value);
+                if (!value || isNaN(numValue)) return '<td class="comparison-cell">--</td>';
+                
+                const isBest = (numValue === best);
+                const displayValue = isCurrency ? `$${numValue}` : numValue + suffix;
+                const cellClass = isBest ? 'comparison-cell best-value' : 'comparison-cell';
+                const emoji = isBest ? '🏆 ' : '';
+                
+                return `<td class="${cellClass}">${emoji}${displayValue}</td>`;
+            };
+            
+            // Get best values for each attribute
+            const bestScore = getBest(comparisonData, 'score', true);
+            const bestValue = getBest(comparisonData, 'value_ratio', true);
+            const bestCommute = getBest(comparisonData, 'commute_you', false);
+            const bestCommutePartner = getBest(comparisonData, 'commute_partner', false);
+            const bestSafety = getBest(comparisonData, 'safety_score', true);
+            const bestWFH = getBest(comparisonData, 'wfh_score', true);
+            const bestVibe = getBest(comparisonData, 'location_vibe_score', true);
+            const bestParking = getBest(comparisonData, 'parking_score', true);
+            const bestGym = getBest(comparisonData, 'gym_score', true);
+            const bestLaundry = getBest(comparisonData, 'laundry_score', true);
+            const bestLight = getBest(comparisonData, 'natural_light', true);
+            const bestDesk = getBest(comparisonData, 'desk_space', true);
+            const bestKitchen = getBest(comparisonData, 'kitchen_quality', true);
+            
+            const html = `
+                <table class="comparison-table">
+                    <thead>
+                        <tr>
+                            <th class="comparison-header" style="position: sticky; left: 0; background: #f8f9fa; z-index: 150;">Attribute</th>
+                            ${comparisonData.map((apt, idx) => `
+                                <th class="comparison-header apartment-col" onclick="showDetailPanel(${apt.row})" style="cursor: pointer;">
+                                    <div style="font-size: 0.85em; font-weight: normal; color: #666;">Rank ${idx + 1}</div>
+                                    <div style="margin-top: 4px; font-size: 0.9em;">${apt.address.substring(0, 30)}${apt.address.length > 30 ? '...' : ''}</div>
+                                    ${apt.is_complete ? '' : '<div style="color: #dc3545; font-size: 0.8em;">⚠️ Incomplete</div>'}
+                                </th>
+                            `).join('')}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Overall Metrics -->
+                        <tr class="category-row"><td colspan="${comparisonData.length + 1}"><strong>📊 Overall Metrics</strong></td></tr>
+                        <tr>
+                            <td class="comparison-label">Overall Score</td>
+                            ${comparisonData.map(apt => formatCell(apt.score, bestScore, true, false, '/100')).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">Monthly Rent</td>
+                            ${comparisonData.map(apt => `<td class="comparison-cell">$${apt.price}</td>`).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">Value Ratio</td>
+                            ${comparisonData.map(apt => formatCell(apt.value_ratio, bestValue, true, false, ' pts/$1k')).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">Score Range</td>
+                            ${comparisonData.map(apt => {
+                                const hasRange = apt.score_min && apt.score_max && Math.abs(apt.score_max - apt.score_min) > 0.5;
+                                return hasRange 
+                                    ? `<td class="comparison-cell" style="color: #f39c12;">${apt.score_min.toFixed(1)}-${apt.score_max.toFixed(1)}</td>`
+                                    : `<td class="comparison-cell">--</td>`;
+                            }).join('')}
+                        </tr>
+                        
+                        <!-- Basic Info -->
+                        <tr class="category-row"><td colspan="${comparisonData.length + 1}"><strong>🏠 Basic Info</strong></td></tr>
+                        <tr>
+                            <td class="comparison-label">Bedrooms</td>
+                            ${comparisonData.map(apt => `<td class="comparison-cell">${apt.bedrooms || '--'}</td>`).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">Bathrooms</td>
+                            ${comparisonData.map(apt => `<td class="comparison-cell">${apt.bathrooms || '--'}</td>`).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">Square Feet</td>
+                            ${comparisonData.map(apt => `<td class="comparison-cell">${apt.sqft || '--'}</td>`).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">Rent Control</td>
+                            ${comparisonData.map(apt => `<td class="comparison-cell">${apt.rent_control ? 'Yes ✓' : 'No'}</td>`).join('')}
+                        </tr>
+                        
+                        <!-- Component Scores -->
+                        <tr class="category-row"><td colspan="${comparisonData.length + 1}"><strong>📈 Component Scores</strong></td></tr>
+                        <tr>
+                            <td class="comparison-label">🚗 Commute (You)</td>
+                            ${comparisonData.map(apt => formatCell(apt.commute_you, bestCommute, false, false, ' min')).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">🚗 Commute (Partner)</td>
+                            ${comparisonData.map(apt => formatCell(apt.commute_partner, bestCommutePartner, false, false, ' min')).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">🔒 Safety Score</td>
+                            ${comparisonData.map(apt => formatCell(apt.safety_score, bestSafety, true, false, '/10')).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">💼 WFH Quality</td>
+                            ${comparisonData.map(apt => formatCell(apt.wfh_score, bestWFH, true, false, '/10')).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">🌆 Location Vibe</td>
+                            ${comparisonData.map(apt => formatCell(apt.location_vibe_score, bestVibe, true, false, '/10')).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">🅿️ Parking</td>
+                            ${comparisonData.map(apt => formatCell(apt.parking_score, bestParking, true, false, '/10')).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">💪 Gym</td>
+                            ${comparisonData.map(apt => formatCell(apt.gym_score, bestGym, true, false, '/10')).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">🧺 Laundry</td>
+                            ${comparisonData.map(apt => formatCell(apt.laundry_score, bestLaundry, true, false, '/10')).join('')}
+                        </tr>
+                        
+                        <!-- WFH Details -->
+                        <tr class="category-row"><td colspan="${comparisonData.length + 1}"><strong>💼 WFH Details</strong></td></tr>
+                        <tr>
+                            <td class="comparison-label">Natural Light</td>
+                            ${comparisonData.map(apt => formatCell(apt.natural_light, bestLight, true, false, '/10')).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">Desk Space</td>
+                            ${comparisonData.map(apt => formatCell(apt.desk_space, bestDesk, true, false, '/10')).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">Kitchen Quality</td>
+                            ${comparisonData.map(apt => formatCell(apt.kitchen_quality, bestKitchen, true, false, '/10')).join('')}
+                        </tr>
+                        
+                        <!-- Other Attributes -->
+                        <tr class="category-row"><td colspan="${comparisonData.length + 1}"><strong>🔧 Other Attributes</strong></td></tr>
+                        <tr>
+                            <td class="comparison-label">Parking Type</td>
+                            ${comparisonData.map(apt => `<td class="comparison-cell">${apt.parking_type || '--'}</td>`).join('')}
+                        </tr>
+                        <tr>
+                            <td class="comparison-label">Laundry Type</td>
+                            ${comparisonData.map(apt => `<td class="comparison-cell">${apt.laundry_type || '--'}</td>`).join('')}
+                        </tr>
+                    </tbody>
+                </table>
+                
+                <div style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 4px; font-size: 0.9em;">
+                    <strong>💡 How to use this comparison:</strong>
+                    <ul style="margin: 10px 0; padding-left: 20px;">
+                        <li><strong>Value Ratio</strong>: Higher = better deal (more score per dollar spent)</li>
+                        <li><strong>🏆 Trophy icon</strong>: Best value in that category</li>
+                        <li><strong>Score Range</strong>: Shown if multiple options were selected (uncertainty)</li>
+                        <li><strong>Click apartment headers</strong>: Opens detailed view for that apartment</li>
+                    </ul>
+                </div>
+            `;
+            
+            container.innerHTML = html;
         }
 
         // Show apartment modal
@@ -1930,7 +2725,10 @@
             
             // Show loading state and switch to 60/40 layout
             grid.classList.add('detail-shown');
-            document.getElementById('detailAddress').textContent = 'Loading...';
+            setDetailAddress('Loading...');
+            currentApartmentAddress = '';
+            currentApartmentZillowUrl = '';
+            updatePhotoSelectorHelper();
             
             try {
                 const response = await fetch(`/get_apartment_detailed/${rowNumber}`);
@@ -1952,14 +2750,21 @@
 
         function populateDetailPanel(data) {
             // Header
-            document.getElementById('detailAddress').textContent = data['Address'] || 'Unknown';
+            const resolvedZillowUrl = data['Zillow URL'] || '';
+            setDetailAddress(data['Address'] || 'Unknown');
+            currentApartmentAddress = data['Address'] || '';
+            currentApartmentRowNumber = data['row_number'] || null;
             const zillowLink = document.getElementById('detailZillowLink');
-            if (data['Zillow URL']) {
-                zillowLink.href = data['Zillow URL'];
-                zillowLink.style.display = 'inline';
-            } else {
-                zillowLink.style.display = 'none';
+            if (zillowLink) {
+                if (resolvedZillowUrl) {
+                    zillowLink.href = resolvedZillowUrl;
+                    zillowLink.style.display = 'inline';
+                } else {
+                    zillowLink.style.display = 'none';
+                }
             }
+            currentApartmentZillowUrl = resolvedZillowUrl;
+            updatePhotoSelectorHelper();
             
             // Overall Score
             const weightedScore = data['Weighted Score'] ?? data['weighted_score'] ?? data.calculated_weighted_score;
@@ -2023,12 +2828,39 @@
             
             updateComponentScoreDisplay('wfhScore', components['wfh_quality']);
             updateComponentMeta('wfhMeta', components['wfh_quality']);
-            document.getElementById('wfhNaturalLight').textContent = data['Natural Light'] ? data['Natural Light'].toFixed(1) : '--';
-            document.getElementById('wfhDeskSpace').textContent = data['Desk Space Quality'] ? data['Desk Space Quality'].toFixed(1) : '--';
+            const naturalLightValue = data['Natural Light'];
+            const deskSpaceValue = data['Desk Space Quality'];
+            const kitchenValue = data['Kitchen Quality'];
+            document.getElementById('wfhNaturalLight').textContent =
+                typeof naturalLightValue === 'number' ? naturalLightValue.toFixed(1) : '--';
+            document.getElementById('wfhDeskSpace').textContent =
+                typeof deskSpaceValue === 'number' ? deskSpaceValue.toFixed(1) : '--';
             document.getElementById('wfhQuietness').textContent = data['Quietness Score'] ? data['Quietness Score'].toFixed(1) : '--';
-            document.getElementById('wfhKitchen').textContent = data['Kitchen Quality'] ? data['Kitchen Quality'].toFixed(1) : '--';
-            document.getElementById('wfhWindows').textContent = data['Double Pane Windows'] ? 'Yes' : 'No';
+            document.getElementById('wfhKitchen').textContent =
+                typeof kitchenValue === 'number' ? kitchenValue.toFixed(1) : '--';
+            const doublePaneValue = data['Double Pane Windows'];
+            let doublePaneDisplay = '--';
+            if (typeof doublePaneValue === 'boolean') {
+                doublePaneDisplay = doublePaneValue ? 'Yes' : 'No';
+            } else if (typeof doublePaneValue === 'string') {
+                const normalized = doublePaneValue.trim().toLowerCase();
+                if (normalized === 'true' || normalized === 'yes') {
+                    doublePaneDisplay = 'Yes';
+                } else if (normalized === 'false' || normalized === 'no') {
+                    doublePaneDisplay = 'No';
+                } else if (normalized !== '') {
+                    doublePaneDisplay = doublePaneValue;
+                }
+            }
+            document.getElementById('wfhWindows').textContent = doublePaneDisplay;
             document.getElementById('wfhStudyDoor').textContent = data['Study Door Type'] || '--';
+            
+            // Display Quietness breakdown
+            populateQuietnessBreakdown(components['quietness'], data);
+            
+            // Display WFH formula
+            document.getElementById('wfhFormulaText').textContent = 
+                'WFH Quality = 0.25 × Natural Light + 0.25 × Desk Space + 0.20 × Work Area Quietness + 0.15 × Kitchen Quality + 0.15 × Location Vibe. Each attribute rated 1-10.';
             
             updateComponentScoreDisplay('vibeScore', components['location_vibe']);
             updateComponentMeta('vibeMeta', components['location_vibe']);
@@ -2078,16 +2910,44 @@
             // Note: Commute times (AM/PM) are calculated from API, not manually editable
             document.getElementById('editCommutePartner').value = data['Commute Time (Partner)'] || '';
             document.getElementById('editSafetyOpenData').value = data['Safety Score (OpenData)'] || '';
-            document.getElementById('editWfhNaturalLight').value = data['Natural Light'] || '';
-            document.getElementById('editWfhDeskSpace').value = data['Desk Space Quality'] || '';
+            document.getElementById('editWfhNaturalLight').value = typeof naturalLightValue === 'number' ? naturalLightValue : '';
+            document.getElementById('editWfhDeskSpace').value = typeof deskSpaceValue === 'number' ? deskSpaceValue : '';
             document.getElementById('editWfhQuietness').value = data['Quietness Score'] || '';
-            document.getElementById('editWfhKitchen').value = data['Kitchen Quality'] || '';
+            document.getElementById('editWfhKitchen').value = typeof kitchenValue === 'number' ? kitchenValue : '';
             document.getElementById('editVibeRestaurants').value = data['Restaurants Nearby'] || '';
             document.getElementById('editVibeCafes').value = data['Cafes Nearby'] || '';
             document.getElementById('editVibeParks').value = data['Parks Nearby'] || '';
             document.getElementById('editParkingStreetEase').value = data['Street Parking Ease'] || '';
             document.getElementById('editParkingVisitorEase').value = data['Visitor Parking Ease'] || '';
             document.getElementById('editGymQuality').value = data['Gym Quality'] || '';
+            
+            // Populate double-pane windows checkbox
+            const doublePaneCheckbox = document.getElementById('editWfhWindowsCheckbox');
+            if (doublePaneCheckbox) {
+                const doublePaneValue = data['Double Pane Windows'];
+                doublePaneCheckbox.checked = doublePaneValue === true || doublePaneValue === 'TRUE' || doublePaneValue === 'True';
+            }
+            
+            // Populate study door type checkboxes
+            const studyDoorValue = (data['Study Door Type'] || '').toString();
+            const studyDoorTypes = studyDoorValue.split('\n').map(v => v.trim()).filter(v => v);
+            document.querySelectorAll('input[name="edit_study_door_type"]').forEach(cb => {
+                cb.checked = studyDoorTypes.includes(cb.value);
+            });
+            
+            // Show tour questions icon if there are any
+            const tourQuestionsValue = data['Tour Questions'] || '';
+            const tourQuestionsList = tourQuestionsValue.split('\n').filter(q => q.trim());
+            const tourIcon = document.getElementById('tourQuestionsIcon');
+            if (tourIcon) {
+                if (tourQuestionsList.length > 0) {
+                    const tooltipText = 'Tour Questions:\n• ' + tourQuestionsList.join('\n• ');
+                    tourIcon.title = tooltipText;
+                    tourIcon.style.display = 'inline';
+                } else {
+                    tourIcon.style.display = 'none';
+                }
+            }
 
             renderScoreContributions(
                 data.component_contributions || [],
@@ -2100,13 +2960,29 @@
         function updateComponentScoreDisplay(elementId, componentData) {
             const el = document.getElementById(elementId);
             if (!el) return;
-            if (componentData && typeof componentData.raw_score === 'number') {
-                el.textContent = componentData.raw_score.toFixed(1);
-            } else if (componentData && typeof componentData.score === 'number') {
-                el.textContent = componentData.score.toFixed(1);
+            
+            if (componentData) {
+                const rawScore = componentData.raw_score ?? componentData.score;
+                const minScore = componentData.raw_score_min;
+                const maxScore = componentData.raw_score_max;
+                
+                // If we have a range (min/max), show it instead of averaging
+                if (typeof minScore === 'number' && typeof maxScore === 'number' && minScore !== maxScore) {
+                    el.innerHTML = `<span style="color: #f39c12;">${minScore.toFixed(1)} - ${maxScore.toFixed(1)}</span> <span style="font-size: 0.8em; color: #999;" title="Range due to multiple options selected">(uncertain)</span>`;
+                } else if (typeof rawScore === 'number') {
+                    el.textContent = rawScore.toFixed(1);
+                } else {
+                    el.textContent = '--';
+                }
             } else {
                 el.textContent = '--';
             }
+        }
+
+        function setDetailAddress(text) {
+            const labelEl = document.getElementById('detailAddressText');
+            if (!labelEl) return;
+            labelEl.textContent = text || 'Select an apartment';
         }
 
         function formatMinutes(value) {
@@ -2447,8 +3323,13 @@
             }
             
             const rows = contributions.map(contribution => {
+                const componentData = componentScores ? componentScores[contribution.name] : null;
+                const componentDetails = componentData && componentData.details ? componentData.details : {};
                 const weightText = formatWeightPercentage(contribution.weight);
-                const rawScoreText = typeof contribution.raw_score === 'number' ? contribution.raw_score.toFixed(1) : '--';
+                let rawScoreText = typeof contribution.raw_score === 'number' ? contribution.raw_score.toFixed(1) : '--';
+                if (componentDetails && componentDetails.inputs_available === false) {
+                    rawScoreText = '--';
+                }
                 const weightedText = typeof contribution.weighted_contribution === 'number' ? contribution.weighted_contribution.toFixed(1) : '--';
                 const maxText = typeof contribution.max_contribution === 'number' ? ` • max ${contribution.max_contribution.toFixed(1)} pts` : '';
                 const hasRaw = rawScoreText !== '--';
@@ -2465,13 +3346,14 @@
                 
                 let extraDetails = '';
                 if (contribution.name === 'safety') {
-                    const safetyDetails = componentScores['safety']?.details || {};
-                    const manual = typeof safetyDetails.manual_rating === 'number' ? safetyDetails.manual_rating : null;
-                    const opendata = typeof safetyDetails.opendata_rating === 'number' ? safetyDetails.opendata_rating : null;
+                    const manual = typeof componentDetails.manual_rating === 'number' ? componentDetails.manual_rating : null;
+                    const opendata = typeof componentDetails.opendata_rating === 'number' ? componentDetails.opendata_rating : null;
                     if (manual !== null && opendata !== null) {
                         const combined = ((manual + opendata) / 2).toFixed(1);
                         extraDetails = `<div class="contrib-details">Safety raw = (Manual ${manual.toFixed(1)} + OpenData ${opendata.toFixed(1)}) / 2 = ${combined}</div>`;
                     }
+                } else if (contribution.name === 'wfh_quality' && componentDetails.inputs_available === false) {
+                    extraDetails = '<div class="contrib-details">WFH score will populate after you run the photo analyzer or enter values manually.</div>';
                 }
                 
                 return `
@@ -2541,12 +3423,116 @@
             }, {displayModeBar: false, responsive: true});
         }
 
+        function updatePhotoSelectorHelper() {
+            const helper = document.getElementById('photoSelectorHelperText');
+            if (!helper) return;
+            if (currentApartmentZillowUrl) {
+                const addressLabel = document.getElementById('detailAddressText');
+                const address = currentApartmentAddress || (addressLabel ? addressLabel.textContent : '');
+                const escapedAddress = address.replace(/(["\\])/g, '\\$1');
+                if (address && address !== 'Select an apartment' && address !== 'Loading...') {
+                    helper.textContent = `Click to copy: python photo_selector.py "${currentApartmentZillowUrl}" --address "${escapedAddress}" (Automated: extracts all photos, filters relevant ones, analyzes WFH suitability)`;
+            } else {
+                    helper.textContent = `Click to copy: python photo_selector.py "${currentApartmentZillowUrl}" --address "<address>" (Automated WFH photo analysis)`;
+                }
+            } else {
+                helper.textContent = 'Restore the Zillow hyperlink in the sheet or enter the URL above to enable the automated photo analyzer.';
+            }
+        }
+
+        function setupPhotoSelectorButton() {
+            const btn = document.getElementById('photoSelectorButton');
+            if (!btn) return;
+            btn.addEventListener('click', () => {
+                if (!currentApartmentZillowUrl) {
+                    alert('Add or restore the Zillow hyperlink/URL before running the photo analyzer.');
+                    return;
+                }
+                const addressLabel = document.getElementById('detailAddressText');
+                const address = currentApartmentAddress || (addressLabel ? addressLabel.textContent : '');
+                const escapedAddress = address.replace(/(["\\])/g, '\\$1');
+                const command = address
+                    ? `python photo_selector.py "${currentApartmentZillowUrl}" --address "${escapedAddress}"`
+                    : `python photo_selector.py "${currentApartmentZillowUrl}"`;
+                const helperMessage = address ? `${command}\n\nAddress will be passed automatically.` : command;
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(command)
+                        .then(() => {
+                            alert(`Command copied to clipboard:\n${helperMessage}\n\nRun it in your terminal to launch the interactive photo analyzer.`);
+                        })
+                        .catch(() => {
+                            alert(`Run this command in your terminal:\n${helperMessage}`);
+                        });
+                } else {
+                    alert(`Run this command in your terminal:\n${helperMessage}`);
+                }
+            });
+        }
+
+        function setupClearWfhButton() {
+            const btn = document.getElementById('clearWfhButton');
+            if (!btn) return;
+            btn.addEventListener('click', async () => {
+                if (!currentApartmentRowNumber) {
+                    alert('Select an apartment from the analysis list first.');
+                    return;
+                }
+                const confirmed = confirm('This will clear the WFH-related photo analysis fields so they remain blank until you rerun the analyzer or enter values manually. Continue?');
+                if (!confirmed) return;
+                const originalText = btn.textContent;
+                btn.disabled = true;
+                btn.textContent = 'Clearing...';
+                try {
+                    const response = await fetch(`/clear_wfh/${currentApartmentRowNumber}`, { method: 'POST' });
+                    const result = await response.json();
+                    if (!response.ok || !result.success) {
+                        throw new Error(result.error || 'Unknown error');
+                    }
+                    alert('WFH photo-derived fields cleared. Re-run the photo analyzer or enter values manually to repopulate them.');
+                    showDetailPanel(currentApartmentRowNumber);
+                } catch (error) {
+                    alert(`Failed to clear WFH data: ${error.message}`);
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = originalText;
+                }
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            setupPhotoSelectorButton();
+            setupClearWfhButton();
+            updatePhotoSelectorHelper();
+            
+            // Setup collapsible sections
+            document.querySelectorAll('.collapsible-section').forEach(button => {
+                button.addEventListener('click', function() {
+                    this.classList.toggle('active');
+                    const content = this.nextElementSibling;
+                    if (content.style.display === 'block') {
+                        content.style.display = 'none';
+                    } else {
+                        content.style.display = 'block';
+                    }
+                });
+            });
+        });
+
         function closeDetailPanel() {
             const grid = document.getElementById('analysisResults');
             
             grid.classList.remove('detail-shown');
             currentApartmentRow = null;
             originalApartmentData = null;
+            currentApartmentRowNumber = null;
+            currentApartmentAddress = '';
+            currentApartmentZillowUrl = '';
+            setDetailAddress('Select an apartment');
+            const zillowLink = document.getElementById('detailZillowLink');
+            if (zillowLink) {
+                zillowLink.style.display = 'none';
+            }
+            updatePhotoSelectorHelper();
             
             // Remove highlighting
             document.querySelectorAll('.apartment-row').forEach(row => {
@@ -2655,10 +3641,59 @@
             }
         }
 
+        function populateQuietnessBreakdown(quietnessComponent, data) {
+            const breakdownEl = document.getElementById('quietnessBreakdown');
+            if (!breakdownEl) return;
+            
+            const details = quietnessComponent?.details || {};
+            const contributions = details.contributions || {};
+            
+            // Get the raw values
+            const hasDoublePaneRaw = data['Double Pane Windows'];
+            const hasDoublePaneValue = (typeof hasDoublePaneRaw === 'boolean' && hasDoublePaneRaw) || 
+                                       (typeof hasDoublePaneRaw === 'string' && ['true', 'yes'].includes(hasDoublePaneRaw.toLowerCase()));
+            const doorType = data['Study Door Type'] || 'none';
+            const doublePaneBonus = contributions.double_pane || 0;
+            const doorBonus = contributions.door || 0;
+            
+            // Format door type display
+            const doorTypeDisplay = doorType.split('\n').map(dt => {
+                const formatted = dt.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+                return formatted;
+            }).join(', ');
+            
+            // Build explanation
+            let html = '<div style="font-size: 0.9em;">';
+            html += `<div><strong>Base Score:</strong> 5.0/10</div>`;
+            
+            if (hasDoublePaneValue) {
+                html += `<div style="color: #28a745;"><strong>+ Double Pane Windows:</strong> +${doublePaneBonus.toFixed(1)} points (reduces exterior noise)</div>`;
+            } else {
+                html += `<div style="color: #dc3545;"><strong>No Double Pane Windows:</strong> +0 points (single pane = more noise)</div>`;
+            }
+            
+            if (doorBonus > 0) {
+                html += `<div style="color: #28a745;"><strong>+ Study Door (${doorTypeDisplay}):</strong> +${doorBonus.toFixed(1)} points (isolates work area)</div>`;
+            } else {
+                html += `<div style="color: #dc3545;"><strong>Study Door (${doorTypeDisplay}):</strong> +0 points (no sound isolation)</div>`;
+            }
+            
+            // Show quietness score
+            const quietnessScore = quietnessComponent?.raw_value || 0;
+            html += `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #dee2e6;"><strong>Work Area Quietness Score:</strong> ${quietnessScore.toFixed(1)}/10</div>`;
+            html += `<div style="font-size: 0.85em; color: #666; margin-top: 4px;">Note: Also factors in manual quietness rating and floor level</div>`;
+            html += '</div>';
+            
+            breakdownEl.innerHTML = html;
+        }
+
         function enableEditing() {
             // Hide view mode, show edit mode
             document.querySelectorAll('.field-value').forEach(el => el.style.display = 'none');
             document.querySelectorAll('.edit-field').forEach(el => el.style.display = 'inline-block');
+            
+            // Show help text for WFH fields
+            document.querySelectorAll('.field-help').forEach(el => el.style.display = 'block');
             
             document.getElementById('enableEditBtn').style.display = 'none';
             document.getElementById('editControls').style.display = 'flex';
@@ -2683,6 +3718,19 @@
                 visitor_ease: parseInt(document.getElementById('editParkingVisitorEase').value) || null,
                 gym_quality: parseFloat(document.getElementById('editGymQuality').value) || null
             };
+            
+            // Handle double-pane windows checkbox
+            const doublePaneCheckbox = document.getElementById('editWfhWindowsCheckbox');
+            if (doublePaneCheckbox) {
+                edits.double_pane_windows = doublePaneCheckbox.checked;
+            }
+            
+            // Handle study door type multi-select
+            const studyDoorTypes = Array.from(document.querySelectorAll('input[name="edit_study_door_type"]:checked'))
+                .map(cb => cb.value);
+            if (studyDoorTypes.length > 0) {
+                edits.study_door_type = studyDoorTypes.join('\n');
+            }
             
             // Remove null values
             Object.keys(edits).forEach(key => {
@@ -2724,6 +3772,9 @@
             // Show view mode, hide edit mode
             document.querySelectorAll('.field-value').forEach(el => el.style.display = 'inline');
             document.querySelectorAll('.edit-field').forEach(el => el.style.display = 'none');
+            
+            // Hide help text for WFH fields
+            document.querySelectorAll('.field-help').forEach(el => el.style.display = 'none');
             
             document.getElementById('enableEditBtn').style.display = 'inline-block';
             document.getElementById('editControls').style.display = 'none';

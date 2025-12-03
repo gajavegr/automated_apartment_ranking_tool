@@ -17,6 +17,7 @@ from google.oauth2.service_account import Credentials
 from gspread.exceptions import WorksheetNotFound, SpreadsheetNotFound
 
 import config
+from utils.rate_limiter import get_rate_limiter
 
 
 class GoogleSheetsClient:
@@ -62,7 +63,27 @@ class GoogleSheetsClient:
             scopes=self.SCOPES
         )
         self.client = gspread.authorize(creds)
-        self.spreadsheet = self.client.open_by_key(self.sheet_id)
+        
+        # Open spreadsheet with retry logic
+        max_retries = 3
+        retry_delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                self.spreadsheet = self.client.open_by_key(self.sheet_id)
+                break  # Success!
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"⚠️  Google Sheets connection attempt {attempt + 1} failed, retrying in {retry_delay}s...")
+                    import time
+                    time.sleep(retry_delay)
+                else:
+                    # Final attempt failed
+                    raise ConnectionError(
+                        f"Failed to connect to Google Sheets API after {max_retries} attempts. "
+                        "Please check your internet connection and try again. "
+                        f"Error: {str(e)}"
+                    ) from e
     
     def _get_or_create_worksheet(self, name: str, rows: int = 1000, cols: int = 50) -> gspread.Worksheet:
         """Get worksheet by name or create if doesn't exist"""
@@ -206,6 +227,10 @@ class GoogleSheetsClient:
         Returns:
             List of apartment records as dictionaries
         """
+        # Rate limit: Google Sheets read
+        rate_limiter = get_rate_limiter()
+        rate_limiter.wait_if_needed('google_sheets_read')
+        
         sheet = self._get_or_create_worksheet(self.MAIN_SHEET_NAME)
         records = sheet.get_all_records()
         return records
@@ -316,12 +341,15 @@ class GoogleSheetsClient:
             row_number: Row number (1-indexed, where 1 is header)
             data: Dictionary with analysis results
         """
+        # Rate limit: Google Sheets write
+        rate_limiter = get_rate_limiter()
+        rate_limiter.wait_if_needed('google_sheets_write')
+        
         sheet = self._get_or_create_worksheet(self.MAIN_SHEET_NAME)
         
         # Build row data in correct column order
         row_data = []
         column_mapping = {
-            "address": config.SHEET_COLUMNS["address"],
             "price": config.SHEET_COLUMNS["price"],
             "bedrooms": config.SHEET_COLUMNS["bedrooms"],
             "bathrooms": config.SHEET_COLUMNS["bathrooms"],
@@ -388,6 +416,8 @@ class GoogleSheetsClient:
                     col_letter = col_index_to_letter(col_index)
                     value = data[data_key]
                     
+                    if value is None:
+                        value = ""
                     # Serialize JSON fields
                     if data_key in ['commute_details_json', 'crime_details_json'] and isinstance(value, dict):
                         import json
@@ -404,6 +434,48 @@ class GoogleSheetsClient:
         if updates:
             update_list = [{'range': cell, 'values': [[value]]} for cell, value in updates.items()]
             sheet.batch_update(update_list)
+    
+    def clear_wfh_fields(self, row_number: int) -> None:
+        """
+        Clear WFH-related columns (so blanks show until photo analyzer/manual entry fills them).
+        """
+        sheet = self._get_or_create_worksheet(self.MAIN_SHEET_NAME)
+        headers = sheet.row_values(1)
+        
+        wfh_columns = [
+            config.SHEET_COLUMNS.get("natural_light"),
+            config.SHEET_COLUMNS.get("desk_space_quality"),
+            config.SHEET_COLUMNS.get("kitchen_quality"),
+            config.SHEET_COLUMNS.get("view_quality"),
+            config.SHEET_COLUMNS.get("floor_level"),
+            config.SHEET_COLUMNS.get("double_pane_windows"),
+            config.SHEET_COLUMNS.get("study_door_type"),
+            config.SHEET_COLUMNS.get("street_noise_level"),
+            config.SHEET_COLUMNS.get("quietness_score"),
+            config.SHEET_COLUMNS.get("wfh_quality_score"),
+        ]
+        
+        def col_index_to_letter(col_index):
+            result = ""
+            while col_index >= 0:
+                result = chr(65 + (col_index % 26)) + result
+                col_index = col_index // 26 - 1
+            return result
+        
+        updates = []
+        for column_name in wfh_columns:
+            if not column_name:
+                continue
+            try:
+                col_index = headers.index(column_name)
+            except ValueError:
+                print(f"Warning: Column {column_name} not found when clearing WFH fields")
+                continue
+            col_letter = col_index_to_letter(col_index)
+            updates.append({'range': f'{col_letter}{row_number}', 'values': [[""]]})
+        
+        if updates:
+            sheet.batch_update(updates)
     
     def update_scatter_plot_data(self) -> None:
         """Update scatter plot sheet with latest data from main sheet"""

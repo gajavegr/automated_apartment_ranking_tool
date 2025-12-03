@@ -95,15 +95,22 @@ class ApartmentAnalyzer:
             # If photos are needed, they can be manually uploaded and analyzed separately
             print(f"\n[2/3] Skipping photo analysis (manual entry mode)")
             
-            # Set default values for vision-based fields
-            result['natural_light'] = 5.0
-            result['desk_space_quality'] = 5.0
-            result['kitchen_quality'] = 5.0
-            result['view_quality'] = 5.0
-            result['floor_level'] = 'mid'
-            result['double_pane_windows'] = False
-            result['study_door_type'] = 'none'
-            result['street_noise_level'] = 5.0
+            # Preserve manually entered WFH/visual fields - DO NOT overwrite with None!
+            # Only set to None if they don't already exist in the row data
+            result['natural_light'] = row_data.get(config.SHEET_COLUMNS.get("natural_light"))
+            result['desk_space_quality'] = row_data.get(config.SHEET_COLUMNS.get("desk_space_quality"))
+            result['kitchen_quality'] = row_data.get(config.SHEET_COLUMNS.get("kitchen_quality"))
+            result['view_quality'] = row_data.get(config.SHEET_COLUMNS.get("view_quality"))
+            result['floor_level'] = row_data.get(config.SHEET_COLUMNS.get("floor_level"))
+            result['double_pane_windows'] = row_data.get(config.SHEET_COLUMNS.get("double_pane_windows"))
+            result['study_door_type'] = row_data.get(config.SHEET_COLUMNS.get("study_door_type"))
+            result['street_noise_level'] = row_data.get(config.SHEET_COLUMNS.get("street_noise_level"))
+            
+            # Also preserve parking ease fields - these are manually entered
+            if config.SHEET_COLUMNS.get("visitor_parking_ease") in row_data:
+                result['visitor_parking_ease'] = row_data.get(config.SHEET_COLUMNS.get("visitor_parking_ease"))
+            if config.SHEET_COLUMNS.get("street_parking_ease") in row_data:
+                result['street_parking_ease'] = row_data.get(config.SHEET_COLUMNS.get("street_parking_ease"))
             
             # Analyze location
             print(f"\n[3/3] Analyzing location...")
@@ -215,8 +222,14 @@ class ApartmentAnalyzer:
             
             # Extract component scores for sheet
             result['combined_safety'] = (result['manual_safety_rating'] + result.get('safety_score_opendata', 5.0)) / 2.0
-            result['wfh_quality_score'] = scorecard.components['wfh_quality'].raw_value
-            result['quietness_score'] = scorecard.components['quietness'].raw_value
+            wfh_component = scorecard.components['wfh_quality']
+            quietness_component = scorecard.components['quietness']
+            result['wfh_quality_score'] = wfh_component.raw_value
+            result['quietness_score'] = quietness_component.raw_value
+            if not (wfh_component.details or {}).get('inputs_available', True):
+                result['wfh_quality_score'] = None
+            if not (quietness_component.details or {}).get('inputs_available', True):
+                result['quietness_score'] = None
             result['location_vibe_score'] = scorecard.components['location_vibe'].raw_value
             result['parking_score'] = scorecard.components['parking'].raw_value
             

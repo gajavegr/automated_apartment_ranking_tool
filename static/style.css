@@ -806,7 +806,7 @@ input[type="range"]::-moz-range-thumb {
     flex: 0 0 60%;
     width: auto;
     opacity: 1;
-    padding: 20px;
+    padding: 0 20px 20px 20px;
     overflow-y: auto;
 }
 
@@ -839,16 +839,24 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .detail-panel-header {
-    position: relative;
-    padding-bottom: 15px;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    padding: 12px 0 15px 0;
     border-bottom: 2px solid #0066cc;
     margin-bottom: 20px;
+    background: #fff;
 }
 
 .detail-panel-header h3 {
     margin: 0 0 5px 0;
     color: #1d1d1f;
     font-size: 20px;
+}
+
+.detail-panel-header .detail-address-text {
+    color: #1d1d1f;
+    font-weight: 500;
 }
 
 .close-panel-btn {
@@ -1565,4 +1573,112 @@ input[type="range"]::-moz-range-thumb {
     }
 }
 
+/* Comparison Table Styles */
+.comparison-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9em;
+    background: white;
+    display: block;
+}
+
+.comparison-table thead {
+    display: block;
+    width: 100%;
+    position: sticky;
+    top: 0;  /* Sticks to top of viewport when scrolling page */
+    z-index: 100;
+    background: white;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);  /* Adds depth when sticky */
+}
+
+.comparison-table thead tr {
+    display: table;
+    width: 100%;
+    table-layout: fixed;
+}
+
+.comparison-table tbody {
+    display: block;
+    width: 100%;
+    /* No max-height or overflow - scrolls with the page naturally */
+}
+
+.comparison-table tbody tr {
+    display: table;
+    width: 100%;
+    table-layout: fixed;
+}
+
+.comparison-header {
+    background: #f5f5f7;
+    padding: 12px 8px;
+    font-weight: 600;
+    color: #1d1d1f;
+    border: 1px solid #e0e0e0;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Ensure first column (Attribute) header also sticks horizontally */
+.comparison-header:first-child {
+    background: #f8f9fa;
+    min-width: 180px;
+    max-width: 180px;
+}
+
+.comparison-header.apartment-col {
+    min-width: 150px;
+}
+
+.comparison-header.apartment-col:hover {
+    background: #e8e8ea;
+}
+
+.comparison-label {
+    background: #fafafa;
+    padding: 10px 12px;
+    font-weight: 500;
+    color: #333;
+    border: 1px solid #e0e0e0;
+    min-width: 180px;
+    max-width: 180px;
+}
+
+.comparison-cell {
+    padding: 10px 8px;
+    text-align: center;
+    border: 1px solid #e0e0e0;
+    color: #555;
+    min-width: 150px;
+}
+
+.comparison-cell.best-value {
+    background: #e8f5e9;
+    font-weight: 600;
+    color: #2e7d32;
+}
+
+.category-row {
+    position: sticky;
+    top: 62px;  /* Sticks just below the main header (header height ~62px) */
+    z-index: 90;  /* Below main header but above content */
+}
+
+.category-row td {
+    background: #e3f2fd !important;
+    padding: 8px 12px;
+    font-weight: 600;
+    color: #1976d2;
+    border: 1px solid #e0e0e0;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);  /* Adds depth when sticky */
+}
+
+.comparison-table tr:hover .comparison-cell {
+    background: #f9f9f9;
+}
+
+.comparison-table tr:hover .comparison-cell.best-value {
+    background: #c8e6c9;
+}
 

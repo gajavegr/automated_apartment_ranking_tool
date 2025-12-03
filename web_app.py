@@ -28,11 +28,19 @@ def init_clients():
     """Initialize Google Sheets and Location Analyzer clients"""
     global sheets_client, location_analyzer
     try:
+        print("  Initializing Google Sheets client...")
         sheets_client = GoogleSheetsClient()
+        print("  ✓ Google Sheets client ready")
+        
+        print("  Initializing Location Analyzer...")
         location_analyzer = LocationAnalyzer()
+        print("  ✓ Location Analyzer ready")
+        
         return True
     except Exception as e:
         print(f"Error initializing clients: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -165,13 +173,13 @@ def _normalize_sheet_row_for_scoring(row):
         combined_safety = (data['manual_safety_rating'] + data['safety_score_opendata']) / 2.0
     data['combined_safety'] = combined_safety
     
-    data['natural_light'] = _safe_float(_sheet_value(row, "natural_light"), 5.0)
-    data['desk_space_quality'] = _safe_float(_sheet_value(row, "desk_space_quality"), 5.0)
-    data['kitchen_quality'] = _safe_float(_sheet_value(row, "kitchen_quality"), 5.0)
-    data['double_pane_windows'] = _sheet_bool(_sheet_value(row, "double_pane_windows"), False)
-    data['study_door_type'] = _sheet_value(row, "study_door_type", default="none") or "none"
-    data['street_noise_level'] = _safe_float(_get_value_from_row(row, "Street Noise Level", default=5.0), 5.0)
-    data['floor_level'] = (_sheet_value(row, "floor_level", default="ground") or "ground").lower()
+    data['natural_light'] = _safe_float(_sheet_value(row, "natural_light"), None)
+    data['desk_space_quality'] = _safe_float(_sheet_value(row, "desk_space_quality"), None)
+    data['kitchen_quality'] = _safe_float(_sheet_value(row, "kitchen_quality"), None)
+    data['double_pane_windows'] = _sheet_bool(_sheet_value(row, "double_pane_windows"), None)
+    data['study_door_type'] = (_sheet_value(row, "study_door_type", default=None) or None)
+    data['street_noise_level'] = _safe_float(_get_value_from_row(row, "Street Noise Level", default=None), None)
+    data['floor_level'] = (_sheet_value(row, "floor_level", default=None) or None)
     
     data['restaurants_nearby'] = _safe_int(_sheet_value(row, "restaurants_nearby"), 0)
     data['cafes_nearby'] = _safe_int(_sheet_value(row, "cafes_nearby"), 0)
@@ -190,6 +198,7 @@ def _normalize_sheet_row_for_scoring(row):
     data['elevation_to_gym'] = _safe_float(_sheet_value(row, "elevation_to_gym"), None)
     data['gym_within_10min'] = _sheet_bool(_sheet_value(row, "gym_within_10min"), False)
     data['gym_quality'] = _safe_float(_sheet_value(row, "gym_quality"), 0.0)
+    data['office_gym_only'] = _sheet_bool(_sheet_value(row, "office_gym_only"), False)
     data['rent_control'] = _sheet_bool(_sheet_value(row, "rent_control"), False)
     data['laundry_type'] = _sheet_value(row, "laundry_type", default="none") or "none"
     data['parking_cost'] = _safe_float(_sheet_value(row, "parking_cost"), 0.0)
@@ -326,10 +335,15 @@ def get_apartment_detailed(row_number):
                     weight = scorecard.config_components.get(component_name, {}).get('weight', 0.0)
                     raw_score = round(component.raw_value, 2)
                     weighted_contribution = round(component.raw_value * weight * 10.0, 2)
+                    adjusted_raw_score = raw_score
+                    adjusted_weighted = weighted_contribution
+                    if component_name == 'wfh_quality' and not (component.details or {}).get('inputs_available', True):
+                        adjusted_raw_score = None
+                        adjusted_weighted = 0.0
                     component_scores[component_name] = {
-                        'raw_score': raw_score,
+                        'raw_score': adjusted_raw_score,
                         'weight': weight,
-                        'weighted_contribution': weighted_contribution,
+                        'weighted_contribution': adjusted_weighted,
                         'label': COMPONENT_LABELS.get(component_name, component_name.replace('_', ' ').title()),
                         'details': getattr(component, 'details', {}),
                     }
@@ -338,9 +352,9 @@ def get_apartment_detailed(row_number):
                         component_contributions.append({
                             'name': component_name,
                             'label': component_scores[component_name]['label'],
-                            'raw_score': raw_score,
+                            'raw_score': adjusted_raw_score,
                             'weight': weight,
-                            'weighted_contribution': max(0.0, weighted_contribution),
+                            'weighted_contribution': max(0.0, adjusted_weighted),
                             'max_contribution': round(10.0 * weight * 10.0, 2),
                         })
             except Exception as e:
@@ -428,6 +442,8 @@ def get_gyms():
     try:
         data = request.get_json()
         address = data.get('address')
+        radius_miles = data.get('radius_miles')  # Optional custom radius
+        clear_cache = data.get('clear_cache', False)  # Optional cache clear
         
         if not address:
             return jsonify({'error': 'Address required'}), 400
@@ -438,8 +454,18 @@ def get_gyms():
         if not coords:
             return jsonify({'error': 'Could not geocode address'}), 400
         
-        # Get nearby gyms
-        gyms = location_analyzer.get_nearby_gyms_detailed(coords[0], coords[1], limit=20)
+        # Clear cache if requested
+        if clear_cache:
+            print(f"  Clearing gym cache for {address}")
+            cleared_count = location_analyzer.cache.clear_all()
+            print(f"  Cleared {cleared_count} cache entries")
+        
+        # Get nearby gyms with optional custom radius
+        gyms = location_analyzer.get_nearby_gyms_detailed(
+            coords[0], coords[1], limit=20, radius_miles=radius_miles
+        )
+        
+        print(f"  API returned {len(gyms)} gyms for display")
         
         # Get detailed info (reviews) for each gym
         for gym in gyms:
@@ -457,10 +483,15 @@ def get_gyms():
         
         return jsonify({
             'gyms': gyms,
+            'radius_used': radius_miles,  # Return the radius used
+            'total_found': len(gyms),  # How many gyms were found
             'success': True
         })
     
     except Exception as e:
+        print(f"Error in get_gyms: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -527,10 +558,11 @@ def get_hilliness():
 
 @app.route('/get_parking_ease', methods=['POST'])
 def get_parking_ease():
-    """Get estimated visitor parking ease for an address"""
+    """Get estimated visitor parking ease for an address (includes SFMTA garages)"""
     try:
         data = request.get_json()
         address = data.get('address')
+        parking_type = data.get('type', 'visitor')  # 'visitor' or 'street'
         
         if not address:
             return jsonify({'error': 'Address required'}), 400
@@ -541,12 +573,16 @@ def get_parking_ease():
         if not coords:
             return jsonify({'error': 'Could not geocode address'}), 400
         
-        # Estimate parking ease
-        parking_info = location_analyzer.estimate_parking_ease(coords[0], coords[1], address)
+        # Estimate parking ease based on type
+        if parking_type == 'street':
+            parking_info = location_analyzer.estimate_street_parking_ease(coords[0], coords[1], address)
+        else:
+            parking_info = location_analyzer.estimate_visitor_parking_ease(coords[0], coords[1], address)
         
         return jsonify({
-            'parking_ease': parking_info.get('parking_ease', 3),
+            'parking_ease': parking_info.get('parking_ease', 5),
             'reasoning': parking_info.get('reasoning', ''),
+            'public_garages': parking_info.get('public_garages', []),
             'success': True
         })
     
@@ -626,6 +662,7 @@ def add_apartment():
         parking_enclosures = request.form.getlist('parking_enclosure')
         laundry_types = request.form.getlist('laundry_type')
         neighborhoods = request.form.getlist('neighborhoods')
+        study_door_types = request.form.getlist('study_door_type')
         
         # Build tour questions list
         tour_questions = []
@@ -635,6 +672,8 @@ def add_apartment():
             tour_questions.append('Parking enclosure')
         if request.form.get('laundry_type_tour_question'):
             tour_questions.append('Laundry type')
+        if request.form.get('wfh_tour_question'):
+            tour_questions.append('WFH details')
         
         # Extract form data
         data = {
@@ -652,6 +691,42 @@ def add_apartment():
             'visitor_parking_ease': request.form.get('visitor_parking_ease', ''),
             'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
+        
+        # WFH fields
+        try:
+            natural_light = request.form.get('natural_light', '').strip()
+            if natural_light:
+                data['natural_light'] = float(natural_light)
+        except ValueError:
+            pass
+        
+        try:
+            desk_space = request.form.get('desk_space_quality', '').strip()
+            if desk_space:
+                data['desk_space_quality'] = float(desk_space)
+        except ValueError:
+            pass
+        
+        try:
+            quietness = request.form.get('work_area_quietness', '').strip()
+            if quietness:
+                data['work_area_quietness'] = float(quietness)
+        except ValueError:
+            pass
+        
+        try:
+            kitchen = request.form.get('kitchen_quality', '').strip()
+            if kitchen:
+                data['kitchen_quality'] = float(kitchen)
+        except ValueError:
+            pass
+        
+        # Double pane windows checkbox
+        data['double_pane_windows'] = request.form.get('double_pane_windows') == 'true'
+        
+        # Study door type multi-select
+        if study_door_types:
+            data['study_door_type'] = '\n'.join(study_door_types)
         
         # Parking cost
         try:
@@ -707,6 +782,7 @@ def add_apartment():
         
         # Handle selected gyms
         selected_gym_ids = request.form.getlist('selected_gyms[]')
+        office_gym_only = request.form.get('office_gym_only') == 'on'  # Checkbox field
         
         if selected_gym_ids:
             # Get gym details from hidden fields and add to approved gyms
@@ -733,6 +809,9 @@ def add_apartment():
             # Store selected gym names in apartment data
             gym_names = [request.form.get(f'gym_name_{gid}') for gid in selected_gym_ids]
             data['selected_gyms'] = ', '.join(gym_names)
+        
+        # Store office gym only flag
+        data['office_gym_only'] = office_gym_only
         
         # Validate required fields
         if not data['address']:
@@ -807,8 +886,16 @@ def add_apartment():
             'tour_questions': config.SHEET_COLUMNS['tour_questions'],
             'hilliness_manual_override': config.SHEET_COLUMNS['hilliness_manual_override'],
             'selected_gyms': config.SHEET_COLUMNS['selected_gyms'],
+            'office_gym_only': config.SHEET_COLUMNS['office_gym_only'],
             'year_built': config.SHEET_COLUMNS.get('year_built', 'Year Built'),
             'last_updated': config.SHEET_COLUMNS['last_updated'],
+            # WFH fields
+            'natural_light': config.SHEET_COLUMNS.get('natural_light', 'Natural Light'),
+            'desk_space_quality': config.SHEET_COLUMNS.get('desk_space_quality', 'Desk Space Quality'),
+            'work_area_quietness': config.SHEET_COLUMNS.get('quietness_score', 'Quietness Score'),
+            'kitchen_quality': config.SHEET_COLUMNS.get('kitchen_quality', 'Kitchen Quality'),
+            'double_pane_windows': config.SHEET_COLUMNS.get('double_pane_windows', 'Double Pane Windows'),
+            'study_door_type': config.SHEET_COLUMNS.get('study_door_type', 'Study Door Type'),
         }
         
         for data_key, column_name in column_mapping.items():
@@ -944,6 +1031,8 @@ def save_apartment_edits(row_number):
             'desk_space': 'desk_space_quality',
             'quietness': 'quietness_score',
             'kitchen': 'kitchen_quality',
+            'double_pane_windows': 'double_pane_windows',
+            'study_door_type': 'study_door_type',
             'restaurants': 'restaurants_nearby',
             'cafes': 'cafes_nearby',
             'parks': 'parks_nearby',
@@ -956,31 +1045,54 @@ def save_apartment_edits(row_number):
         for edit_key, new_value in edits.items():
             if edit_key in edit_field_mapping:
                 data_key = edit_field_mapping[edit_key]
-                old_value = apartment.get(config.SHEET_COLUMNS.get(data_key, data_key))
+                sheet_column = config.SHEET_COLUMNS.get(data_key, data_key)
+                old_value = apartment.get(sheet_column)
                 
                 if old_value != new_value:
-                    apartment[config.SHEET_COLUMNS.get(data_key, data_key)] = new_value
+                    # Update with sheet column name (for display)
+                    apartment[sheet_column] = new_value
+                    # Also update with data key (for write_apartment_data)
+                    apartment[data_key] = new_value
                     changes.append({
                         'field': data_key,
                         'old_value': old_value,
                         'new_value': new_value
                     })
         
+        # Convert apartment data to format expected by build_scorecard
+        # build_scorecard expects lowercase underscore keys, but apartment has sheet column names
+        apartment_for_scoring = {}
+        for data_key, sheet_column in config.SHEET_COLUMNS.items():
+            if sheet_column in apartment:
+                apartment_for_scoring[data_key] = apartment[sheet_column]
+        
+        # Add the edited values using their data keys
+        for edit_key, new_value in edits.items():
+            if edit_key in edit_field_mapping:
+                data_key = edit_field_mapping[edit_key]
+                apartment_for_scoring[data_key] = new_value
+        
         # Recalculate weighted score with edited values
         try:
-            scorecard = build_scorecard(apartment)
+            scorecard = build_scorecard(apartment_for_scoring)
             new_score = scorecard.calculate_total()
             apartment[config.SHEET_COLUMNS['weighted_score']] = round(new_score, 2)
+            apartment_for_scoring['weighted_score'] = round(new_score, 2)
             apartment[config.SHEET_COLUMNS['last_updated']] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            apartment_for_scoring['last_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         except Exception as e:
             print(f"Error recalculating score: {e}")
+            import traceback
+            traceback.print_exc()
             return jsonify({'error': f'Error recalculating score: {str(e)}'}), 500
         
-        # Write updated data back to sheet
+        # Write updated data back to sheet using the properly formatted data
         try:
-            sheets_client.write_apartment_data(row_number, apartment)
+            sheets_client.write_apartment_data(row_number, apartment_for_scoring)
         except Exception as e:
             print(f"Error writing to sheet: {e}")
+            import traceback
+            traceback.print_exc()
             return jsonify({'error': f'Error writing to sheet: {str(e)}'}), 500
         
         # Log the edits
@@ -994,6 +1106,8 @@ def save_apartment_edits(row_number):
                 )
             except Exception as e:
                 print(f"Warning: Could not log edit: {e}")
+        
+        print(f"Saved edits successfully. Old score: {original_score}, New score: {new_score}")
         
         return jsonify({
             'success': True,
@@ -1194,12 +1308,57 @@ def get_analysis_data():
             weighted_score = r.get(config.SHEET_COLUMNS['weighted_score'])
             if weighted_score:
                 try:
+                    # Check data completeness
+                    # Core required fields for accurate scoring
+                    required_fields = [
+                        'parking_type',
+                        'parking_enclosure',
+                        'laundry_type',
+                        'manual_safety',
+                        'visitor_parking_ease',
+                        'street_parking_ease',
+                        # WFH Quality fields
+                        'natural_light',
+                        'desk_space_quality',
+                        'work_area_quietness',
+                        'kitchen_quality',
+                        'double_pane_windows',
+                        'study_door_type',
+                    ]
+                    
+                    missing_fields = []
+                    for field in required_fields:
+                        col_name = config.SHEET_COLUMNS.get(field)
+                        if col_name:
+                            value = r.get(col_name)
+                            # Check if value is empty, None, or just whitespace
+                            if not value or (isinstance(value, str) and not value.strip()):
+                                missing_fields.append(field.replace('_', ' ').title())
+                    
+                    # Check if multiple options are selected (uncertainty)
+                    has_uncertainty = False
+                    score_min = r.get(config.SHEET_COLUMNS['score_min'])
+                    score_max = r.get(config.SHEET_COLUMNS['score_max'])
+                    if score_min and score_max:
+                        try:
+                            if abs(float(score_max) - float(score_min)) > 0.5:  # Significant range
+                                has_uncertainty = True
+                        except:
+                            pass
+                    
+                    # Determine data quality
+                    is_complete = len(missing_fields) == 0
+                    
                     scatter_data.append({
                         'address': r.get(config.SHEET_COLUMNS['address'], 'Unknown'),
                         'price': float(r.get(config.SHEET_COLUMNS['price'], 0) or 0),
                         'score': float(weighted_score),
                         'score_min': float(r.get(config.SHEET_COLUMNS['score_min'], weighted_score) or weighted_score),
                         'score_max': float(r.get(config.SHEET_COLUMNS['score_max'], weighted_score) or weighted_score),
+                        'tour_questions': r.get(config.SHEET_COLUMNS['tour_questions'], ''),
+                        'is_complete': is_complete,
+                        'has_uncertainty': has_uncertainty,
+                        'missing_fields': missing_fields,
                         'row': i + 2
                     })
                 except (ValueError, TypeError):
@@ -1208,13 +1367,51 @@ def get_analysis_data():
         # Sort by score descending
         ranked = sorted(scatter_data, key=lambda x: x['score'], reverse=True)
         
-        # Get criteria matrix data (simplified for now)
-        criteria_matrix = {}
+        # Build comparison matrix with key attributes for each apartment
+        comparison_data = []
+        for apt_data in ranked:
+            # Get the full record for this apartment
+            record_idx = apt_data['row'] - 2
+            if record_idx < len(records):
+                r = records[record_idx]
+                
+                comparison_data.append({
+                    'address': apt_data['address'],
+                    'row': apt_data['row'],
+                    'price': apt_data['price'],
+                    'score': apt_data['score'],
+                    'score_min': apt_data['score_min'],
+                    'score_max': apt_data['score_max'],
+                    'value_ratio': round(apt_data['score'] / (apt_data['price'] / 1000), 2) if apt_data['price'] > 0 else 0,  # Score per $1000
+                    'is_complete': apt_data['is_complete'],
+                    
+                    # Component scores
+                    'commute_score': r.get(config.SHEET_COLUMNS.get('commute_score')),
+                    'safety_score': r.get(config.SHEET_COLUMNS.get('combined_safety')),
+                    'wfh_score': r.get(config.SHEET_COLUMNS.get('wfh_quality_score')),
+                    'location_vibe_score': r.get(config.SHEET_COLUMNS.get('location_vibe_score')),
+                    'parking_score': r.get(config.SHEET_COLUMNS.get('parking_score')),
+                    'gym_score': r.get(config.SHEET_COLUMNS.get('gym_score')),
+                    'laundry_score': r.get(config.SHEET_COLUMNS.get('laundry_score')),
+                    
+                    # Key attributes
+                    'bedrooms': r.get(config.SHEET_COLUMNS.get('bedrooms')),
+                    'bathrooms': r.get(config.SHEET_COLUMNS.get('bathrooms')),
+                    'sqft': r.get(config.SHEET_COLUMNS.get('sqft')),
+                    'commute_you': r.get(config.SHEET_COLUMNS.get('commute_time_you')),
+                    'commute_partner': r.get(config.SHEET_COLUMNS.get('commute_time_partner')),
+                    'natural_light': r.get(config.SHEET_COLUMNS.get('natural_light')),
+                    'desk_space': r.get(config.SHEET_COLUMNS.get('desk_space_quality')),
+                    'kitchen_quality': r.get(config.SHEET_COLUMNS.get('kitchen_quality')),
+                    'parking_type': r.get(config.SHEET_COLUMNS.get('parking_type')),
+                    'laundry_type': r.get(config.SHEET_COLUMNS.get('laundry_type')),
+                    'rent_control': r.get(config.SHEET_COLUMNS.get('rent_control')),
+                })
         
         return jsonify({
             'scatter': scatter_data,
             'ranked': ranked,
-            'criteria_matrix': criteria_matrix,
+            'comparison': comparison_data,
             'success': True
         })
     except Exception as e:
@@ -1377,6 +1574,16 @@ def admin_sync_schema():
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e), 'success': False}), 500
+
+
+@app.route('/clear_wfh/<int:row_number>', methods=['POST'])
+def clear_wfh(row_number):
+    """Clear WFH-related fields for a specific apartment row."""
+    try:
+        sheets_client.clear_wfh_fields(row_number)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 def open_browser():

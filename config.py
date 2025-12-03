@@ -86,6 +86,7 @@ SHEET_COLUMNS = {
     "view_quality": "View Quality",
     "gym_within_10min": "Gym Within 10min",
     "gym_quality": "Gym Quality",
+    "office_gym_only": "Office Gym Only",  # New field for office-only option
     "rent_control": "Rent Control Protected",
     "year_built": "Year Built",
     "neighborhood": "Neighborhood",
@@ -153,12 +154,12 @@ SCORE_COMPONENTS = {
     "quietness": {
         "weight": 0.0,  # Not a top-level category; input to wfh_quality
         "factors": {
-            "double_pane_windows": 2.0,
+            "double_pane_windows": 2.0,  # +2 points for double pane (noise reduction)
             "door_types": {
-                "hinged": 2.0,
-                "sliding": 1.5,
-                "open": 0.0,
-                "none": 0.0,
+                "solid_door": 2.0,  # Best isolation for studying
+                "sliding_door": 1.5,  # Good but not as sound-proof
+                "open": 0.0,  # No door means no isolation
+                "none": 0.0,  # No dedicated work space
             },
             "floor_bonuses": {
                 "ground": 0.0,
@@ -247,6 +248,7 @@ SCORE_COMPONENTS = {
             "has_nearby_good_gym": 10,  # Within 10min and quality >= 7
             "has_nearby_ok_gym": 6,     # Within 10min but quality < 7
             "no_nearby_gym": 0,
+            "office_gym_only": -5,      # Only office gym available (inconvenient)
         }
     },
     "rent_control": {
@@ -320,7 +322,7 @@ GOOGLE_MAPS_TRAFFIC_MODEL = "pessimistic"  # Worst-case traffic
 
 # Places API Settings
 PLACES_SEARCH_RADIUS = 805  # meters (0.5 mile)
-GYM_SEARCH_RADIUS = 805  # meters (0.5 mile)
+GYM_SEARCH_RADIUS = 3219  # meters (2 miles) - Increased to find more gym options
 GYM_MIN_RATING = 4.0
 GYM_KEYWORDS = ["gym", "fitness", "weights", "squat rack"]
 

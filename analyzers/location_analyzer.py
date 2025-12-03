@@ -15,6 +15,7 @@ import time
 
 import config
 from utils.cache import get_cache
+from utils.rate_limiter import get_rate_limiter
 
 
 class LocationAnalyzer:
@@ -32,6 +33,23 @@ class LocationAnalyzer:
             raise ValueError("GOOGLE_MAPS_API_KEY not set. Please set it in .env file.")
         
         self.cache = get_cache()
+        self.rate_limiter = get_rate_limiter()
+    
+    def _make_places_api_request(self, url: str, params: dict, timeout: int = 10) -> dict:
+        """
+        Make a rate-limited request to Google Places API
+        
+        Args:
+            url: API endpoint URL
+            params: Request parameters
+            timeout: Request timeout in seconds
+            
+        Returns:
+            JSON response data
+        """
+        self.rate_limiter.wait_if_needed('google_places')
+        response = requests.get(url, params=params, timeout=timeout)
+        return response.json()
     
     def analyze_location(self, address: str) -> Dict[str, Any]:
         """
@@ -162,6 +180,10 @@ class LocationAnalyzer:
         cached = self.cache.get(cache_key)
         if cached:
             return cached
+        
+        # Rate limit: Google Maps Geocoding API
+        rate_limiter = get_rate_limiter()
+        rate_limiter.wait_if_needed('google_maps_geocode')
         
         try:
             url = "https://maps.googleapis.com/maps/api/geocode/json"
@@ -445,6 +467,9 @@ class LocationAnalyzer:
                 params['alternatives'] = 'true'
         elif mode == 'transit':
             params['transit_routing_preference'] = 'less_walking'
+        
+        # Rate limit: Google Directions API
+        self.rate_limiter.wait_if_needed('google_directions')
         
         url = "https://maps.googleapis.com/maps/api/directions/json"
         response = requests.get(url, params=params, timeout=15)
@@ -843,8 +868,7 @@ class LocationAnalyzer:
                 'key': self.api_key,
             }
             
-            response = requests.get(url, params=params, timeout=10)
-            data = response.json()
+            data = self._make_places_api_request(url, params, timeout=10)
             
             if data['status'] == 'OK':
                 gyms = data.get('results', [])
@@ -892,8 +916,7 @@ class LocationAnalyzer:
                 'key': self.api_key,
             }
             
-            response = requests.get(url, params=params, timeout=10)
-            data = response.json()
+            data = self._make_places_api_request(url, params, timeout=10)
             
             if data['status'] == 'OK':
                 return len(data.get('results', []))
@@ -935,6 +958,9 @@ class LocationAnalyzer:
         cached = self.cache.get(cache_key)
         if cached:
             return cached
+        
+        # Rate limit: Google Elevation API
+        self.rate_limiter.wait_if_needed('google_elevation')
         
         try:
             url = "https://maps.googleapis.com/maps/api/elevation/json"
@@ -1115,7 +1141,7 @@ class LocationAnalyzer:
         
         return 0.0  # Flat area
     
-    def get_nearby_gyms_detailed(self, lat: float, lng: float, limit: int = 5) -> List[Dict[str, Any]]:
+    def get_nearby_gyms_detailed(self, lat: float, lng: float, limit: int = 5, radius_miles: float = None) -> List[Dict[str, Any]]:
         """
         Get detailed information about nearby gyms for user selection
         
@@ -1123,65 +1149,188 @@ class LocationAnalyzer:
             lat: Latitude
             lng: Longitude
             limit: Maximum number of gyms to return
+            radius_miles: Search radius in miles (overrides default if provided)
         
         Returns:
             List of gym dictionaries with full details for user selection
         """
-        cache_key = f"gyms_detailed_{lat}_{lng}_{limit}"
+        # Use custom radius if provided, otherwise use config default
+        search_radius_meters = int(radius_miles * 1609.34) if radius_miles else config.GYM_SEARCH_RADIUS
+        
+        cache_key = f"gyms_detailed_{lat}_{lng}_{limit}_{search_radius_meters}"
         cached = self.cache.get(cache_key)
         if cached:
             return cached
         
-        result = []
+        all_gyms = []
+        gym_place_ids = set()  # Track unique gyms
         
         try:
-            url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-            params = {
-                'location': f"{lat},{lng}",
-                'radius': config.GYM_SEARCH_RADIUS,
-                'type': 'gym',
-                'key': self.api_key,
-            }
+            # Strategy 1: Search by type='gym'
+            all_gyms_from_type = self._fetch_gyms_by_type(lat, lng, search_radius_meters, gym_place_ids)
+            all_gyms.extend(all_gyms_from_type)
             
-            response = requests.get(url, params=params, timeout=10)
-            data = response.json()
+            # Strategy 2: Text search for 'gym' and 'fitness' to catch more results
+            all_gyms_from_text = self._fetch_gyms_by_text(lat, lng, search_radius_meters, gym_place_ids)
+            all_gyms.extend(all_gyms_from_text)
             
-            if data['status'] == 'OK':
-                gyms = data.get('results', [])
-                
-                # Process ALL gyms from the API response, not just the first 'limit'
-                all_gyms = []
-                for gym in gyms:
-                    gym_lat = gym['geometry']['location']['lat']
-                    gym_lng = gym['geometry']['location']['lng']
-                    distance = self._haversine_distance(lat, lng, gym_lat, gym_lng)
-                    
-                    gym_info = {
-                        'name': gym.get('name'),
-                        'place_id': gym.get('place_id'),
-                        'address': gym.get('vicinity'),
-                        'rating': gym.get('rating', 0),
-                        'user_ratings_total': gym.get('user_ratings_total', 0),
-                        'types': gym.get('types', []),
-                        'distance_miles': round(distance, 2),
-                        'lat': gym_lat,
-                        'lng': gym_lng,
-                    }
-                    
-                    all_gyms.append(gym_info)
-                
-                # Sort by distance FIRST, then take the top N closest
-                all_gyms.sort(key=lambda g: g['distance_miles'])
-                result = all_gyms[:limit]
-                
-                print(f"  Found {len(all_gyms)} gyms total, showing {len(result)} closest")
-                
-                self.cache.set(cache_key, result)
+            # Sort by distance and take the closest ones
+            all_gyms.sort(key=lambda g: g['distance_miles'])
+            result = all_gyms[:limit]
+            
+            print(f"  Found {len(all_gyms)} unique gyms total within {search_radius_meters}m ({search_radius_meters/1609.34:.1f} mi), showing {len(result)} closest")
+            if result:
+                print(f"  Gyms found (sorted by distance):")
+                for i, gym in enumerate(result[:10], 1):  # Show first 10
+                    print(f"    {i}. {gym['name']} - {gym['distance_miles']} mi")
+                if len(result) > 10:
+                    print(f"    ... and {len(result) - 10} more")
+            
+            self.cache.set(cache_key, result)
         
         except Exception as e:
             print(f"Error getting detailed gym info: {e}")
+            import traceback
+            traceback.print_exc()
+            result = []
         
         return result
+    
+    def _fetch_gyms_by_type(self, lat: float, lng: float, radius_meters: int, seen_place_ids: set) -> List[Dict[str, Any]]:
+        """Fetch gyms using type='gym' search"""
+        gyms = []
+        url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+        params = {
+            'location': f"{lat},{lng}",
+            'radius': radius_meters,
+            'type': 'gym',
+            'key': self.api_key,
+        }
+        
+        # Paginate through results
+        page_count = 0
+        while page_count < 3:  # Max 3 pages
+            try:
+                data = self._make_places_api_request(url, params, timeout=10)
+                
+                if data['status'] == 'OK':
+                    for gym in data.get('results', []):
+                        place_id = gym.get('place_id')
+                        if place_id in seen_place_ids:
+                            continue
+                        seen_place_ids.add(place_id)
+                        
+                        gym_lat = gym['geometry']['location']['lat']
+                        gym_lng = gym['geometry']['location']['lng']
+                        distance = self._haversine_distance(lat, lng, gym_lat, gym_lng)
+                        
+                        gyms.append({
+                            'name': gym.get('name'),
+                            'place_id': place_id,
+                            'address': gym.get('vicinity'),
+                            'rating': gym.get('rating', 0),
+                            'user_ratings_total': gym.get('user_ratings_total', 0),
+                            'types': gym.get('types', []),
+                            'distance_miles': round(distance, 2),
+                            'lat': gym_lat,
+                            'lng': gym_lng,
+                        })
+                    
+                    # Check for next page
+                    next_page_token = data.get('next_page_token')
+                    if next_page_token:
+                        import time
+                        time.sleep(2)
+                        params = {
+                            'pagetoken': next_page_token,
+                            'key': self.api_key,
+                        }
+                        page_count += 1
+                    else:
+                        break
+                else:
+                    print(f"  Type search status: {data['status']}")
+                    break
+            except Exception as e:
+                print(f"  Error in type search: {e}")
+                break
+        
+        return gyms
+    
+    def _fetch_gyms_by_text(self, lat: float, lng: float, radius_meters: int, seen_place_ids: set) -> List[Dict[str, Any]]:
+        """Fetch gyms using text search (catches gyms with alternative classifications)"""
+        gyms = []
+        
+        # Try multiple search terms - prioritize specific chains that might not show up in type search
+        search_terms = [
+            'Live Fit Gym',  # Specific chain that's missing from type search
+            'Crunch Fitness',
+            'Planet Fitness',
+            '24 Hour Fitness',
+            'gym',
+            'fitness center',
+            'fitness',
+        ]
+        
+        for search_term in search_terms:
+            url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+            params = {
+                'location': f"{lat},{lng}",
+                'radius': radius_meters,
+                'keyword': search_term,
+                'key': self.api_key,
+            }
+            
+            try:
+                data = self._make_places_api_request(url, params, timeout=10)
+                
+                if data['status'] == 'OK':
+                    for gym in data.get('results', []):
+                        place_id = gym.get('place_id')
+                        if place_id in seen_place_ids:
+                            continue
+                        
+                        # Check if it's actually a gym-like place
+                        types = gym.get('types', [])
+                        name_lower = gym.get('name', '').lower()
+                        
+                        # More lenient filtering for keyword searches
+                        is_gym_related = (
+                            'gym' in types or 
+                            'health' in types or 
+                            'gym' in name_lower or 
+                            'fitness' in name_lower or 
+                            'training' in name_lower or
+                            'crossfit' in name_lower or
+                            'pilates' in name_lower or
+                            'yoga' in name_lower or
+                            'workout' in name_lower
+                        )
+                        
+                        if is_gym_related:
+                            seen_place_ids.add(place_id)
+                            
+                            gym_lat = gym['geometry']['location']['lat']
+                            gym_lng = gym['geometry']['location']['lng']
+                            distance = self._haversine_distance(lat, lng, gym_lat, gym_lng)
+                            
+                            gyms.append({
+                                'name': gym.get('name'),
+                                'place_id': place_id,
+                                'address': gym.get('vicinity'),
+                                'rating': gym.get('rating', 0),
+                                'user_ratings_total': gym.get('user_ratings_total', 0),
+                                'types': types,
+                                'distance_miles': round(distance, 2),
+                                'lat': gym_lat,
+                                'lng': gym_lng,
+                            })
+                
+            except Exception as e:
+                print(f"  Error in text search for '{search_term}': {e}")
+                continue
+        
+        return gyms
     
     def get_gym_details(self, place_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -1233,14 +1382,93 @@ class LocationAnalyzer:
         
         return None
     
-    def estimate_parking_ease(self, lat: float, lng: float, address: str = "") -> Dict[str, Any]:
+    def get_nearby_public_garages(self, lat: float, lng: float, radius_miles: float = 0.25) -> List[Dict[str, Any]]:
         """
-        Estimate visitor parking ease based on area characteristics
+        Find nearby SFMTA and public parking garages
         
-        Uses heuristics based on:
-        - Nearby parking facilities
-        - Area type (residential vs commercial)
-        - Street characteristics from geocoding data
+        Args:
+            lat: Latitude
+            lng: Longitude
+            radius_miles: Search radius in miles (default 0.25)
+            
+        Returns:
+            List of garage dictionaries with details
+        """
+        cache_key = f"public_garages_{lat}_{lng}_{radius_miles}"
+        cached = self.cache.get(cache_key)
+        if cached:
+            return cached
+        
+        try:
+            radius_meters = radius_miles * 1609.34
+            
+            # Search for parking facilities
+            url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+            params = {
+                'location': f"{lat},{lng}",
+                'radius': int(radius_meters),
+                'type': 'parking',
+                'key': self.api_key,
+            }
+            
+            data = self._make_places_api_request(url, params, timeout=10)
+            
+            if data['status'] != 'OK' and data['status'] != 'ZERO_RESULTS':
+                print(f"Garage search error: {data['status']}")
+                return []
+            
+            garages = []
+            for place in data.get('results', []):
+                name = place.get('name', '')
+                
+                # Filter for public/SFMTA garages
+                # Look for keywords indicating public garages
+                is_public = any(keyword in name.lower() for keyword in [
+                    'sfmta', 'public', 'parking garage', 'parking structure',
+                    'city parking', 'municipal', 'civic center garage',
+                    'public garage', 'downtown garage'
+                ])
+                
+                # Exclude private/residential/hotel parking
+                is_private = any(keyword in name.lower() for keyword in [
+                    'hotel', 'hospital', 'private', 'resident', 'employee only',
+                    'permit', 'reserved', 'validation only'
+                ])
+                
+                if not is_public or is_private:
+                    continue
+                
+                place_lat = place['geometry']['location']['lat']
+                place_lng = place['geometry']['location']['lng']
+                distance_miles = self._haversine_distance(lat, lng, place_lat, place_lng)
+                
+                garages.append({
+                    'name': name,
+                    'address': place.get('vicinity', ''),
+                    'distance_miles': round(distance_miles, 2),
+                    'place_id': place.get('place_id'),
+                    'rating': place.get('rating'),
+                    'user_ratings_total': place.get('user_ratings_total', 0),
+                })
+            
+            # Sort by distance
+            garages.sort(key=lambda x: x['distance_miles'])
+            
+            self.cache.set(cache_key, garages)
+            return garages
+        
+        except Exception as e:
+            print(f"Error finding public garages: {e}")
+            return []
+    
+    def estimate_visitor_parking_ease(self, lat: float, lng: float, address: str = "") -> Dict[str, Any]:
+        """
+        Estimate visitor parking ease based on SFMTA/public garages and street parking
+        
+        Focuses on short-term visitor parking options:
+        - SFMTA garages (ideal for visitors)
+        - Public parking structures
+        - General area parking availability
         
         Args:
             lat: Latitude
@@ -1248,15 +1476,18 @@ class LocationAnalyzer:
             address: Optional address for additional context
             
         Returns:
-            Dictionary with parking_ease (1-5) and reasoning
+            Dictionary with parking_ease (1-10), reasoning, and garage details
         """
-        cache_key = f"parking_ease_{lat}_{lng}"
+        cache_key = f"visitor_parking_{lat}_{lng}"
         cached = self.cache.get(cache_key)
         if cached:
             return cached
         
         try:
-            # Search for parking-related places nearby
+            # Search for public garages within 0.25 miles
+            garages = self.get_nearby_public_garages(lat, lng, radius_miles=0.25)
+            
+            # Also check general parking facilities
             url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
             params = {
                 'location': f"{lat},{lng}",
@@ -1264,15 +1495,11 @@ class LocationAnalyzer:
                 'key': self.api_key,
             }
             
-            response = requests.get(url, params=params, timeout=10)
-            data = response.json()
+            data = self._make_places_api_request(url, params, timeout=10)
             
-            if data['status'] != 'OK':
-                error_msg = data.get('error_message', data['status'])
-                print(f"Places API error: {data['status']} - {error_msg}")
-                if data['status'] == 'REQUEST_DENIED':
-                    print("⚠️  Places API access denied. Please enable 'Places API' in Google Cloud Console and ensure billing is enabled.")
-                return {'parking_ease': 3, 'reasoning': f'Unable to determine ({data["status"]}), defaulting to moderate'}
+            if data['status'] != 'OK' and data['status'] != 'ZERO_RESULTS':
+                print(f"Places API error: {data['status']}")
+                return {'parking_ease': 5, 'reasoning': f'Unable to determine ({data["status"]}), defaulting to moderate'}
             
             # Analyze the area
             places = data.get('results', [])
@@ -1291,43 +1518,53 @@ class LocationAnalyzer:
                 if 'residential' in ' '.join(types):
                     residential_count += 1
             
-            # Heuristic scoring
-            # More parking lots = easier parking
-            # More commercial = harder parking (busy area)
-            # More residential = easier parking (quieter area)
-            
-            score = 3  # Start with moderate
+            # Scoring (1-10 scale for visitor parking)
+            score = 5  # Start with moderate
             reasoning_parts = []
             
-            # Parking facilities boost score
+            # SFMTA/public garages are a huge bonus for visitors
+            if garages:
+                closest_garage = garages[0]
+                if closest_garage['distance_miles'] <= 0.1:
+                    score += 3
+                    reasoning_parts.append(f"{closest_garage['name']} within 0.1 mi")
+                elif closest_garage['distance_miles'] <= 0.2:
+                    score += 2
+                    reasoning_parts.append(f"{closest_garage['name']} within 0.2 mi")
+                else:
+                    score += 1
+                    reasoning_parts.append(f"{closest_garage['name']} within 0.25 mi")
+            
+            # Other parking facilities
             if parking_lots >= 3:
-                score += 1.5
+                score += 2
                 reasoning_parts.append(f"{parking_lots} parking facilities nearby")
             elif parking_lots >= 1:
-                score += 0.5
+                score += 1
                 reasoning_parts.append(f"{parking_lots} parking facility nearby")
             
-            # Commercial activity reduces score
+            # Commercial activity affects visitor parking
             if commercial_count > 15:
-                score -= 1.5
-                reasoning_parts.append("busy commercial area")
+                score -= 2
+                reasoning_parts.append("busy commercial area (competitive parking)")
             elif commercial_count > 8:
-                score -= 0.5
+                score -= 1
                 reasoning_parts.append("moderate commercial activity")
             else:
-                reasoning_parts.append("quiet area")
+                reasoning_parts.append("quiet area (easier street parking)")
             
-            # Residential areas are generally easier
+            # Residential areas generally have some street parking
             if residential_count > commercial_count:
-                score += 0.5
+                score += 1
                 reasoning_parts.append("primarily residential")
             
-            # Clamp to 1-5 range
-            score = max(1, min(5, round(score)))
+            # Clamp to 1-10 range
+            score = max(1, min(10, round(score)))
             
             result = {
                 'parking_ease': int(score),
                 'reasoning': ', '.join(reasoning_parts) if reasoning_parts else 'Based on area characteristics',
+                'public_garages': garages,
                 'parking_facilities_count': parking_lots,
                 'commercial_density': commercial_count,
             }
@@ -1336,11 +1573,143 @@ class LocationAnalyzer:
             return result
         
         except Exception as e:
-            print(f"Error estimating parking ease: {e}")
+            print(f"Error estimating visitor parking ease: {e}")
+            import traceback
+            traceback.print_exc()
             return {
-                'parking_ease': 3,
+                'parking_ease': 5,
                 'reasoning': 'Error determining parking ease, defaulting to moderate'
             }
+    
+    def estimate_street_parking_ease(self, lat: float, lng: float, address: str = "") -> Dict[str, Any]:
+        """
+        Estimate STREET parking ease for residential parking (long-term, daily use)
+        
+        Focuses on finding street parking near your apartment consistently:
+        - Residential vs commercial area (competition for spots)
+        - Permit zones
+        - Area density
+        
+        This is separate from visitor parking as it rates feasibility of parking
+        your own car on the street regularly, not one-time visitor parking.
+        
+        Args:
+            lat: Latitude
+            lng: Longitude
+            address: Optional address for additional context
+            
+        Returns:
+            Dictionary with parking_ease (1-10) and reasoning
+        """
+        cache_key = f"street_parking_{lat}_{lng}"
+        cached = self.cache.get(cache_key)
+        if cached:
+            return cached
+        
+        try:
+            # Search nearby area characteristics
+            url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+            params = {
+                'location': f"{lat},{lng}",
+                'radius': 300,  # Smaller radius for street parking (about 1 block)
+                'key': self.api_key,
+            }
+            
+            data = self._make_places_api_request(url, params, timeout=10)
+            
+            if data['status'] != 'OK' and data['status'] != 'ZERO_RESULTS':
+                print(f"Places API error: {data['status']}")
+                return {'parking_ease': 5, 'reasoning': f'Unable to determine ({data["status"]}), defaulting to moderate'}
+            
+            places = data.get('results', [])
+            
+            # Analyze competition for street parking
+            restaurants = 0
+            bars = 0
+            shops = 0
+            residential = 0
+            apartments = 0
+            
+            for place in places:
+                types = place.get('types', [])
+                name = place.get('name', '').lower()
+                
+                if 'restaurant' in types:
+                    restaurants += 1
+                if 'bar' in types or 'night_club' in types:
+                    bars += 1
+                if any(t in types for t in ['store', 'shopping_mall', 'supermarket']):
+                    shops += 1
+                if 'residential' in ' '.join(types):
+                    residential += 1
+                if any(keyword in name for keyword in ['apartment', 'residence', 'condos']):
+                    apartments += 1
+            
+            # Street parking scoring (1-10)
+            score = 6  # Start slightly above moderate (SF street parking baseline)
+            reasoning_parts = []
+            
+            # High-density residential means more competition
+            if apartments > 5:
+                score -= 2
+                reasoning_parts.append(f"{apartments} apartment buildings (high competition)")
+            elif apartments > 2:
+                score -= 1
+                reasoning_parts.append(f"{apartments} apartment buildings nearby")
+            
+            # Commercial activity hurts street parking significantly
+            total_commercial = restaurants + bars + shops
+            if total_commercial > 10:
+                score -= 3
+                reasoning_parts.append(f"very busy area ({total_commercial} businesses)")
+            elif total_commercial > 5:
+                score -= 2
+                reasoning_parts.append(f"busy area ({total_commercial} businesses)")
+            elif total_commercial > 2:
+                score -= 1
+                reasoning_parts.append(f"moderate commercial activity")
+            else:
+                score += 1
+                reasoning_parts.append("quiet residential area")
+            
+            # Bars/nightlife are especially bad (evening parking)
+            if bars >= 3:
+                score -= 1
+                reasoning_parts.append("nightlife area (evening competition)")
+            
+            # Pure residential is best for street parking
+            if residential > 5 and total_commercial < 3:
+                score += 2
+                reasoning_parts.append("primarily residential neighborhood")
+            
+            # Clamp to 1-10 range
+            score = max(1, min(10, round(score)))
+            
+            result = {
+                'parking_ease': int(score),
+                'reasoning': ', '.join(reasoning_parts) if reasoning_parts else 'Based on area characteristics',
+                'nearby_apartments': apartments,
+                'commercial_count': total_commercial,
+                'nightlife_count': bars,
+            }
+            
+            self.cache.set(cache_key, result)
+            return result
+        
+        except Exception as e:
+            print(f"Error estimating street parking ease: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                'parking_ease': 5,
+                'reasoning': 'Error determining parking ease, defaulting to moderate'
+            }
+    
+    def estimate_parking_ease(self, lat: float, lng: float, address: str = "") -> Dict[str, Any]:
+        """
+        Legacy method - now delegates to estimate_visitor_parking_ease for backward compatibility
+        """
+        return self.estimate_visitor_parking_ease(lat, lng, address)
     
     def get_nearby_laundromats(self, lat: float, lng: float, radius_miles: float = 0.5) -> List[Dict[str, Any]]:
         """
@@ -1371,8 +1740,7 @@ class LocationAnalyzer:
                 'key': self.api_key,
             }
             
-            response = requests.get(url, params=params, timeout=10)
-            data = response.json()
+            data = self._make_places_api_request(url, params, timeout=10)
             
             if data['status'] != 'OK':
                 print(f"Laundromat search error: {data['status']}")

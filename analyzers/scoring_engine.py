@@ -106,21 +106,31 @@ class QuietnessScore(ScoreComponent):
         factors = config_data.get("factors", {})
         
         base = 5.0
+        contributions = {}
         
         # Double pane windows reduce noise
+        double_pane_bonus = 0.0
         if self.has_double_pane:
-            base += factors.get("double_pane_windows", 2.0)
+            double_pane_bonus = factors.get("double_pane_windows", 2.0)
+            base += double_pane_bonus
+        contributions['double_pane'] = double_pane_bonus
         
         # Door type matters for study isolation
         door_scores = factors.get("door_types", {})
-        base += door_scores.get(self.door_type, 0.0)
+        door_bonus = door_scores.get(self.door_type, 0.0)
+        base += door_bonus
+        contributions['door'] = door_bonus
         
         # Street noise (inverse - lower street noise = higher score)
-        base -= (10 - self.street_noise) * 0.3
+        street_penalty = (10 - self.street_noise) * 0.3
+        base -= street_penalty
+        contributions['street_noise'] = -street_penalty
         
         # Higher floors are quieter
         floor_bonuses = factors.get("floor_bonuses", {})
-        base += floor_bonuses.get(self.floor_level, 0.0)
+        floor_bonus = floor_bonuses.get(self.floor_level, 0.0)
+        base += floor_bonus
+        contributions['floor'] = floor_bonus
         
         self.raw_value = max(0.0, min(10.0, base))
         self.details = {
@@ -128,6 +138,7 @@ class QuietnessScore(ScoreComponent):
             "door_type": self.door_type,
             "street_noise": self.street_noise,
             "floor_level": self.floor_level,
+            "contributions": contributions,  # Add breakdown of what contributed
         }
         return self.raw_value
 
@@ -174,6 +185,7 @@ class WFHQualityScore(ScoreComponent):
     quietness_score: Optional[QuietnessScore] = None
     kitchen: float = 0.0
     location_vibe_score: Optional[LocationVibeScore] = None
+    inputs_available: bool = True
     
     def calculate(self, config_data: dict, **kwargs) -> float:
         """Calculate WFH quality score"""
@@ -183,6 +195,18 @@ class WFHQualityScore(ScoreComponent):
         
         quietness_value = self.quietness_score.raw_value if self.quietness_score else 0.0
         location_vibe_value = self.location_vibe_score.raw_value if self.location_vibe_score else 0.0
+        
+        if not self.inputs_available:
+            self.raw_value = 0.0
+            self.details = {
+                "natural_light": self.natural_light,
+                "desk_space": self.desk_space,
+                "quietness": round(quietness_value, 2),
+                "kitchen": self.kitchen,
+                "location_vibe": round(location_vibe_value, 2),
+                "inputs_available": False,
+            }
+            return self.raw_value
         
         self.raw_value = (
             self.natural_light * sub_weights.get("natural_light", 0.25) +
@@ -198,6 +222,7 @@ class WFHQualityScore(ScoreComponent):
             "quietness": round(quietness_value, 2),
             "kitchen": self.kitchen,
             "location_vibe": round(location_vibe_value, 2),
+            "inputs_available": True,
         }
         return self.raw_value
 
@@ -333,11 +358,25 @@ class GymScore(ScoreComponent):
     gym_within_10min: bool = False
     gym_quality: float = 0.0
     elevation_gain_to_gym: Optional[float] = None
+    office_gym_only: bool = False  # New field for office-only option
     
     def calculate(self, config_data: dict, **kwargs) -> float:
         """Calculate gym score"""
         scoring = config_data.get("scoring", {})
         
+        # If only office gym is available, apply negative score
+        if self.office_gym_only:
+            score = scoring.get("office_gym_only", -5.0)
+            self.details.update({
+                "gym_within_10min": False,
+                "gym_quality": 0.0,
+                "office_gym_only": True,
+                "note": "No suitable nearby gyms - office gym only"
+            })
+            self.raw_value = score
+            return self.raw_value
+        
+        # Normal gym scoring
         if self.gym_within_10min and self.gym_quality >= 7.0:
             score = scoring.get("has_nearby_good_gym", 10.0)
         elif self.gym_within_10min:
@@ -356,6 +395,7 @@ class GymScore(ScoreComponent):
             "gym_within_10min": self.gym_within_10min,
             "gym_quality": self.gym_quality,
             "elevation_gain_to_gym": self.elevation_gain_to_gym,
+            "office_gym_only": False,
         })
         return self.raw_value
     
@@ -607,6 +647,16 @@ def calculate_score_range_for_options(score_class, config_data, field_name, opti
     return score, score.raw_value_min, score.raw_value_max
 
 
+def _value_or_default(value, default=0.0):
+    """Return default when value is None; otherwise keep the provided value."""
+    return default if value is None else value
+
+
+def _value_or_default(value, default=0.0):
+    """Return default when value is None; otherwise keep the provided value."""
+    return default if value is None else value
+
+
 def build_scorecard(apartment_data: Dict[str, Any]) -> ApartmentScoreCard:
     """
     Build a complete scorecard from apartment data
@@ -620,17 +670,51 @@ def build_scorecard(apartment_data: Dict[str, Any]) -> ApartmentScoreCard:
     # Build component scores
     components = {}
     
+    wfh_input_fields = [
+        apartment_data.get("natural_light"),
+        apartment_data.get("desk_space_quality"),
+        apartment_data.get("kitchen_quality"),
+        apartment_data.get("view_quality"),
+        apartment_data.get("double_pane_windows"),
+        apartment_data.get("study_door_type"),
+        apartment_data.get("street_noise_level"),
+        apartment_data.get("floor_level"),
+    ]
+    has_wfh_inputs = any(val not in (None, "", []) for val in wfh_input_fields)
+    
     # Quietness (used by WFH quality)
-    quietness = QuietnessScore(
-        name="quietness",
-        raw_value=0.0,
-        weight=0.0,
-        has_double_pane=apartment_data.get("double_pane_windows", False),
-        door_type=apartment_data.get("study_door_type", "none"),
-        street_noise=apartment_data.get("street_noise_level", 5.0),
-        floor_level=apartment_data.get("floor_level", "ground"),
-    )
-    quietness.calculate(config.SCORE_COMPONENTS["quietness"])
+    has_double_pane = apartment_data.get("double_pane_windows")
+    door_types = parse_multi_select(apartment_data.get("study_door_type", "none"))
+    
+    # Handle multiple door types
+    if len(door_types) > 1:
+        quietness, min_score, max_score = calculate_score_range_for_options(
+            QuietnessScore,
+            config.SCORE_COMPONENTS["quietness"],
+            "door_type",
+            door_types,
+            name="quietness",
+            raw_value=0.0,
+            weight=0.0,
+            has_double_pane=bool(has_double_pane) if has_double_pane is not None else False,
+            street_noise=_value_or_default(apartment_data.get("street_noise_level"), 5.0),
+            floor_level=(apartment_data.get("floor_level") or "ground"),
+        )
+    else:
+        quietness = QuietnessScore(
+            name="quietness",
+            raw_value=0.0,
+            weight=0.0,
+            has_double_pane=bool(has_double_pane) if has_double_pane is not None else False,
+            door_type=door_types[0] if door_types else "none",
+            street_noise=_value_or_default(apartment_data.get("street_noise_level"), 5.0),
+            floor_level=(apartment_data.get("floor_level") or "ground"),
+        )
+        quietness.calculate(config.SCORE_COMPONENTS["quietness"])
+    
+    quietness.details['inputs_available'] = has_wfh_inputs
+    if not has_wfh_inputs:
+        quietness.raw_value = 0.0
     components["quietness"] = quietness
     
     # Location vibe (used by WFH quality)
@@ -663,11 +747,12 @@ def build_scorecard(apartment_data: Dict[str, Any]) -> ApartmentScoreCard:
         name="wfh_quality",
         raw_value=0.0,
         weight=config.SCORE_COMPONENTS["wfh_quality"]["weight"],
-        natural_light=apartment_data.get("natural_light", 0.0),
-        desk_space=apartment_data.get("desk_space_quality", 0.0),
+        natural_light=_value_or_default(apartment_data.get("natural_light"), 0.0),
+        desk_space=_value_or_default(apartment_data.get("desk_space_quality"), 0.0),
         quietness_score=quietness,
-        kitchen=apartment_data.get("kitchen_quality", 0.0),
+        kitchen=_value_or_default(apartment_data.get("kitchen_quality"), 0.0),
         location_vibe_score=location_vibe,
+        inputs_available=has_wfh_inputs,
     )
     wfh_quality.calculate(config.SCORE_COMPONENTS["wfh_quality"])
     components["wfh_quality"] = wfh_quality
@@ -770,6 +855,7 @@ def build_scorecard(apartment_data: Dict[str, Any]) -> ApartmentScoreCard:
         gym_within_10min=apartment_data.get("gym_within_10min", False),
         gym_quality=apartment_data.get("gym_quality", 0.0),
         elevation_gain_to_gym=apartment_data.get("elevation_to_gym"),
+        office_gym_only=apartment_data.get("office_gym_only", False),
     )
     gym.calculate(config.SCORE_COMPONENTS["gym_nearby"])
     components["gym_nearby"] = gym
