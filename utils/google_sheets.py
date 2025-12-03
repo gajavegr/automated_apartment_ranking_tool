@@ -36,6 +36,7 @@ class GoogleSheetsClient:
     PLACES_OF_INTEREST_SHEET_NAME = "Places of Interest"
     EXCLUDED_PLACES_SHEET_NAME = "Excluded Places"
     USER_EDITS_LOG_SHEET_NAME = "User Edits Log"
+    SETTINGS_SHEET_NAME = "Settings"
     
     def __init__(self, credentials_path: str = None, sheet_id: str = None):
         """
@@ -1048,4 +1049,81 @@ class GoogleSheetsClient:
         except Exception as e:
             print(f"Error reading user edits: {e}")
             return []
+
+    def get_weight_settings(self) -> Dict[str, float]:
+        """
+        Get custom weight settings from Settings sheet
+        
+        Returns:
+            Dictionary of component weights, or empty dict if not found
+        """
+        try:
+            worksheet = self.spreadsheet.worksheet(self.SETTINGS_SHEET_NAME)
+            records = worksheet.get_all_records()
+            
+            weights = {}
+            for record in records:
+                component = record.get('Component')
+                weight = record.get('Weight')
+                if component and weight is not None:
+                    try:
+                        weights[component] = float(weight)
+                    except (ValueError, TypeError):
+                        continue
+            
+            return weights
+        except WorksheetNotFound:
+            return {}
+        except Exception as e:
+            print(f"Error reading weight settings: {e}")
+            return {}
+    
+    def save_weight_settings(self, weights: Dict[str, float]):
+        """
+        Save custom weight settings to Settings sheet
+        
+        Args:
+            weights: Dictionary of component weights
+        """
+        try:
+            # Get or create Settings sheet
+            try:
+                worksheet = self.spreadsheet.worksheet(self.SETTINGS_SHEET_NAME)
+            except WorksheetNotFound:
+                worksheet = self.spreadsheet.add_worksheet(
+                    title=self.SETTINGS_SHEET_NAME,
+                    rows=20,
+                    cols=4
+                )
+                self._initialize_settings_sheet(worksheet)
+            
+            # Clear existing data (keep headers)
+            if worksheet.row_count > 1:
+                worksheet.delete_rows(2, worksheet.row_count)
+            
+            # Add weight data
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            rows = []
+            for component, weight in weights.items():
+                rows.append([component, weight, timestamp, "Web App"])
+            
+            if rows:
+                worksheet.append_rows(rows)
+            
+            print(f"✓ Saved {len(weights)} weight settings to Google Sheets")
+        except Exception as e:
+            print(f"Error saving weight settings: {e}")
+            raise
+    
+    def _initialize_settings_sheet(self, sheet: gspread.Worksheet) -> None:
+        """Initialize Settings sheet with headers"""
+        headers = ["Component", "Weight", "Last Updated", "Updated By"]
+        sheet.update('A1:D1', [headers])
+        sheet.format('A1:D1', {
+            'textFormat': {'bold': True},
+            'backgroundColor': {'red': 0.2, 'green': 0.4, 'blue': 0.8}
+        })
+        sheet.freeze(rows=1)
 

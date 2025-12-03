@@ -133,7 +133,7 @@ class WeightAdjuster:
             if data['edit_count'] < 3:
                 continue
             
-            current_weight = config.SCORING_WEIGHTS.get(component, 0)
+            current_weight = config.SCORE_COMPONENTS.get(component, {}).get('weight', 0)
             
             # Determine if user consistently values this more or less
             if data['increase_ratio'] >= threshold:
@@ -182,8 +182,11 @@ class WeightAdjuster:
         Returns:
             Updated suggestions with normalized weights
         """
-        # Get all current weights
-        all_weights = dict(config.SCORING_WEIGHTS)
+        # Get all current weights from SCORE_COMPONENTS
+        all_weights = {
+            component: settings.get('weight', 0)
+            for component, settings in config.SCORE_COMPONENTS.items()
+        }
         
         # Update with suggested weights
         for component, suggestion in suggestions.items():
@@ -213,7 +216,11 @@ class WeightAdjuster:
         Returns:
             New weight configuration dictionary
         """
-        new_weights = dict(config.SCORING_WEIGHTS)
+        # Get all current weights from SCORE_COMPONENTS
+        new_weights = {
+            component: settings.get('weight', 0)
+            for component, settings in config.SCORE_COMPONENTS.items()
+        }
         
         for component, suggestion in suggestions.items():
             # Use normalized weight if available, otherwise use suggested weight

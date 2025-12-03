@@ -71,6 +71,7 @@ COMPONENT_LABELS = {
     "parking": "Parking",
     "laundry": "Laundry",
     "gym_nearby": "Gym",
+    "space_luxury": "Space & Luxury",
     "rent_control": "Rent Control",
 }
 
@@ -840,6 +841,28 @@ def add_apartment():
         except ValueError:
             data['sqft'] = 0
         
+        # Square feet range (for uncertain estimates)
+        try:
+            sqft_min = request.form.get('sqft_min', '').strip()
+            if sqft_min:
+                data['sqft_min'] = int(sqft_min)
+        except ValueError:
+            pass
+        
+        try:
+            sqft_max = request.form.get('sqft_max', '').strip()
+            if sqft_max:
+                data['sqft_max'] = int(sqft_max)
+        except ValueError:
+            pass
+        
+        # Luxury amenities checkboxes
+        data['has_double_vanity'] = request.form.get('has_double_vanity') == 'true'
+        data['high_end_appliances'] = request.form.get('high_end_appliances') == 'true'
+        data['walk_in_closet'] = request.form.get('walk_in_closet') == 'true'
+        data['has_balcony_patio'] = request.form.get('has_balcony_patio') == 'true'
+        data['has_fireplace'] = request.form.get('has_fireplace') == 'true'
+        
         # Year built and rent control
         year_built = request.form.get('year_built', '').strip()
         if year_built:
@@ -1284,6 +1307,75 @@ def run_analysis():
         return jsonify({'error': str(e), 'success': False}), 500
 
 
+@app.route('/reanalyze/<int:row_number>', methods=['POST'])
+def reanalyze_apartment(row_number):
+    """Force reanalysis of a specific apartment"""
+    try:
+        import sys
+        from main import ApartmentAnalyzer
+        
+        sys.stdout.flush()
+        
+        print("\n" + "="*70)
+        print(f"REANALYZING APARTMENT AT ROW {row_number}")
+        print("="*70)
+        sys.stdout.flush()
+        
+        # Get the apartment data
+        all_records = sheets_client.read_main_sheet()
+        if row_number - 2 >= len(all_records):
+            return jsonify({'error': 'Invalid row number', 'success': False}), 400
+        
+        apartment = all_records[row_number - 2]  # -2 for header and 1-indexing
+        apartment['_row_number'] = row_number
+        
+        address = apartment.get(config.SHEET_COLUMNS['address'], 'Unknown')
+        print(f"Analyzing: {address}")
+        sys.stdout.flush()
+        
+        # Run analysis
+        analyzer = ApartmentAnalyzer()
+        result = analyzer.analyze_apartment(apartment, force_refresh=True)
+        
+        if result and 'error' not in result:
+            print(f"Writing analysis results to row {row_number}")
+            sheets_client.write_apartment_data(row_number, result)
+            
+            # Update visualizations
+            sheets_client.update_scatter_plot_data()
+            
+            # Update criteria matrix for this apartment
+            if result.get('scorecard'):
+                criteria_result = {
+                    'address': result.get('address', ''),
+                    'components': result['scorecard'].get('components', {}),
+                    'weighted_score': result.get('weighted_score', 0)
+                }
+                # Note: We'd need to rebuild the entire matrix, so let's just update scatter for now
+            
+            print(f"✓ Reanalysis complete for {address}")
+            sys.stdout.flush()
+            
+            import time
+            time.sleep(1.0)
+            
+            return jsonify({
+                'success': True,
+                'address': address,
+                'weighted_score': result.get('weighted_score', 0)
+            })
+        else:
+            error_msg = result.get('error', 'Unknown error') if result else 'Analysis failed'
+            return jsonify({'error': error_msg, 'success': False}), 500
+            
+    except Exception as e:
+        print(f"Error reanalyzing apartment: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.stdout.flush()
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
 @app.route('/analyze_edits', methods=['GET'])
 def analyze_edits():
     """Analyze user edits and return weight adjustment suggestions"""
@@ -1360,11 +1452,17 @@ def apply_weight_adjustments():
 def get_analysis_data():
     """Get all analysis data for visualization"""
     try:
+        print("\n[DEBUG] get_analysis_data: Starting...")
         records = sheets_client.read_main_sheet()
+        print(f"[DEBUG] get_analysis_data: Read {len(records)} records from sheet")
         
         scatter_data = []
+        unanalyzed_data = []
+        
         for i, r in enumerate(records):
+            address = r.get(config.SHEET_COLUMNS['address'], 'Unknown')
             weighted_score = r.get(config.SHEET_COLUMNS['weighted_score'])
+            
             if weighted_score:
                 try:
                     # Check data completeness
@@ -1409,7 +1507,7 @@ def get_analysis_data():
                     is_complete = len(missing_fields) == 0
                     
                     scatter_data.append({
-                        'address': r.get(config.SHEET_COLUMNS['address'], 'Unknown'),
+                        'address': address,
                         'price': float(r.get(config.SHEET_COLUMNS['price'], 0) or 0),
                         'score': float(weighted_score),
                         'score_min': float(r.get(config.SHEET_COLUMNS['score_min'], weighted_score) or weighted_score),
@@ -1418,13 +1516,32 @@ def get_analysis_data():
                         'is_complete': is_complete,
                         'has_uncertainty': has_uncertainty,
                         'missing_fields': missing_fields,
-                        'row': i + 2
+                        'row': i + 2,
+                        'needs_analysis': False
                     })
                 except (ValueError, TypeError):
                     continue
+            else:
+                # Apartment has no score - needs analysis
+                unanalyzed_data.append({
+                    'address': address,
+                    'price': float(r.get(config.SHEET_COLUMNS['price'], 0) or 0),
+                    'score': None,
+                    'score_min': None,
+                    'score_max': None,
+                    'tour_questions': r.get(config.SHEET_COLUMNS['tour_questions'], ''),
+                    'is_complete': False,
+                    'has_uncertainty': False,
+                    'missing_fields': ['Analysis not run'],
+                    'row': i + 2,
+                    'needs_analysis': True
+                })
         
-        # Sort by score descending
-        ranked = sorted(scatter_data, key=lambda x: x['score'], reverse=True)
+        # Sort analyzed apartments by score descending
+        ranked_analyzed = sorted(scatter_data, key=lambda x: x['score'], reverse=True)
+        
+        # Append unanalyzed apartments at the bottom
+        ranked = ranked_analyzed + unanalyzed_data
         
         # Build comparison matrix with key attributes for each apartment
         comparison_data = []
@@ -1441,7 +1558,7 @@ def get_analysis_data():
                     'score': apt_data['score'],
                     'score_min': apt_data['score_min'],
                     'score_max': apt_data['score_max'],
-                    'value_ratio': round(apt_data['score'] / (apt_data['price'] / 1000), 2) if apt_data['price'] > 0 else 0,  # Score per $1000
+                    'value_ratio': round(apt_data['score'] / (apt_data['price'] / 1000), 2) if apt_data.get('score') and apt_data['price'] > 0 else 0,  # Score per $1000
                     'is_complete': apt_data['is_complete'],
                     
                     # Component scores
@@ -1452,6 +1569,7 @@ def get_analysis_data():
                     'parking_score': r.get(config.SHEET_COLUMNS.get('parking_score')),
                     'gym_score': r.get(config.SHEET_COLUMNS.get('gym_score')),
                     'laundry_score': r.get(config.SHEET_COLUMNS.get('laundry_score')),
+                    'space_luxury_score': r.get(config.SHEET_COLUMNS.get('space_luxury_score')),
                     
                     # Key attributes
                     'bedrooms': r.get(config.SHEET_COLUMNS.get('bedrooms')),
@@ -1467,6 +1585,8 @@ def get_analysis_data():
                     'rent_control': r.get(config.SHEET_COLUMNS.get('rent_control')),
                 })
         
+        print(f"[DEBUG] get_analysis_data: Processed {len(scatter_data)} analyzed, {len(unanalyzed_data)} unanalyzed")
+        
         return jsonify({
             'scatter': scatter_data,
             'ranked': ranked,
@@ -1474,6 +1594,37 @@ def get_analysis_data():
             'success': True
         })
     except Exception as e:
+        print(f"[ERROR] get_analysis_data failed: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        error_str = str(e)
+        
+        # Check if this is a rate limit error (429)
+        if 'RATE_LIMIT_EXCEEDED' in error_str or '429' in error_str or 'Quota exceeded' in error_str:
+            import datetime
+            now = datetime.datetime.now()
+            next_minute = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
+            wait_seconds = int((next_minute - now).total_seconds()) + 1
+            
+            wait_display = f"{wait_seconds} seconds" if wait_seconds < 60 else f"{wait_seconds // 60} minute(s)"
+            
+            return jsonify({
+                'error': f'Google Sheets API rate limit exceeded. Please try again in {wait_display}.',
+                'error_type': 'rate_limit',
+                'wait_seconds': wait_seconds,
+                'success': False
+            }), 429
+        
+        # Check if this is a service unavailable error (503)
+        if '503' in error_str or 'UNAVAILABLE' in error_str or 'service is currently unavailable' in error_str:
+            return jsonify({
+                'error': 'Google Sheets API is temporarily unavailable. Retrying automatically...',
+                'error_type': 'service_unavailable',
+                'wait_seconds': 3,  # Short retry for transient errors
+                'success': False
+            }), 503
+        
         return jsonify({'error': str(e), 'success': False}), 500
 
 
@@ -1812,6 +1963,119 @@ def exclude_place():
         traceback.print_exc()
         print("="*80 + "\n")
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/get_weights', methods=['GET'])
+def get_weights():
+    """Get current weight configuration from Settings sheet or config"""
+    try:
+        # Try to read from Settings sheet first
+        try:
+            settings_weights = sheets_client.get_weight_settings()
+            if settings_weights:
+                return jsonify({
+                    'success': True,
+                    'weights': settings_weights,
+                    'source': 'google_sheets'
+                })
+        except Exception as e:
+            print(f"Could not read from Settings sheet: {e}")
+        
+        # Fallback to config.SCORE_COMPONENTS
+        default_weights = {}
+        for component, settings in config.SCORE_COMPONENTS.items():
+            weight = settings.get('weight', 0.0)
+            if weight > 0:  # Only include components with non-zero weights
+                default_weights[component] = weight
+        
+        return jsonify({
+            'success': True,
+            'weights': default_weights,
+            'source': 'config'
+        })
+    except Exception as e:
+        print(f"Error getting weights: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
+@app.route('/save_weights', methods=['POST'])
+def save_weights():
+    """Save custom weight configuration"""
+    try:
+        data = request.get_json()
+        weights = data.get('weights', {})
+        update_config_file = data.get('update_config', False)
+        
+        if not weights:
+            return jsonify({'error': 'No weights provided', 'success': False}), 400
+        
+        # Validate weights sum to 1.0 (allow small rounding errors)
+        weight_sum = sum(weights.values())
+        if abs(weight_sum - 1.0) > 0.01:
+            return jsonify({
+                'error': f'Weights must sum to 100% (currently {weight_sum * 100:.1f}%)',
+                'success': False
+            }), 400
+        
+        # Save to Google Sheets Settings sheet
+        sheets_client.save_weight_settings(weights)
+        
+        # Optionally update config.py file
+        if update_config_file:
+            try:
+                update_config_weights(weights)
+            except Exception as e:
+                print(f"Warning: Could not update config.py: {e}")
+                # Don't fail the request if config update fails
+        
+        return jsonify({
+            'success': True,
+            'message': 'Weights saved successfully',
+            'updated_config': update_config_file
+        })
+    except Exception as e:
+        print(f"Error saving weights: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
+def update_config_weights(weights: dict):
+    """Update weights in config.py file (optional feature)"""
+    config_path = os.path.join(os.path.dirname(__file__), 'config.py')
+    
+    # Read current config
+    with open(config_path, 'r') as f:
+        lines = f.readlines()
+    
+    # Find and update weight lines
+    updated_lines = []
+    current_component = None
+    
+    for i, line in enumerate(lines):
+        # Detect which component we're in
+        for component_name in weights.keys():
+            if f'"{component_name}":' in line and '{' in line:
+                current_component = component_name
+                break
+        
+        # Update weight line for current component
+        if current_component and '"weight":' in line:
+            indent = len(line) - len(line.lstrip())
+            new_weight = weights.get(current_component, 0.0)
+            new_line = ' ' * indent + f'"weight": {new_weight},\n'
+            updated_lines.append(new_line)
+            current_component = None  # Reset after updating
+        else:
+            updated_lines.append(line)
+    
+    # Write back
+    with open(config_path, 'w') as f:
+        f.writelines(updated_lines)
+    
+    print(f"✓ Updated config.py with new weights")
 
 
 if __name__ == '__main__':

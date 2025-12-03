@@ -96,6 +96,29 @@
                                    name="sqft" 
                                    min="0" 
                                    placeholder="800">
+                            <small>Or specify a range below if uncertain</small>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="sqft_min">Square Feet (Min)</label>
+                            <input type="number" 
+                                   id="sqft_min" 
+                                   name="sqft_min" 
+                                   min="0" 
+                                   placeholder="700">
+                            <small>Minimum estimate (optional)</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="sqft_max">Square Feet (Max)</label>
+                            <input type="number" 
+                                   id="sqft_max" 
+                                   name="sqft_max" 
+                                   min="0" 
+                                   placeholder="900">
+                            <small>Maximum estimate (optional)</small>
                         </div>
                     </div>
 
@@ -122,6 +145,37 @@
                                    step="0.5" 
                                    value="1">
                         </div>
+                    </div>
+
+                    <h2>Space & Luxury Features</h2>
+                    
+                    <div class="form-group">
+                        <label>Luxury Amenities</label>
+                        <div class="multi-select-wrapper">
+                            <div class="multi-select-options">
+                                <label>
+                                    <input type="checkbox" name="has_double_vanity" value="true">
+                                    Double Vanity Sinks
+                                </label>
+                                <label>
+                                    <input type="checkbox" name="high_end_appliances" value="true">
+                                    High-End Appliances (stainless steel, induction, etc.)
+                                </label>
+                                <label>
+                                    <input type="checkbox" name="walk_in_closet" value="true">
+                                    Walk-In Closet
+                                </label>
+                                <label>
+                                    <input type="checkbox" name="has_balcony_patio" value="true">
+                                    Balcony/Patio
+                                </label>
+                                <label>
+                                    <input type="checkbox" name="has_fireplace" value="true">
+                                    Fireplace
+                                </label>
+                            </div>
+                        </div>
+                        <small>Select all luxury features that apply</small>
                     </div>
 
                     <h2>Amenities</h2>
@@ -545,6 +599,7 @@
                             <div style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
                             <a id="detailZillowLink" href="#" target="_blank" rel="noopener noreferrer" style="display: none;">View on Zillow</a>
                                 <button id="enableEditBtn" class="btn btn-secondary btn-sm" onclick="enableEditing()" style="display: inline-block;">✏️ Edit Scores</button>
+                                <button id="reanalyzeBtn" class="btn btn-secondary btn-sm" onclick="reanalyzeApartment()" style="display: inline-block;" title="Force reanalysis of this apartment">🔄 Reanalyze</button>
                                 <div id="editControls" style="display: none; gap: 5px;">
                                     <button class="btn btn-primary btn-sm" onclick="saveEdits()">💾 Save</button>
                                     <button class="btn btn-secondary btn-sm" onclick="cancelEdits()">✖ Cancel</button>
@@ -964,6 +1019,39 @@
                                         </div>
                                     </div>
                                 </div>
+
+                                <!-- Space & Luxury Score -->
+                                <div class="score-component">
+                                    <div class="component-header">
+                                        <strong>Space & Luxury</strong>
+                                        <span id="spaceLuxuryScore" class="component-score">--</span>
+                                    </div>
+                                    <div class="component-meta" id="spaceLuxuryMeta"></div>
+                                    <div class="component-details">
+                                        <div class="field-row">
+                                            <label>Square Feet:</label>
+                                            <span id="spaceLuxurySqft" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Bedrooms:</label>
+                                            <span id="spaceLuxuryBedrooms" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Bathrooms:</label>
+                                            <span id="spaceLuxuryBathrooms" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row">
+                                            <label>Luxury Amenities:</label>
+                                            <span id="spaceLuxuryAmenities" class="field-value">--</span>
+                                        </div>
+                                        <div id="spaceLuxuryFormulaText" style="margin-top: 10px; color: #555; font-size: 0.85em;">
+                                            <strong>How it's calculated:</strong> 
+                                            40% from square footage (400 sqft = 0 pts, 1000+ sqft = 10 pts). 
+                                            30% from bedrooms/bathrooms (more is better: 2bd/2ba scores higher than 1bd/1ba). 
+                                            30% from luxury amenities (double vanity, high-end appliances, walk-in closet, balcony/patio: 2.5 pts each).
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
 
                             <!-- Raw Data (Collapsible) -->
@@ -1022,7 +1110,12 @@
                     <!-- Right Column: Scatter Plot + Ranked List (second in DOM) -->
                     <div class="analysis-left">
                         <div class="analysis-section">
-                            <h3>Score vs Price</h3>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                                <h3 style="margin: 0;">Score vs Price</h3>
+                                <button onclick="openWeightModal()" class="btn btn-secondary" style="padding: 8px 16px; font-size: 0.9em;">
+                                    ⚖️ Adjust Weights
+                                </button>
+                            </div>
                             <canvas id="scatterPlot"></canvas>
                         </div>
 
@@ -1032,10 +1125,16 @@
                         </div>
 
                 <div class="analysis-section">
-                    <h3>Criteria Matrix</h3>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                        <h3 style="margin: 0;">Criteria Matrix</h3>
+                        <button onclick="openApartmentSelector()" class="btn btn-secondary" style="padding: 8px 16px; font-size: 0.9em;">
+                            🏢 Select Apartments
+                        </button>
+                    </div>
                     <p style="color: #666; font-size: 0.9em; margin-bottom: 16px;">
                         Compare apartments side-by-side. 🏆 = Best value in category. 
                         Value Ratio = Score per $1000 rent (higher is better deal).
+                        Currently showing: <span id="criteriaMatrixSelection" style="font-weight: 600; color: #0066cc;">Top 5</span>
                     </p>
                     <div id="criteriaMatrix"></div>
                 </div>
@@ -1119,6 +1218,7 @@
         let marker;
         let autocomplete;
         let scatterChart = null;
+        let previewScatterChart = null; // For weight adjustment modal preview
         let selectedScatterPoint = null; // Track selected scatter plot point
         let routePreviewMap = null;
         let routePreviewPolylines = [];
@@ -1254,6 +1354,41 @@
             // Property details
             document.getElementById('price').value = data['Price'] || '';
             document.getElementById('sqft').value = data['Square Feet'] || '';
+            document.getElementById('sqft_min').value = data['Square Feet (Min)'] || '';
+            document.getElementById('sqft_max').value = data['Square Feet (Max)'] || '';
+            document.getElementById('bedrooms').value = data['Bedrooms'] || 1;
+            document.getElementById('bathrooms').value = data['Bathrooms'] || 1;
+            
+            // Luxury amenities
+            const doubleVanityCheckbox = document.querySelector('input[name="has_double_vanity"]');
+            if (doubleVanityCheckbox) {
+                const doubleVanityValue = data['Has Double Vanity'];
+                doubleVanityCheckbox.checked = doubleVanityValue === true || doubleVanityValue === 'TRUE' || doubleVanityValue === 'True';
+            }
+            
+            const highEndAppliancesCheckbox = document.querySelector('input[name="high_end_appliances"]');
+            if (highEndAppliancesCheckbox) {
+                const highEndAppliancesValue = data['High-End Appliances'];
+                highEndAppliancesCheckbox.checked = highEndAppliancesValue === true || highEndAppliancesValue === 'TRUE' || highEndAppliancesValue === 'True';
+            }
+            
+            const walkInClosetCheckbox = document.querySelector('input[name="walk_in_closet"]');
+            if (walkInClosetCheckbox) {
+                const walkInClosetValue = data['Walk-In Closet'];
+                walkInClosetCheckbox.checked = walkInClosetValue === true || walkInClosetValue === 'TRUE' || walkInClosetValue === 'True';
+            }
+            
+            const balconyPatioCheckbox = document.querySelector('input[name="has_balcony_patio"]');
+            if (balconyPatioCheckbox) {
+                const balconyPatioValue = data['Has Balcony/Patio'];
+                balconyPatioCheckbox.checked = balconyPatioValue === true || balconyPatioValue === 'TRUE' || balconyPatioValue === 'True';
+            }
+            
+            const fireplaceCheckbox = document.querySelector('input[name="has_fireplace"]');
+            if (fireplaceCheckbox) {
+                const fireplaceValue = data['Has Fireplace'];
+                fireplaceCheckbox.checked = fireplaceValue === true || fireplaceValue === 'TRUE' || fireplaceValue === 'True';
+            }
             
             // Parking - handle multi-select
             const parkingTypes = (data['Parking Type'] || '').split('\n').filter(v => v);
@@ -2369,6 +2504,51 @@
             }
         }
 
+        // Reanalyze a specific apartment
+        async function reanalyzeApartment() {
+            if (!currentApartmentRow) {
+                alert('No apartment selected');
+                return;
+            }
+            
+            // Store the row number before reanalysis (it might get cleared during reload)
+            const rowToReanalyze = currentApartmentRow;
+            
+            const btn = document.getElementById('reanalyzeBtn');
+            const originalText = btn.textContent;
+            
+            if (!confirm(`Reanalyze apartment at row ${rowToReanalyze}?\n\nThis will recalculate all scores and update the Google Sheet.`)) {
+                return;
+            }
+            
+            btn.disabled = true;
+            btn.textContent = '⏳ Analyzing...';
+            
+            try {
+                const response = await fetch(`/reanalyze/${rowToReanalyze}`, {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('Reanalysis complete! Scores updated.');
+                    // Reload the analysis data to show updated scores
+                    await loadAnalysisData();
+                    // Reload the detailed view for this apartment using the stored row number
+                    showDetailPanel(rowToReanalyze);
+                } else {
+                    alert('Error reanalyzing apartment: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error reanalyzing apartment:', error);
+                alert('Error reanalyzing apartment: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = originalText;
+            }
+        }
+
         // Load analysis data
         async function loadAnalysisData() {
             const resultsContainer = document.getElementById('analysisResults');
@@ -2379,7 +2559,98 @@
                 const response = await fetch('/get_analysis_data');
                 const data = await response.json();
                 
+                // Check for rate limit error (429)
+                if (response.status === 429 || data.error_type === 'rate_limit') {
+                    const waitSeconds = data.wait_seconds || 60;
+                    const waitDisplay = waitSeconds < 60 ? `${waitSeconds} seconds` : `${Math.ceil(waitSeconds / 60)} minute(s)`;
+                    
+                    rankedListContainer.innerHTML = `
+                        <div style="padding: 30px; text-align: center; background: #fff3cd; border-radius: 8px; border: 2px solid #ffc107;">
+                            <h3 style="color: #856404; margin-bottom: 15px;">⏳ Rate Limit Reached</h3>
+                            <p style="color: #856404; font-size: 16px; margin-bottom: 20px;">
+                                Google Sheets API rate limit exceeded (60 reads per minute).
+                            </p>
+                            <p style="color: #856404; font-size: 18px; font-weight: 600;">
+                                Please wait <span style="color: #d97706;">${waitDisplay}</span> and try again.
+                            </p>
+                            <button onclick="loadAnalysisData()" style="margin-top: 20px; padding: 10px 20px; font-size: 16px; background: #0066cc; color: white; border: none; border-radius: 6px; cursor: pointer;">
+                                🔄 Retry Now
+                            </button>
+                        </div>
+                    `;
+                    
+                    if (scatterChart) {
+                        scatterChart.destroy();
+                        scatterChart = null;
+                    }
+                    criteriaMatrixContainer.innerHTML = '<p style="color: #856404;">Rate limit reached. Please wait and retry.</p>';
+                    
+                    // Auto-retry after wait time
+                    setTimeout(() => {
+                        console.log('Auto-retrying after rate limit wait...');
+                        loadAnalysisData();
+                    }, waitSeconds * 1000);
+                    
+                    resultsContainer.classList.remove('hidden');
+                    return;
+                }
+                
+                // Check for service unavailable error (503)
+                if (response.status === 503 || data.error_type === 'service_unavailable') {
+                    const waitSeconds = data.wait_seconds || 3;
+                    
+                    rankedListContainer.innerHTML = `
+                        <div style="padding: 30px; text-align: center; background: #e3f2fd; border-radius: 8px; border: 2px solid #2196f3;">
+                            <h3 style="color: #1565c0; margin-bottom: 15px;">🔄 Service Temporarily Unavailable</h3>
+                            <p style="color: #1565c0; font-size: 16px; margin-bottom: 20px;">
+                                Google Sheets API is temporarily unavailable (usually resolves within seconds).
+                            </p>
+                            <p style="color: #1565c0; font-size: 18px; font-weight: 600;">
+                                Retrying in <span style="color: #1976d2;">${waitSeconds} seconds</span>...
+                            </p>
+                            <div style="margin-top: 15px;">
+                                <div class="spinner" style="border: 4px solid #f3f3f3; border-top: 4px solid #2196f3; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto;"></div>
+                            </div>
+                        </div>
+                    `;
+                    
+                    if (scatterChart) {
+                        scatterChart.destroy();
+                        scatterChart = null;
+                    }
+                    criteriaMatrixContainer.innerHTML = '<p style="color: #1565c0;">Service temporarily unavailable. Retrying automatically...</p>';
+                    
+                    // Auto-retry after short wait
+                    setTimeout(() => {
+                        console.log('Auto-retrying after service unavailable error...');
+                        loadAnalysisData();
+                    }, waitSeconds * 1000);
+                    
+                    resultsContainer.classList.remove('hidden');
+                    return;
+                }
+                
                 if (data.scatter && data.scatter.length > 0) {
+                    // Store component scores for weight recalculation
+                    originalScatterData = data.scatter;
+                    apartmentComponentScores = {};
+                    
+                    // Extract component scores from comparison data
+                    if (data.comparison) {
+                        data.comparison.forEach(apt => {
+                            apartmentComponentScores[apt.row] = {
+                                commute: parseFloat(apt.commute_score) || 0,
+                                safety: parseFloat(apt.safety_score) || 0,
+                                wfh_quality: parseFloat(apt.wfh_score) || 0,
+                                happening: parseFloat(apt.happening_score) || 0,
+                                parking: parseFloat(apt.parking_score) || 0,
+                                gym_nearby: parseFloat(apt.gym_score) || 0,
+                                laundry: parseFloat(apt.laundry_score) || 0,
+                                space_luxury: parseFloat(apt.space_luxury_score) || 0
+                            };
+                        });
+                    }
+                    
                     renderScatterPlot(data.scatter);
                     renderRankedList(data.ranked);
                     renderCriteriaMatrix(data.comparison || []);
@@ -2455,12 +2726,15 @@
             // Reset selection when chart is re-rendered with new data
             selectedScatterPoint = null;
             
+            // Filter out unanalyzed apartments from scatter plot
+            const analyzedData = scatterData.filter(d => !d.needs_analysis && d.score !== null && d.score !== undefined);
+            
             scatterChart = new Chart(ctx, {
                 type: 'scatter',
                 data: {
                     datasets: [{
                         label: 'Apartments',
-                        data: scatterData.map(d => ({
+                        data: analyzedData.map(d => ({
                             x: d.price,
                             y: d.score,
                             address: d.address,
@@ -2473,7 +2747,7 @@
                         })),
                         backgroundColor: (context) => {
                             const index = context.dataIndex;
-                            const point = scatterData[index];
+                            const point = analyzedData[index];
                             
                             if (selectedScatterPoint === index) {
                                 return 'rgba(255, 152, 0, 0.8)';  // Selected: orange
@@ -2487,7 +2761,7 @@
                         },
                         borderColor: (context) => {
                             const index = context.dataIndex;
-                            const point = scatterData[index];
+                            const point = analyzedData[index];
                             
                             if (selectedScatterPoint === index) {
                                 return 'rgba(255, 152, 0, 1)';
@@ -2661,22 +2935,33 @@
                             // Data completeness indicators
                             let statusIcon = '';
                             let rowStyle = '';
-                            let scoreDisplay = apt.score ? apt.score.toFixed(1) : 'N/A';
+                            let scoreDisplay = 'N/A';
+                            let rankDisplay = idx + 1;
                             
-                            if (!apt.is_complete) {
-                                statusIcon = `<span style="color: #dc3545; font-size: 1.2em; cursor: help;" title="Incomplete Data:\n${(apt.missing_fields || []).map(f => '• ' + f).join('\n')}">▲</span> `;
-                                rowStyle = 'style="background-color: rgba(220, 53, 69, 0.05);"';
-                            } else if (apt.has_uncertainty) {
-                                statusIcon = `<span style="color: #ffc107; font-size: 1.2em; cursor: help;" title="Uncertain: Multiple options selected\nRange: ${apt.score_min?.toFixed(1)} - ${apt.score_max?.toFixed(1)}">⚠️</span> `;
-                                rowStyle = 'style="background-color: rgba(255, 193, 7, 0.05);"';
-                                if (apt.score_min && apt.score_max && apt.score_min !== apt.score_max) {
-                                    scoreDisplay += ` <span style="font-size: 0.85em; color: #666;">(${apt.score_min.toFixed(1)}-${apt.score_max.toFixed(1)})</span>`;
+                            if (apt.needs_analysis) {
+                                // Unanalyzed apartment
+                                statusIcon = `<span style="color: #6c757d; font-size: 1.2em; cursor: help;" title="Analysis not run yet\nClick 'View' then 'Reanalyze' to run analysis">⭕</span> `;
+                                rowStyle = 'style="background-color: rgba(108, 117, 125, 0.08);"';
+                                scoreDisplay = '<span style="color: #6c757d; font-style: italic;">Not analyzed</span>';
+                                rankDisplay = '--';
+                            } else if (apt.score !== null && apt.score !== undefined) {
+                                scoreDisplay = apt.score.toFixed(1);
+                                
+                                if (!apt.is_complete) {
+                                    statusIcon = `<span style="color: #dc3545; font-size: 1.2em; cursor: help;" title="Incomplete Data:\n${(apt.missing_fields || []).map(f => '• ' + f).join('\n')}">▲</span> `;
+                                    rowStyle = 'style="background-color: rgba(220, 53, 69, 0.05);"';
+                                } else if (apt.has_uncertainty) {
+                                    statusIcon = `<span style="color: #ffc107; font-size: 1.2em; cursor: help;" title="Uncertain: Multiple options selected\nRange: ${apt.score_min?.toFixed(1)} - ${apt.score_max?.toFixed(1)}">⚠️</span> `;
+                                    rowStyle = 'style="background-color: rgba(255, 193, 7, 0.05);"';
+                                    if (apt.score_min && apt.score_max && apt.score_min !== apt.score_max) {
+                                        scoreDisplay += ` <span style="font-size: 0.85em; color: #666;">(${apt.score_min.toFixed(1)}-${apt.score_max.toFixed(1)})</span>`;
+                                    }
                                 }
                             }
                             
                             return `
                             <tr class="apartment-row" onclick="showDetailPanel(${apt.row})" data-row="${apt.row}" ${rowStyle}>
-                                <td>${idx + 1}</td>
+                                <td>${rankDisplay}</td>
                                 <td>${statusIcon}${apt.address}${tourIcon}</td>
                                 <td>$${apt.price}</td>
                                 <td>${scoreDisplay}</td>
@@ -2693,6 +2978,7 @@
                     <span style="margin-left: 15px;"><span style="color: #0066cc;">●</span> Complete Data</span>
                     <span style="margin-left: 15px;"><span style="color: #ffc107;">⚠️</span> Uncertain (range shown)</span>
                     <span style="margin-left: 15px;"><span style="color: #dc3545;">▲</span> Incomplete (hover for details)</span>
+                    <span style="margin-left: 15px;"><span style="color: #6c757d;">⭕</span> Not Analyzed (click Reanalyze)</span>
                     <span style="margin-left: 15px;"><span style="color: #0066cc;">ℹ️</span> Tour Questions</span>
                 </div>
             `;
@@ -2707,6 +2993,33 @@
             if (!comparisonData || comparisonData.length === 0) {
                 container.innerHTML = '<p>No comparison data available</p>';
                 return;
+            }
+            
+            // Filter comparison data based on selected apartments
+            // If no apartments selected, default to top 5 by score
+            let dataToShow = comparisonData;
+            if (selectedApartmentRows.length > 0) {
+                dataToShow = comparisonData.filter(apt => selectedApartmentRows.includes(apt.row));
+                // Sort by score (highest first)
+                dataToShow.sort((a, b) => (b.score || 0) - (a.score || 0));
+            } else {
+                // Default: top 5 by score
+                dataToShow = [...comparisonData].sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 5);
+            }
+            
+            if (dataToShow.length === 0) {
+                container.innerHTML = '<p>No apartments selected. Click "Select Apartments" to choose which ones to compare.</p>';
+                return;
+            }
+            
+            // Update the selection display
+            const selectionDisplay = document.getElementById('criteriaMatrixSelection');
+            if (selectionDisplay) {
+                if (selectedApartmentRows.length > 0) {
+                    selectionDisplay.textContent = `${dataToShow.length} Selected Apartments`;
+                } else {
+                    selectionDisplay.textContent = 'Top 5';
+                }
             }
             
             // Helper function to get best value for highlighting
@@ -2730,26 +3043,26 @@
             };
             
             // Get best values for each attribute
-            const bestScore = getBest(comparisonData, 'score', true);
-            const bestValue = getBest(comparisonData, 'value_ratio', true);
-            const bestCommute = getBest(comparisonData, 'commute_you', false);
-            const bestCommutePartner = getBest(comparisonData, 'commute_partner', false);
-            const bestSafety = getBest(comparisonData, 'safety_score', true);
-            const bestWFH = getBest(comparisonData, 'wfh_score', true);
-            const bestHappening = getBest(comparisonData, 'happening_score', true);
-            const bestParking = getBest(comparisonData, 'parking_score', true);
-            const bestGym = getBest(comparisonData, 'gym_score', true);
-            const bestLaundry = getBest(comparisonData, 'laundry_score', true);
-            const bestLight = getBest(comparisonData, 'natural_light', true);
-            const bestDesk = getBest(comparisonData, 'desk_space', true);
-            const bestKitchen = getBest(comparisonData, 'kitchen_quality', true);
+            const bestScore = getBest(dataToShow, 'score', true);
+            const bestValue = getBest(dataToShow, 'value_ratio', true);
+            const bestCommute = getBest(dataToShow, 'commute_you', false);
+            const bestCommutePartner = getBest(dataToShow, 'commute_partner', false);
+            const bestSafety = getBest(dataToShow, 'safety_score', true);
+            const bestWFH = getBest(dataToShow, 'wfh_score', true);
+            const bestHappening = getBest(dataToShow, 'happening_score', true);
+            const bestParking = getBest(dataToShow, 'parking_score', true);
+            const bestGym = getBest(dataToShow, 'gym_score', true);
+            const bestLaundry = getBest(dataToShow, 'laundry_score', true);
+            const bestLight = getBest(dataToShow, 'natural_light', true);
+            const bestDesk = getBest(dataToShow, 'desk_space', true);
+            const bestKitchen = getBest(dataToShow, 'kitchen_quality', true);
             
             const html = `
                 <table class="comparison-table">
                     <thead>
                         <tr>
                             <th class="comparison-header" style="position: sticky; left: 0; background: #f8f9fa; z-index: 150;">Attribute</th>
-                            ${comparisonData.map((apt, idx) => `
+                            ${dataToShow.map((apt, idx) => `
                                 <th class="comparison-header apartment-col" onclick="showDetailPanel(${apt.row})" style="cursor: pointer;">
                                     <div style="font-size: 0.85em; font-weight: normal; color: #666;">Rank ${idx + 1}</div>
                                     <div style="margin-top: 4px; font-size: 0.9em;">${apt.address.substring(0, 30)}${apt.address.length > 30 ? '...' : ''}</div>
@@ -2760,22 +3073,22 @@
                     </thead>
                     <tbody>
                         <!-- Overall Metrics -->
-                        <tr class="category-row"><td colspan="${comparisonData.length + 1}"><strong>📊 Overall Metrics</strong></td></tr>
+                        <tr class="category-row"><td colspan="${dataToShow.length + 1}"><strong>📊 Overall Metrics</strong></td></tr>
                         <tr>
                             <td class="comparison-label">Overall Score</td>
-                            ${comparisonData.map(apt => formatCell(apt.score, bestScore, true, false, '/100')).join('')}
+                            ${dataToShow.map(apt => formatCell(apt.score, bestScore, true, false, '/100')).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">Monthly Rent</td>
-                            ${comparisonData.map(apt => `<td class="comparison-cell">$${apt.price}</td>`).join('')}
+                            ${dataToShow.map(apt => `<td class="comparison-cell">$${apt.price}</td>`).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">Value Ratio</td>
-                            ${comparisonData.map(apt => formatCell(apt.value_ratio, bestValue, true, false, ' pts/$1k')).join('')}
+                            ${dataToShow.map(apt => formatCell(apt.value_ratio, bestValue, true, false, ' pts/$1k')).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">Score Range</td>
-                            ${comparisonData.map(apt => {
+                            ${dataToShow.map(apt => {
                                 const hasRange = apt.score_min && apt.score_max && Math.abs(apt.score_max - apt.score_min) > 0.5;
                                 return hasRange 
                                     ? `<td class="comparison-cell" style="color: #f39c12;">${apt.score_min.toFixed(1)}-${apt.score_max.toFixed(1)}</td>`
@@ -2784,83 +3097,83 @@
                         </tr>
                         
                         <!-- Basic Info -->
-                        <tr class="category-row"><td colspan="${comparisonData.length + 1}"><strong>🏠 Basic Info</strong></td></tr>
+                        <tr class="category-row"><td colspan="${dataToShow.length + 1}"><strong>🏠 Basic Info</strong></td></tr>
                         <tr>
                             <td class="comparison-label">Bedrooms</td>
-                            ${comparisonData.map(apt => `<td class="comparison-cell">${apt.bedrooms || '--'}</td>`).join('')}
+                            ${dataToShow.map(apt => `<td class="comparison-cell">${apt.bedrooms || '--'}</td>`).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">Bathrooms</td>
-                            ${comparisonData.map(apt => `<td class="comparison-cell">${apt.bathrooms || '--'}</td>`).join('')}
+                            ${dataToShow.map(apt => `<td class="comparison-cell">${apt.bathrooms || '--'}</td>`).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">Square Feet</td>
-                            ${comparisonData.map(apt => `<td class="comparison-cell">${apt.sqft || '--'}</td>`).join('')}
+                            ${dataToShow.map(apt => `<td class="comparison-cell">${apt.sqft || '--'}</td>`).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">Rent Control</td>
-                            ${comparisonData.map(apt => `<td class="comparison-cell">${apt.rent_control ? 'Yes ✓' : 'No'}</td>`).join('')}
+                            ${dataToShow.map(apt => `<td class="comparison-cell">${apt.rent_control ? 'Yes ✓' : 'No'}</td>`).join('')}
                         </tr>
                         
                         <!-- Component Scores -->
-                        <tr class="category-row"><td colspan="${comparisonData.length + 1}"><strong>📈 Component Scores</strong></td></tr>
+                        <tr class="category-row"><td colspan="${dataToShow.length + 1}"><strong>📈 Component Scores</strong></td></tr>
                         <tr>
                             <td class="comparison-label">🚗 Commute (You)</td>
-                            ${comparisonData.map(apt => formatCell(apt.commute_you, bestCommute, false, false, ' min')).join('')}
+                            ${dataToShow.map(apt => formatCell(apt.commute_you, bestCommute, false, false, ' min')).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">🚗 Commute (Partner)</td>
-                            ${comparisonData.map(apt => formatCell(apt.commute_partner, bestCommutePartner, false, false, ' min')).join('')}
+                            ${dataToShow.map(apt => formatCell(apt.commute_partner, bestCommutePartner, false, false, ' min')).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">🔒 Safety Score</td>
-                            ${comparisonData.map(apt => formatCell(apt.safety_score, bestSafety, true, false, '/10')).join('')}
+                            ${dataToShow.map(apt => formatCell(apt.safety_score, bestSafety, true, false, '/10')).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">💼 WFH Quality</td>
-                            ${comparisonData.map(apt => formatCell(apt.wfh_score, bestWFH, true, false, '/10')).join('')}
+                            ${dataToShow.map(apt => formatCell(apt.wfh_score, bestWFH, true, false, '/10')).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">🌆 Happening</td>
-                            ${comparisonData.map(apt => formatCell(apt.happening_score, bestHappening, true, false, '/10')).join('')}
+                            ${dataToShow.map(apt => formatCell(apt.happening_score, bestHappening, true, false, '/10')).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">🅿️ Parking</td>
-                            ${comparisonData.map(apt => formatCell(apt.parking_score, bestParking, true, false, '/10')).join('')}
+                            ${dataToShow.map(apt => formatCell(apt.parking_score, bestParking, true, false, '/10')).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">💪 Gym</td>
-                            ${comparisonData.map(apt => formatCell(apt.gym_score, bestGym, true, false, '/10')).join('')}
+                            ${dataToShow.map(apt => formatCell(apt.gym_score, bestGym, true, false, '/10')).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">🧺 Laundry</td>
-                            ${comparisonData.map(apt => formatCell(apt.laundry_score, bestLaundry, true, false, '/10')).join('')}
+                            ${dataToShow.map(apt => formatCell(apt.laundry_score, bestLaundry, true, false, '/10')).join('')}
                         </tr>
                         
                         <!-- WFH Details -->
-                        <tr class="category-row"><td colspan="${comparisonData.length + 1}"><strong>💼 WFH Details</strong></td></tr>
+                        <tr class="category-row"><td colspan="${dataToShow.length + 1}"><strong>💼 WFH Details</strong></td></tr>
                         <tr>
                             <td class="comparison-label">Natural Light</td>
-                            ${comparisonData.map(apt => formatCell(apt.natural_light, bestLight, true, false, '/10')).join('')}
+                            ${dataToShow.map(apt => formatCell(apt.natural_light, bestLight, true, false, '/10')).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">Desk Space</td>
-                            ${comparisonData.map(apt => formatCell(apt.desk_space, bestDesk, true, false, '/10')).join('')}
+                            ${dataToShow.map(apt => formatCell(apt.desk_space, bestDesk, true, false, '/10')).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">Kitchen Quality</td>
-                            ${comparisonData.map(apt => formatCell(apt.kitchen_quality, bestKitchen, true, false, '/10')).join('')}
+                            ${dataToShow.map(apt => formatCell(apt.kitchen_quality, bestKitchen, true, false, '/10')).join('')}
                         </tr>
                         
                         <!-- Other Attributes -->
-                        <tr class="category-row"><td colspan="${comparisonData.length + 1}"><strong>🔧 Other Attributes</strong></td></tr>
+                        <tr class="category-row"><td colspan="${dataToShow.length + 1}"><strong>🔧 Other Attributes</strong></td></tr>
                         <tr>
                             <td class="comparison-label">Parking Type</td>
-                            ${comparisonData.map(apt => `<td class="comparison-cell">${apt.parking_type || '--'}</td>`).join('')}
+                            ${dataToShow.map(apt => `<td class="comparison-cell">${apt.parking_type || '--'}</td>`).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">Laundry Type</td>
-                            ${comparisonData.map(apt => `<td class="comparison-cell">${apt.laundry_type || '--'}</td>`).join('')}
+                            ${dataToShow.map(apt => `<td class="comparison-cell">${apt.laundry_type || '--'}</td>`).join('')}
                         </tr>
                     </tbody>
                 </table>
@@ -3164,6 +3477,25 @@
             updateComponentScoreDisplay('laundryScore', components['laundry']);
             updateComponentMeta('laundryMeta', components['laundry']);
             document.getElementById('laundryType').textContent = data['Laundry Type'] || '--';
+            
+            // Space & Luxury Score
+            updateComponentScoreDisplay('spaceLuxuryScore', components['space_luxury']);
+            updateComponentMeta('spaceLuxuryMeta', components['space_luxury']);
+            
+            const spaceLuxuryDetails = components['space_luxury']?.details || {};
+            document.getElementById('spaceLuxurySqft').textContent = spaceLuxuryDetails.sqft ? `${spaceLuxuryDetails.sqft} sqft` : '--';
+            document.getElementById('spaceLuxuryBedrooms').textContent = spaceLuxuryDetails.bedrooms || '--';
+            document.getElementById('spaceLuxuryBathrooms').textContent = spaceLuxuryDetails.bathrooms || '--';
+            
+            // Format luxury amenities list
+            const amenitiesList = [];
+            if (spaceLuxuryDetails.has_double_vanity) amenitiesList.push('Double Vanity');
+            if (spaceLuxuryDetails.high_end_appliances) amenitiesList.push('High-End Appliances');
+            if (spaceLuxuryDetails.walk_in_closet) amenitiesList.push('Walk-In Closet');
+            if (spaceLuxuryDetails.has_balcony_patio) amenitiesList.push('Balcony/Patio');
+            
+            document.getElementById('spaceLuxuryAmenities').textContent = 
+                amenitiesList.length > 0 ? amenitiesList.join(', ') : 'None';
             
             // Raw Data
             document.getElementById('rawPrice').textContent = data['Price'] ? `$${data['Price']}` : '--';
@@ -4652,7 +4984,772 @@
                 alert(`❌ Error: ${error.message}`);
             }
         }
+        
+        // ========================================================================
+        // WEIGHT ADJUSTMENT SYSTEM
+        // ========================================================================
+        
+        // Store apartment component scores (raw 0-10 values) for recalculation
+        let apartmentComponentScores = {}; // { row: { commute: 8.5, safety: 7.2, ... } }
+        let currentWeights = {}; // { commute: 0.10, wfh_quality: 0.15, ... }
+        let defaultWeights = {}; // Store default weights for reset
+        let lockedWeights = {}; // Track which weights are locked (component -> true/false)
+        let originalScatterData = []; // Store original data
+        let selectedApartmentRows = []; // Track which apartments are selected for criteria matrix (default: top 5 by score)
+        
+        // Component labels for display
+        const COMPONENT_LABELS = {
+            'commute': 'Commute',
+            'wfh_quality': 'WFH Quality',
+            'happening': 'Happening',
+            'safety': 'Safety',
+            'parking': 'Parking',
+            'laundry': 'Laundry',
+            'gym_nearby': 'Gym',
+            'space_luxury': 'Space & Luxury',
+            'rent_control': 'Rent Control',
+            'quietness': 'Quietness'
+        };
+        
+        async function openWeightModal() {
+            try {
+                // Fetch current weights
+                const response = await fetch('/get_weights');
+                const data = await response.json();
+                
+                if (!data.success) {
+                    alert('Error loading weights: ' + (data.error || 'Unknown error'));
+                    return;
+                }
+                
+                currentWeights = data.weights;
+                defaultWeights = { ...data.weights }; // Clone for reset
+                
+                // Initialize all weights as unlocked
+                lockedWeights = {};
+                for (const component of Object.keys(currentWeights)) {
+                    lockedWeights[component] = false;
+                }
+                
+                // Build sliders HTML
+                let slidersHTML = '';
+                const sortedComponents = Object.keys(currentWeights).sort((a, b) => {
+                    return (currentWeights[b] - currentWeights[a]);
+                });
+                
+                for (const component of sortedComponents) {
+                    const weight = currentWeights[component];
+                    const percentage = Math.round(weight * 100);
+                    const label = COMPONENT_LABELS[component] || component;
+                    
+                    slidersHTML += `
+                        <div class="slider-group">
+                            <div class="slider-header">
+                                <button id="lock-${component}" 
+                                        class="lock-btn" 
+                                        onclick="toggleLock('${component}')" 
+                                        title="Lock this weight">
+                                    🔓
+                                </button>
+                                <label for="weight-${component}">${label}</label>
+                                <span id="weight-${component}-value" class="slider-value">${percentage}%</span>
+                            </div>
+                            <input type="range" 
+                                   id="weight-${component}" 
+                                   min="0" 
+                                   max="50" 
+                                   step="1" 
+                                   value="${percentage}"
+                                   oninput="onSliderChange('${component}', this.value)"
+                                   class="weight-slider">
+                        </div>
+                    `;
+                }
+                
+                document.getElementById('weightSlidersContainer').innerHTML = slidersHTML;
+                document.getElementById('weightModal').style.display = 'flex';
+                
+                // Render initial preview scatter plot
+                renderPreviewScatterPlot();
+                
+            } catch (error) {
+                console.error('Error opening weight modal:', error);
+                alert('Error loading weight configuration');
+            }
+        }
+        
+        function closeWeightModal() {
+            document.getElementById('weightModal').style.display = 'none';
+            
+            // Destroy preview chart
+            if (previewScatterChart) {
+                previewScatterChart.destroy();
+                previewScatterChart = null;
+            }
+        }
+        
+        // Apartment Selector Functions
+        let allApartmentsForSelection = []; // Store all apartments for selection modal
+        
+        function openApartmentSelector() {
+            // Populate modal with apartments from comparison data
+            const data = originalScatterData.filter(apt => !apt.needs_analysis);
+            allApartmentsForSelection = data;
+            
+            if (data.length === 0) {
+                alert('No analyzed apartments available to select from.');
+                return;
+            }
+            
+            // Sort by score (highest first)
+            const sortedData = [...data].sort((a, b) => (b.score || 0) - (a.score || 0));
+            
+            // Build apartment list HTML
+            let listHTML = '';
+            sortedData.forEach((apt, idx) => {
+                const isSelected = selectedApartmentRows.includes(apt.row);
+                const rankDisplay = idx + 1;
+                const scoreDisplay = apt.score ? apt.score.toFixed(1) : '--';
+                
+                listHTML += `
+                    <div class="apartment-selector-item ${isSelected ? 'selected' : ''}" onclick="toggleApartmentSelection(${apt.row})">
+                        <input type="checkbox" 
+                               id="apt-select-${apt.row}" 
+                               ${isSelected ? 'checked' : ''}
+                               onclick="event.stopPropagation(); toggleApartmentSelection(${apt.row})">
+                        <div class="apartment-selector-info">
+                            <div class="apartment-selector-rank">#{rankDisplay}</div>
+                            <div class="apartment-selector-address">${apt.address}</div>
+                            <div class="apartment-selector-meta">
+                                $${apt.price}/mo • Score: ${scoreDisplay}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            document.getElementById('apartmentSelectorList').innerHTML = listHTML;
+            
+            // Update the count
+            updateSelectionCount();
+            
+            // Show modal
+            document.getElementById('apartmentSelectorModal').style.display = 'flex';
+        }
+        
+        function toggleApartmentSelection(row) {
+            const idx = selectedApartmentRows.indexOf(row);
+            if (idx > -1) {
+                selectedApartmentRows.splice(idx, 1);
+            } else {
+                selectedApartmentRows.push(row);
+            }
+            
+            // Update checkbox state
+            const checkbox = document.getElementById(`apt-select-${row}`);
+            if (checkbox) {
+                checkbox.checked = selectedApartmentRows.includes(row);
+            }
+            
+            // Update item styling
+            const items = document.querySelectorAll('.apartment-selector-item');
+            items.forEach(item => {
+                const rowMatch = item.onclick.toString().match(/toggleApartmentSelection\((\d+)\)/);
+                if (rowMatch) {
+                    const itemRow = parseInt(rowMatch[1]);
+                    if (itemRow === row) {
+                        if (selectedApartmentRows.includes(row)) {
+                            item.classList.add('selected');
+                        } else {
+                            item.classList.remove('selected');
+                        }
+                    }
+                }
+            });
+            
+            updateSelectionCount();
+        }
+        
+        function updateSelectionCount() {
+            const count = selectedApartmentRows.length;
+            const countDisplay = document.getElementById('selectedCount');
+            if (countDisplay) {
+                if (count === 0) {
+                    countDisplay.textContent = 'Default: Top 5';
+                } else {
+                    countDisplay.textContent = `${count} selected`;
+                }
+            }
+        }
+        
+        function selectTop5() {
+            // Select top 5 by score
+            const sorted = [...allApartmentsForSelection].sort((a, b) => (b.score || 0) - (a.score || 0));
+            selectedApartmentRows = sorted.slice(0, 5).map(apt => apt.row);
+            
+            // Update checkboxes
+            allApartmentsForSelection.forEach(apt => {
+                const checkbox = document.getElementById(`apt-select-${apt.row}`);
+                if (checkbox) {
+                    checkbox.checked = selectedApartmentRows.includes(apt.row);
+                }
+            });
+            
+            // Update item styling
+            document.querySelectorAll('.apartment-selector-item').forEach(item => {
+                const rowMatch = item.onclick.toString().match(/toggleApartmentSelection\((\d+)\)/);
+                if (rowMatch) {
+                    const itemRow = parseInt(rowMatch[1]);
+                    if (selectedApartmentRows.includes(itemRow)) {
+                        item.classList.add('selected');
+                    } else {
+                        item.classList.remove('selected');
+                    }
+                }
+            });
+            
+            updateSelectionCount();
+        }
+        
+        function clearSelection() {
+            selectedApartmentRows = [];
+            
+            // Update all checkboxes
+            document.querySelectorAll('[id^="apt-select-"]').forEach(cb => {
+                cb.checked = false;
+            });
+            
+            // Update item styling
+            document.querySelectorAll('.apartment-selector-item').forEach(item => {
+                item.classList.remove('selected');
+            });
+            
+            updateSelectionCount();
+        }
+        
+        function applyApartmentSelection() {
+            // Re-render criteria matrix with selected apartments
+            loadAnalysisData(); // This will refresh the comparison data and use selected apartments
+            closeApartmentSelector();
+        }
+        
+        function closeApartmentSelector() {
+            document.getElementById('apartmentSelectorModal').style.display = 'none';
+        }
+        
+        function onSliderChange(componentName, newValue) {
+            const newPercentage = parseInt(newValue);
+            const newWeight = newPercentage / 100.0;
+            
+            // Calculate the change
+            const oldWeight = currentWeights[componentName];
+            const delta = newWeight - oldWeight;
+            
+            // Update this component
+            currentWeights[componentName] = newWeight;
+            document.getElementById(`weight-${componentName}-value`).textContent = `${newPercentage}%`;
+            
+            // Proportionally adjust other components to maintain 100% total
+            constrainWeights(componentName, delta);
+            
+            // Update display and recalculate scores
+            updateWeightDisplay();
+            recalculateAllScores();
+        }
+        
+        function toggleLock(component) {
+            const isLocked = lockedWeights[component];
+            lockedWeights[component] = !isLocked;
+            
+            const lockBtn = document.getElementById(`lock-${component}`);
+            const slider = document.getElementById(`weight-${component}`);
+            
+            if (lockedWeights[component]) {
+                // Lock it
+                lockBtn.textContent = '🔒';
+                lockBtn.title = 'Unlock this weight';
+                slider.disabled = true;
+                slider.style.opacity = '0.5';
+            } else {
+                // Unlock it
+                lockBtn.textContent = '🔓';
+                lockBtn.title = 'Lock this weight';
+                slider.disabled = false;
+                slider.style.opacity = '1';
+            }
+        }
+        
+        function constrainWeights(changedComponent, delta) {
+            // Get all unlocked components (excluding the changed one)
+            const unlockedComponents = Object.keys(currentWeights).filter(c => 
+                c !== changedComponent && !lockedWeights[c]
+            );
+            
+            if (unlockedComponents.length === 0) {
+                // All other components are locked, can't adjust anything
+                // Just clamp this component to valid range
+                const lockedTotal = Object.keys(currentWeights)
+                    .filter(c => c !== changedComponent && lockedWeights[c])
+                    .reduce((sum, c) => sum + currentWeights[c], 0);
+                
+                const maxAllowed = 1.0 - lockedTotal;
+                if (currentWeights[changedComponent] > maxAllowed) {
+                    currentWeights[changedComponent] = Math.max(0, maxAllowed);
+                    const percentage = Math.round(currentWeights[changedComponent] * 100);
+                    document.getElementById(`weight-${changedComponent}`).value = percentage;
+                    document.getElementById(`weight-${changedComponent}-value`).textContent = `${percentage}%`;
+                }
+                return;
+            }
+            
+            // Calculate total weight of unlocked components (excluding changed)
+            let unlockedTotal = 0;
+            for (const comp of unlockedComponents) {
+                unlockedTotal += currentWeights[comp];
+            }
+            
+            // Calculate how much weight is locked
+            const lockedTotal = Object.keys(currentWeights)
+                .filter(c => c !== changedComponent && lockedWeights[c])
+                .reduce((sum, c) => sum + currentWeights[c], 0);
+            
+            // Target total for unlocked components
+            const targetTotal = 1.0 - currentWeights[changedComponent] - lockedTotal;
+            
+            if (targetTotal < 0) {
+                // Not enough room for locked + changed component
+                // Reduce the changed component to fit
+                currentWeights[changedComponent] = Math.max(0, 1.0 - lockedTotal);
+                const percentage = Math.round(currentWeights[changedComponent] * 100);
+                document.getElementById(`weight-${changedComponent}`).value = percentage;
+                document.getElementById(`weight-${changedComponent}-value`).textContent = `${percentage}%`;
+                return;
+            }
+            
+            // If unlocked components have zero weight, distribute evenly
+            if (unlockedTotal === 0 && targetTotal > 0) {
+                const evenShare = targetTotal / unlockedComponents.length;
+                for (const comp of unlockedComponents) {
+                    currentWeights[comp] = evenShare;
+                    const percentage = Math.round(evenShare * 100);
+                    document.getElementById(`weight-${comp}`).value = percentage;
+                    document.getElementById(`weight-${comp}-value`).textContent = `${percentage}%`;
+                }
+                return;
+            }
+            
+            // Distribute proportionally among unlocked components
+            const scaleFactor = targetTotal / unlockedTotal;
+            
+            for (const comp of unlockedComponents) {
+                currentWeights[comp] = currentWeights[comp] * scaleFactor;
+                
+                // Update slider and display
+                const percentage = Math.round(currentWeights[comp] * 100);
+                const slider = document.getElementById(`weight-${comp}`);
+                const valueDisplay = document.getElementById(`weight-${comp}-value`);
+                
+                if (slider) slider.value = percentage;
+                if (valueDisplay) valueDisplay.textContent = `${percentage}%`;
+            }
+        }
+        
+        function updateWeightDisplay() {
+            const sum = Object.values(currentWeights).reduce((a, b) => a + b, 0);
+            const percentage = Math.round(sum * 100);
+            
+            document.getElementById('weightSum').textContent = `${percentage}%`;
+            
+            const warning = document.getElementById('weightWarning');
+            if (Math.abs(sum - 1.0) > 0.01) {
+                warning.style.display = 'inline';
+            } else {
+                warning.style.display = 'none';
+            }
+        }
+        
+        function recalculateAllScores() {
+            if (!originalScatterData || originalScatterData.length === 0) return;
+            
+            // Recalculate weighted scores for each apartment
+            const recalculatedData = originalScatterData.map(apt => {
+                if (apt.needs_analysis) {
+                    return apt; // Don't recalculate unanalyzed apartments
+                }
+                
+                const row = apt.row;
+                const componentScores = apartmentComponentScores[row] || {};
+                
+                // Calculate new weighted score: sum(component_raw * weight * 10)
+                let newScore = 0;
+                for (const [component, weight] of Object.entries(currentWeights)) {
+                    const rawScore = componentScores[component];
+                    if (rawScore != null && rawScore !== '') {
+                        newScore += parseFloat(rawScore) * weight * 10.0;
+                    }
+                }
+                
+                return {
+                    ...apt,
+                    score: newScore,
+                    score_min: newScore, // Simplified for now
+                    score_max: newScore
+                };
+            });
+            
+            // Update main scatter plot
+            renderScatterPlot(recalculatedData.filter(apt => !apt.needs_analysis));
+            
+            // Update preview scatter plot in modal if open
+            if (document.getElementById('weightModal').style.display === 'flex') {
+                renderPreviewScatterPlot(recalculatedData.filter(apt => !apt.needs_analysis));
+            }
+            
+            // Update ranked list
+            renderRankedList(recalculatedData);
+        }
+        
+        function renderPreviewScatterPlot(dataToRender = null) {
+            const canvas = document.getElementById('previewScatterPlot');
+            if (!canvas) return;
+            
+            const ctx = canvas.getContext('2d');
+            
+            // Use provided data or recalculate from original
+            let data = dataToRender;
+            if (!data) {
+                if (!originalScatterData || originalScatterData.length === 0) return;
+                
+                data = originalScatterData.map(apt => {
+                    if (apt.needs_analysis) return apt;
+                    
+                    const row = apt.row;
+                    const componentScores = apartmentComponentScores[row] || {};
+                    
+                    let newScore = 0;
+                    for (const [component, weight] of Object.entries(currentWeights)) {
+                        const rawScore = componentScores[component];
+                        if (rawScore != null && rawScore !== '') {
+                            newScore += parseFloat(rawScore) * weight * 10.0;
+                        }
+                    }
+                    
+                    return {
+                        ...apt,
+                        score: newScore,
+                        score_min: newScore,
+                        score_max: newScore
+                    };
+                }).filter(apt => !apt.needs_analysis);
+            }
+            
+            if (data.length === 0) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#666';
+                ctx.font = '14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto';
+                ctx.textAlign = 'center';
+                ctx.fillText('No data to display', canvas.width / 2, canvas.height / 2);
+                return;
+            }
+            
+            // Destroy existing chart
+            if (previewScatterChart) {
+                previewScatterChart.destroy();
+            }
+            
+            // Prepare datasets (same logic as main scatter plot)
+            const completeData = data.filter(d => d.is_complete);
+            const incompleteData = data.filter(d => !d.is_complete);
+            
+            const datasets = [];
+            
+            if (completeData.length > 0) {
+                datasets.push({
+                    label: 'Complete Data',
+                    data: completeData.map(d => ({
+                        x: d.price,
+                        y: d.score,
+                        address: d.address,
+                        score_min: d.score_min,
+                        score_max: d.score_max,
+                        is_complete: d.is_complete
+                    })),
+                    backgroundColor: 'rgba(0, 102, 204, 0.6)',
+                    borderColor: 'rgba(0, 102, 204, 1)',
+                    borderWidth: 2,
+                    pointRadius: 6,
+                    pointHoverRadius: 8
+                });
+            }
+            
+            if (incompleteData.length > 0) {
+                datasets.push({
+                    label: 'Incomplete Data',
+                    data: incompleteData.map(d => ({
+                        x: d.price,
+                        y: d.score,
+                        address: d.address,
+                        score_min: d.score_min,
+                        score_max: d.score_max,
+                        is_complete: d.is_complete
+                    })),
+                    backgroundColor: 'rgba(255, 140, 0, 0.4)',
+                    borderColor: 'rgba(255, 140, 0, 1)',
+                    borderWidth: 2,
+                    pointRadius: 6,
+                    pointHoverRadius: 8,
+                    pointStyle: 'triangle'
+                });
+            }
+            
+            previewScatterChart = new Chart(ctx, {
+                type: 'scatter',
+                data: { datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    aspectRatio: 1.3,
+                    plugins: {
+                        title: {
+                            display: false
+                        },
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            labels: {
+                                font: { size: 11 },
+                                padding: 10,
+                                usePointStyle: true
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const point = context.raw;
+                                    let label = point.address || '';
+                                    if (label) label += ': ';
+                                    label += `$${context.parsed.x.toLocaleString()}`;
+                                    label += ` / Score: ${context.parsed.y.toFixed(1)}`;
+                                    
+                                    if (point.score_min !== point.score_max) {
+                                        label += ` (${point.score_min.toFixed(1)}-${point.score_max.toFixed(1)})`;
+                                    }
+                                    
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Monthly Rent ($)',
+                                font: { size: 11 }
+                            },
+                            ticks: {
+                                callback: function(value) {
+                                    return '$' + value.toLocaleString();
+                                },
+                                font: { size: 10 }
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Weighted Score',
+                                font: { size: 11 }
+                            },
+                            min: 0,
+                            max: 100,
+                            ticks: {
+                                font: { size: 10 }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        async function saveWeights() {
+            try {
+                // Validate sum
+                const sum = Object.values(currentWeights).reduce((a, b) => a + b, 0);
+                if (Math.abs(sum - 1.0) > 0.01) {
+                    alert(`Weights must sum to 100% (currently ${Math.round(sum * 100)}%)`);
+                    return;
+                }
+                
+                // Ask if user wants to update config.py
+                const updateConfig = confirm(
+                    'Save weights to Google Sheets?\n\n' +
+                    'Click OK to save to Google Sheets only.\n' +
+                    'Click Cancel to abort.'
+                );
+                
+                if (!updateConfig && !confirm('Save anyway to Google Sheets?')) {
+                    return;
+                }
+                
+                const saveBtn = document.getElementById('saveWeightsBtn');
+                const originalText = saveBtn.textContent;
+                saveBtn.disabled = true;
+                saveBtn.textContent = 'Saving...';
+                
+                const response = await fetch('/save_weights', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        weights: currentWeights,
+                        update_config: false // For now, only save to Google Sheets
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('✅ Weights saved successfully!\n\nThe scatter plot now reflects your custom weights.');
+                    closeWeightModal();
+                } else {
+                    alert('Error saving weights: ' + (data.error || 'Unknown error'));
+                }
+                
+                saveBtn.disabled = false;
+                saveBtn.textContent = originalText;
+                
+            } catch (error) {
+                console.error('Error saving weights:', error);
+                alert('Error saving weights: ' + error.message);
+            }
+        }
+        
+        async function resetWeights() {
+            if (!confirm('Reset all weights to default values?')) {
+                return;
+            }
+            
+            currentWeights = { ...defaultWeights };
+            
+            // Unlock all weights
+            for (const component of Object.keys(lockedWeights)) {
+                lockedWeights[component] = false;
+            }
+            
+            // Update all sliders
+            for (const [component, weight] of Object.entries(currentWeights)) {
+                const percentage = Math.round(weight * 100);
+                const slider = document.getElementById(`weight-${component}`);
+                const valueDisplay = document.getElementById(`weight-${component}-value`);
+                const lockBtn = document.getElementById(`lock-${component}`);
+                
+                if (slider) {
+                    slider.value = percentage;
+                    slider.disabled = false;
+                    slider.style.opacity = '1';
+                }
+                if (valueDisplay) valueDisplay.textContent = `${percentage}%`;
+                if (lockBtn) {
+                    lockBtn.textContent = '🔓';
+                    lockBtn.title = 'Lock this weight';
+                }
+            }
+            
+            updateWeightDisplay();
+            recalculateAllScores();
+        }
     </script>
+    
+    <!-- Apartment Selector Modal -->
+    <div id="apartmentSelectorModal" class="modal" style="display: none;">
+        <div class="modal-content" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3>Select Apartments to Compare</h3>
+                <button onclick="closeApartmentSelector()" class="close-btn">×</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-description">
+                    Choose which apartments to include in the Criteria Matrix. By default, the top 5 apartments by score are shown.
+                </p>
+                
+                <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                    <button onclick="selectTop5()" class="btn btn-secondary" style="flex: 1;">
+                        Select Top 5
+                    </button>
+                    <button onclick="clearSelection()" class="btn btn-secondary" style="flex: 1;">
+                        Clear All
+                    </button>
+                </div>
+                
+                <div style="margin-bottom: 12px; font-weight: 500; color: #1d1d1f;">
+                    <span id="selectedCount">Default: Top 5</span>
+                </div>
+                
+                <div id="apartmentSelectorList" style="max-height: 400px; overflow-y: auto; border: 1px solid #e0e0e0; border-radius: 8px; padding: 8px;">
+                    <!-- Populated by JavaScript -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeApartmentSelector()" class="btn btn-secondary">
+                    Cancel
+                </button>
+                <button onclick="applyApartmentSelection()" class="btn btn-primary">
+                    Apply Selection
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Weight Adjustment Modal -->
+    <div id="weightModal" class="modal" style="display: none;">
+        <div class="modal-content weight-modal">
+            <div class="modal-header">
+                <h3>Adjust Score Weights</h3>
+                <button onclick="closeWeightModal()" class="close-btn">×</button>
+            </div>
+            <div class="modal-body weight-modal-body">
+                <!-- Left Panel: Weight Sliders -->
+                <div class="weight-panel-left">
+                    <p class="modal-description">
+                        Adjust the importance of each scoring component. Weights must sum to 100%. 
+                        Changes update the preview in real-time.
+                    </p>
+                    
+                    <div class="weight-sliders" id="weightSlidersContainer">
+                        <!-- Sliders will be dynamically generated -->
+                    </div>
+                    
+                    <div class="weight-total-display">
+                        Total: <span id="weightSum" class="weight-sum-value">100%</span>
+                        <span id="weightWarning" class="weight-warning" style="display: none;">
+                            ⚠️ Must equal 100%
+                        </span>
+                    </div>
+                </div>
+                
+                <!-- Right Panel: Preview Scatter Plot -->
+                <div class="weight-panel-right">
+                    <h4 style="margin: 0 0 15px 0; color: #1d1d1f; font-size: 18px;">Live Preview</h4>
+                    <div class="preview-scatter-container">
+                        <canvas id="previewScatterPlot"></canvas>
+                    </div>
+                    <p style="font-size: 12px; color: #666; margin-top: 10px; text-align: center;">
+                        Hover over dots to see apartment details
+                    </p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button onclick="resetWeights()" class="btn btn-secondary">
+                    Reset to Default
+                </button>
+                <button onclick="closeWeightModal()" class="btn btn-secondary">
+                    Cancel
+                </button>
+                <button onclick="saveWeights()" class="btn btn-primary" id="saveWeightsBtn">
+                    Save Weights
+                </button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
 

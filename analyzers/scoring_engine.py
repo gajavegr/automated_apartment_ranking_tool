@@ -482,6 +482,118 @@ class RentControlScore(ScoreComponent):
 
 
 @dataclass
+class SpaceLuxuryScore(ScoreComponent):
+    """Space and luxury amenities score"""
+    sqft: Optional[float] = None
+    bedrooms: float = 1.0
+    bathrooms: float = 1.0
+    has_double_vanity: bool = False
+    high_end_appliances: bool = False
+    walk_in_closet: bool = False
+    has_balcony_patio: bool = False
+    has_fireplace: bool = False
+    
+    def calculate(self, config_data: dict, **kwargs) -> float:
+        """Calculate space & luxury score based on size, bed/bath, and amenities"""
+        scoring = config_data.get("scoring", {})
+        
+        # Square footage scoring (40% of component)
+        sqft_score = 0.0
+        if self.sqft and self.sqft > 0:
+            sqft_thresholds = scoring.get("sqft_thresholds", {})
+            min_sqft = sqft_thresholds.get("min", 400)
+            max_sqft = sqft_thresholds.get("max", 1000)
+            
+            if self.sqft <= min_sqft:
+                sqft_score = 0.0
+            elif self.sqft >= max_sqft:
+                sqft_score = 10.0
+            else:
+                # Linear interpolation between min and max
+                sqft_score = 10.0 * (self.sqft - min_sqft) / (max_sqft - min_sqft)
+        
+        sqft_weighted = sqft_score * scoring.get("sqft_weight", 0.40)
+        
+        # Bedrooms/Bathrooms scoring (30% of component)
+        bed_bath_score = 0.0
+        
+        # Bedrooms: 1bd = 5pts, 2bd = 8pts, 3+bd = 10pts
+        if self.bedrooms >= 3:
+            bed_score = 10.0
+        elif self.bedrooms >= 2:
+            bed_score = 8.0
+        elif self.bedrooms >= 1:
+            bed_score = 5.0
+        else:
+            bed_score = 2.0  # Studio
+        
+        # Bathrooms: 1ba = 5pts, 1.5ba = 6.5pts, 2ba = 8pts, 2.5+ba = 10pts
+        if self.bathrooms >= 2.5:
+            bath_score = 10.0
+        elif self.bathrooms >= 2.0:
+            bath_score = 8.0
+        elif self.bathrooms >= 1.5:
+            bath_score = 6.5
+        elif self.bathrooms >= 1.0:
+            bath_score = 5.0
+        else:
+            bath_score = 3.0
+        
+        # Average bed and bath scores
+        bed_bath_score = (bed_score + bath_score) / 2.0
+        bed_bath_weighted = bed_bath_score * scoring.get("bed_bath_weight", 0.30)
+        
+        # Luxury amenities scoring (30% of component)
+        # Each amenity contributes equally
+        amenity_bonuses = scoring.get("amenity_bonuses", {})
+        luxury_points = 0.0
+        amenity_count = 0
+        
+        if self.has_double_vanity:
+            luxury_points += amenity_bonuses.get("double_vanity", 2.5)
+            amenity_count += 1
+        if self.high_end_appliances:
+            luxury_points += amenity_bonuses.get("high_end_appliances", 2.5)
+            amenity_count += 1
+        if self.walk_in_closet:
+            luxury_points += amenity_bonuses.get("walk_in_closet", 2.5)
+            amenity_count += 1
+        if self.has_balcony_patio:
+            luxury_points += amenity_bonuses.get("balcony_patio", 2.5)
+            amenity_count += 1
+        if self.has_fireplace:
+            luxury_points += amenity_bonuses.get("fireplace", 2.5)
+            amenity_count += 1
+        
+        luxury_weighted = luxury_points * scoring.get("luxury_weight", 0.30)
+        
+        # Calculate total (0-10 scale)
+        self.raw_value = min(10.0, sqft_weighted + bed_bath_weighted + luxury_weighted)
+        
+        self.details = {
+            "sqft": self.sqft,
+            "sqft_score": round(sqft_score, 2),
+            "sqft_weighted": round(sqft_weighted, 2),
+            "bedrooms": self.bedrooms,
+            "bathrooms": self.bathrooms,
+            "bed_score": round(bed_score, 2),
+            "bath_score": round(bath_score, 2),
+            "bed_bath_score": round(bed_bath_score, 2),
+            "bed_bath_weighted": round(bed_bath_weighted, 2),
+            "luxury_amenities_count": amenity_count,
+            "luxury_points": round(luxury_points, 2),
+            "luxury_weighted": round(luxury_weighted, 2),
+            "has_double_vanity": self.has_double_vanity,
+            "high_end_appliances": self.high_end_appliances,
+            "walk_in_closet": self.walk_in_closet,
+            "has_balcony_patio": self.has_balcony_patio,
+            "has_fireplace": self.has_fireplace,
+        }
+        
+        return self.raw_value
+
+
+@dataclass
 class ApartmentScoreCard:
     """Complete scoring with dependency tracking to prevent double-counting"""
     components: Dict[str, ScoreComponent] = field(default_factory=dict)
@@ -703,8 +815,23 @@ def calculate_score_range_for_options(score_class, config_data, field_name, opti
 
 
 def _value_or_default(value, default=0.0):
-    """Return default when value is None; otherwise keep the provided value."""
-    return default if value is None else value
+    """
+    Return default when value is None or empty; otherwise convert to float.
+    
+    Handles string values from Google Sheets by converting them to float.
+    """
+    if value is None or value == "" or value == []:
+        return default
+    
+    # If it's already a number, return it
+    if isinstance(value, (int, float)):
+        return float(value)
+    
+    # Try to convert string to float
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
 
 
 def build_scorecard(apartment_data: Dict[str, Any]) -> ApartmentScoreCard:
@@ -920,6 +1047,95 @@ def build_scorecard(apartment_data: Dict[str, Any]) -> ApartmentScoreCard:
     )
     rent_control.calculate(config.SCORE_COMPONENTS["rent_control"])
     components["rent_control"] = rent_control
+    
+    # Space & Luxury
+    sqft = apartment_data.get("sqft")
+    sqft_min = apartment_data.get("sqft_min")
+    sqft_max = apartment_data.get("sqft_max")
+    
+    # Convert to float, handling strings from Google Sheets
+    def safe_float(val):
+        if val is None or val == "":
+            return None
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return None
+    
+    sqft = safe_float(sqft)
+    sqft_min = safe_float(sqft_min)
+    sqft_max = safe_float(sqft_max)
+    
+    # Use sqft if available, otherwise use average of min/max if both provided
+    if sqft:
+        effective_sqft = sqft
+    elif sqft_min and sqft_max:
+        effective_sqft = (sqft_min + sqft_max) / 2.0
+    elif sqft_min:
+        effective_sqft = sqft_min
+    elif sqft_max:
+        effective_sqft = sqft_max
+    else:
+        effective_sqft = None
+    
+    # Convert bedrooms/bathrooms to float, handling strings
+    bedrooms = safe_float(apartment_data.get("bedrooms")) or 1.0
+    bathrooms = safe_float(apartment_data.get("bathrooms")) or 1.0
+    
+    space_luxury = SpaceLuxuryScore(
+        name="space_luxury",
+        raw_value=0.0,
+        weight=config.SCORE_COMPONENTS["space_luxury"]["weight"],
+        sqft=effective_sqft,
+        bedrooms=bedrooms,
+        bathrooms=bathrooms,
+        has_double_vanity=apartment_data.get("has_double_vanity", False),
+        high_end_appliances=apartment_data.get("high_end_appliances", False),
+        walk_in_closet=apartment_data.get("walk_in_closet", False),
+        has_balcony_patio=apartment_data.get("has_balcony_patio", False),
+        has_fireplace=apartment_data.get("has_fireplace", False),
+    )
+    space_luxury.calculate(config.SCORE_COMPONENTS["space_luxury"])
+    
+    # If we have a sqft range, calculate min/max scores
+    if sqft_min and sqft_max and sqft_min != sqft_max:
+        # Create component with min sqft
+        space_luxury_min = SpaceLuxuryScore(
+            name="space_luxury",
+            raw_value=0.0,
+            weight=config.SCORE_COMPONENTS["space_luxury"]["weight"],
+            sqft=sqft_min,
+            bedrooms=apartment_data.get("bedrooms", 1.0),
+            bathrooms=apartment_data.get("bathrooms", 1.0),
+            has_double_vanity=apartment_data.get("has_double_vanity", False),
+            high_end_appliances=apartment_data.get("high_end_appliances", False),
+            walk_in_closet=apartment_data.get("walk_in_closet", False),
+            has_balcony_patio=apartment_data.get("has_balcony_patio", False),
+            has_fireplace=apartment_data.get("has_fireplace", False),
+        )
+        space_luxury_min.calculate(config.SCORE_COMPONENTS["space_luxury"])
+        
+        # Create component with max sqft
+        space_luxury_max = SpaceLuxuryScore(
+            name="space_luxury",
+            raw_value=0.0,
+            weight=config.SCORE_COMPONENTS["space_luxury"]["weight"],
+            sqft=sqft_max,
+            bedrooms=apartment_data.get("bedrooms", 1.0),
+            bathrooms=apartment_data.get("bathrooms", 1.0),
+            has_double_vanity=apartment_data.get("has_double_vanity", False),
+            high_end_appliances=apartment_data.get("high_end_appliances", False),
+            walk_in_closet=apartment_data.get("walk_in_closet", False),
+            has_balcony_patio=apartment_data.get("has_balcony_patio", False),
+            has_fireplace=apartment_data.get("has_fireplace", False),
+        )
+        space_luxury_max.calculate(config.SCORE_COMPONENTS["space_luxury"])
+        
+        # Set min/max on the component
+        space_luxury.raw_value_min = space_luxury_min.raw_value
+        space_luxury.raw_value_max = space_luxury_max.raw_value
+    
+    components["space_luxury"] = space_luxury
     
     # Build scorecard
     scorecard = ApartmentScoreCard(

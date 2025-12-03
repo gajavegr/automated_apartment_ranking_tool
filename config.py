@@ -102,6 +102,16 @@ SHEET_COLUMNS = {
     "neighborhood": "Neighborhood",
     "neighborhoods": "Neighborhoods",  # Multi-select neighborhood list
     
+    # Space & Luxury
+    "sqft_min": "Square Feet (Min)",
+    "sqft_max": "Square Feet (Max)",
+    "has_double_vanity": "Has Double Vanity",
+    "high_end_appliances": "High-End Appliances",
+    "walk_in_closet": "Walk-In Closet",
+    "has_balcony_patio": "Has Balcony/Patio",
+    "has_fireplace": "Has Fireplace",
+    "space_luxury_score": "Space & Luxury Score",
+    
     # Score ranges and tour questions
     "tour_questions": "Tour Questions",
     "score_min": "Score Min",
@@ -241,7 +251,7 @@ SF_NEIGHBORHOODS = [
 # Scoring Components Configuration
 SCORE_COMPONENTS = {
     "commute": {
-        "weight": 0.15,
+        "weight": 0.10,  # Updated from 0.15 to 0.10 (QoL subsection)
         "preferences": {
             "ideal_duration": 30,  # Minutes
             "acceptable_duration": 50,  # Minutes
@@ -251,7 +261,7 @@ SCORE_COMPONENTS = {
         }
     },
     "wfh_quality": {
-        "weight": 0.20,
+        "weight": 0.15,  # Updated from 0.20 to 0.15
         "inputs": ["natural_light", "desk_space", "quietness", "kitchen"],
         "sub_weights": {
             "natural_light": 0.30,
@@ -288,11 +298,11 @@ SCORE_COMPONENTS = {
         }
     },
     "safety": {
-        "weight": 0.25,
+        "weight": 0.30,  # Updated from 0.25 to 0.30
         "combine": ["manual_rating", "opendata_rating"],  # Average both
     },
     "parking": {
-        "weight": 0.15,
+        "weight": 0.10,  # Updated from 0.13 to 0.10 for total balance (QoL subsection)
         "inputs": ["parking_type", "parking_enclosure", "distance", "street_ease"],
         "base_scores": {
             "two_parking_spaces": 11,  # Premium: 2 dedicated spots (superlative bonus)
@@ -334,7 +344,7 @@ SCORE_COMPONENTS = {
         }
     },
     "laundry": {
-        "weight": 0.08,
+        "weight": 0.10,  # Updated to 0.10 (QoL subsection)
         "scoring": {
             "in_unit": 10,              # Separate washer and dryer
             "in_unit_combo": 8,         # Combined washer/dryer unit
@@ -350,7 +360,7 @@ SCORE_COMPONENTS = {
         }
     },
     "gym_nearby": {
-        "weight": 0.05,
+        "weight": 0.10,  # Updated from 0.05 to 0.10 (QoL subsection)
         "scoring": {
             "has_nearby_good_gym": 10,  # Within 10min and quality >= 7
             "has_nearby_ok_gym": 6,     # Within 10min but quality < 7
@@ -359,10 +369,28 @@ SCORE_COMPONENTS = {
         }
     },
     "rent_control": {
-        "weight": 0.05,
+        "weight": 0.0,  # Updated from 0.02 to 0.0 (not part of main score)
         "scoring": {
             "protected": 10,
             "not_protected": 0,
+        }
+    },
+    "space_luxury": {
+        "weight": 0.05,  # Updated from 0.12 to 0.05 for total balance (QoL subsection)
+        "scoring": {
+            "sqft_weight": 0.40,  # 40% from square footage
+            "bed_bath_weight": 0.30,  # 30% from bedrooms/bathrooms
+            "luxury_weight": 0.30,  # 30% from luxury amenities
+            "sqft_thresholds": {
+                "min": 400,  # Minimum sqft for scoring (0 points)
+                "max": 1000,  # Maximum sqft for full points (10 points)
+            },
+            "amenity_bonuses": {
+                "double_vanity": 2.5,  # Points per amenity (out of 10)
+                "high_end_appliances": 2.5,
+                "walk_in_closet": 2.5,
+                "balcony_patio": 2.5,
+            }
         }
     },
 }
