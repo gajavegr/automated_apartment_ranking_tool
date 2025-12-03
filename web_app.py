@@ -67,7 +67,7 @@ COMPONENT_LABELS = {
     "commute": "Commute",
     "safety": "Safety",
     "wfh_quality": "WFH Quality",
-    "location_vibe": "Location Vibe",
+    "happening": "Happening",
     "parking": "Parking",
     "laundry": "Laundry",
     "gym_nearby": "Gym",
@@ -184,6 +184,9 @@ def _normalize_sheet_row_for_scoring(row):
     data['restaurants_nearby'] = _safe_int(_sheet_value(row, "restaurants_nearby"), 0)
     data['cafes_nearby'] = _safe_int(_sheet_value(row, "cafes_nearby"), 0)
     data['parks_nearby'] = _safe_int(_sheet_value(row, "parks_nearby"), 0)
+    data['avg_walk_to_poi_mins'] = _safe_float(_sheet_value(row, "avg_walk_to_poi_mins"), None)
+    data['nearest_poi_count'] = _safe_int(_sheet_value(row, "nearest_poi_count"), 0)
+    data['pois_within_1_mile'] = _safe_int(_sheet_value(row, "pois_within_1_mile"), 0)
     
     data['parking_type'] = _sheet_value(row, "parking_type", default="none") or "none"
     data['parking_enclosure'] = _sheet_value(row, "parking_enclosure", default="") or ""
@@ -197,6 +200,7 @@ def _normalize_sheet_row_for_scoring(row):
     data['apartment_elevation'] = _safe_float(_sheet_value(row, "apartment_elevation"), None)
     data['elevation_to_gym'] = _safe_float(_sheet_value(row, "elevation_to_gym"), None)
     data['gym_within_10min'] = _sheet_bool(_sheet_value(row, "gym_within_10min"), False)
+    data['gym_walk_time_mins'] = _safe_float(_sheet_value(row, "gym_walk_time_mins"), None)
     data['gym_quality'] = _safe_float(_sheet_value(row, "gym_quality"), 0.0)
     data['office_gym_only'] = _sheet_bool(_sheet_value(row, "office_gym_only"), False)
     data['rent_control'] = _sheet_bool(_sheet_value(row, "rent_control"), False)
@@ -216,7 +220,8 @@ def _normalize_sheet_row_for_scoring(row):
 def index():
     """Show the entry form"""
     return render_template('entry_form.html', 
-                         google_maps_api_key=config.GOOGLE_MAPS_API_KEY)
+                         google_maps_api_key=config.GOOGLE_MAPS_API_KEY,
+                         sf_neighborhoods=config.SF_NEIGHBORHOODS)
 
 
 @app.route('/get_apartments', methods=['GET'])
@@ -284,52 +289,81 @@ def get_apartment(row_number):
 @app.route('/get_apartment_detailed/<int:row_number>', methods=['GET'])
 def get_apartment_detailed(row_number):
     """Get detailed data for a specific apartment including component scores"""
+    print(f"\n{'='*80}")
+    print(f"DEBUG: get_apartment_detailed called for row {row_number}")
+    print(f"{'='*80}")
+    
     try:
+        print(f"[1/8] Importing modules...")
         from main import ApartmentAnalyzer
         from analyzers.scoring_engine import build_scorecard
+        print(f"  ✓ Imports successful")
         
+        print(f"[2/8] Reading main sheet...")
         records = sheets_client.read_main_sheet()
+        print(f"  ✓ Found {len(records)} records")
+        
         if 0 <= row_number - 2 < len(records):
+            print(f"[3/8] Loading apartment at index {row_number - 2}...")
             apartment = records[row_number - 2]
             apartment['row_number'] = row_number
+            print(f"  ✓ Apartment address: {apartment.get(config.SHEET_COLUMNS.get('address', 'Address'), 'Unknown')}")
             
             # Extract Zillow URL from Address column HYPERLINK formula
-            sheet = sheets_client.spreadsheet.worksheet(sheets_client.MAIN_SHEET_NAME)
-            headers = sheet.row_values(1)
-            address_col_name = config.SHEET_COLUMNS['address']
-            
-            if address_col_name in headers:
-                col_idx = headers.index(address_col_name)
-                # Handle columns beyond Z
-                def col_index_to_letter(col_index):
-                    result = ""
-                    while col_index >= 0:
-                        result = chr(65 + (col_index % 26)) + result
-                        col_index = col_index // 26 - 1
-                    return result
+            print(f"[4/8] Extracting Zillow URL...")
+            try:
+                sheet = sheets_client.spreadsheet.worksheet(sheets_client.MAIN_SHEET_NAME)
+                headers = sheet.row_values(1)
+                address_col_name = config.SHEET_COLUMNS['address']
                 
-                col_letter = col_index_to_letter(col_idx)
-                cell_range = f'{col_letter}{row_number}'
-                
-                # Get the formula from the cell
-                cell_data = sheet.get(cell_range, value_render_option='FORMULA')
-                if cell_data and len(cell_data) > 0 and len(cell_data[0]) > 0:
-                    formula = cell_data[0][0]
-                    # Extract URL from HYPERLINK formula: =HYPERLINK("url", "text")
-                    if formula.startswith('=HYPERLINK('):
-                        import re
-                        match = re.search(r'=HYPERLINK\("([^"]+)"', formula)
-                        if match:
-                            apartment['Zillow URL'] = match.group(1)
+                if address_col_name in headers:
+                    col_idx = headers.index(address_col_name)
+                    # Handle columns beyond Z
+                    def col_index_to_letter(col_index):
+                        result = ""
+                        while col_index >= 0:
+                            result = chr(65 + (col_index % 26)) + result
+                            col_index = col_index // 26 - 1
+                        return result
+                    
+                    col_letter = col_index_to_letter(col_idx)
+                    cell_range = f'{col_letter}{row_number}'
+                    
+                    # Get the formula from the cell
+                    cell_data = sheet.get(cell_range, value_render_option='FORMULA')
+                    if cell_data and len(cell_data) > 0 and len(cell_data[0]) > 0:
+                        formula = cell_data[0][0]
+                        # Extract URL from HYPERLINK formula: =HYPERLINK("url", "text")
+                        if formula.startswith('=HYPERLINK('):
+                            import re
+                            match = re.search(r'=HYPERLINK\("([^"]+)"', formula)
+                            if match:
+                                apartment['Zillow URL'] = match.group(1)
+                                print(f"  ✓ Extracted Zillow URL")
+                print(f"  ✓ Zillow URL extraction complete")
+            except Exception as e:
+                print(f"  ⚠️  Warning: Could not extract Zillow URL: {e}")
             
             # Calculate component scores and contributions
+            print(f"[5/8] Normalizing apartment data for scoring...")
             component_scores = {}
             component_contributions = []
             total_recomputed_score = None
             try:
                 normalized_input = _normalize_sheet_row_for_scoring(apartment)
+                print(f"  ✓ Normalized data keys: {list(normalized_input.keys())}")
+                
+                # Debug gym-related fields
+                gym_fields = {k: v for k, v in normalized_input.items() if 'gym' in k.lower()}
+                print(f"  ✓ Gym fields in normalized data: {gym_fields}")
+                
+                print(f"[6/8] Building scorecard...")
                 scorecard = build_scorecard(normalized_input)
+                print(f"  ✓ Scorecard built with components: {list(scorecard.components.keys())}")
+                
+                print(f"[7/8] Calculating scores...")
                 total_recomputed_score = round(scorecard.calculate_total(), 2)
+                print(f"  ✓ Total score: {total_recomputed_score}")
                 
                 for component_name, component in scorecard.components.items():
                     weight = scorecard.config_components.get(component_name, {}).get('weight', 0.0)
@@ -357,10 +391,13 @@ def get_apartment_detailed(row_number):
                             'weighted_contribution': max(0.0, adjusted_weighted),
                             'max_contribution': round(10.0 * weight * 10.0, 2),
                         })
+                print(f"  ✓ Component scores calculated: {len(component_scores)} components")
             except Exception as e:
-                print(f"Error calculating component scores: {e}")
+                print(f"  ❌ ERROR calculating component scores: {e}")
                 import traceback
                 traceback.print_exc()
+                # Re-raise to see full error
+                raise
             
             component_contributions.sort(key=lambda c: c['weighted_contribution'], reverse=True)
             
@@ -374,23 +411,67 @@ def get_apartment_detailed(row_number):
                 'commute': config.SCORE_COMPONENTS.get('commute', {}).get('weight', 0),
                 'safety': config.SCORE_COMPONENTS.get('safety', {}).get('weight', 0),
                 'wfh_quality': config.SCORE_COMPONENTS.get('wfh_quality', {}).get('weight', 0),
-                'location_vibe': config.SCORE_COMPONENTS.get('location_vibe', {}).get('weight', 0),
+                'happening': config.SCORE_COMPONENTS.get('happening', {}).get('weight', 0),
                 'parking': config.SCORE_COMPONENTS.get('parking', {}).get('weight', 0),
                 'gym': config.SCORE_COMPONENTS.get('gym_nearby', {}).get('weight', 0),
                 'laundry': config.SCORE_COMPONENTS.get('laundry', {}).get('weight', 0),
                 'quietness': config.SCORE_COMPONENTS.get('quietness', {}).get('weight', 0)
             }
             
+            print(f"[8/8] Parsing commute and place list details...")
             # Parse commute metadata for frontend (uses snake_case keys)
             commute_details_raw = _sheet_value(apartment, "commute_details", default="")
             apartment['commute_details'] = _parse_commute_details(commute_details_raw)
             apartment['route_annoyingness'] = _safe_float(_sheet_value(apartment, "route_annoyingness"), None)
+            print(f"  ✓ Commute details parsed")
             
+            # Parse place lists for happening score display
+            print(f"  📍 Parsing place lists (restaurants, cafes, parks, POIs)...")
+            try:
+                restaurants_json = _sheet_value(apartment, "restaurants_list", default="[]")
+                cafes_json = _sheet_value(apartment, "cafes_list", default="[]")
+                parks_json = _sheet_value(apartment, "parks_list", default="[]")
+                pois_json = _sheet_value(apartment, "pois_list", default="[]")
+                
+                print(f"     Raw restaurants_json length: {len(restaurants_json) if restaurants_json else 0}")
+                print(f"     Raw cafes_json length: {len(cafes_json) if cafes_json else 0}")
+                print(f"     Raw parks_json length: {len(parks_json) if parks_json else 0}")
+                print(f"     Raw pois_json length: {len(pois_json) if pois_json else 0}")
+                
+                # Parse JSON strings
+                apartment['restaurants_list'] = json.loads(restaurants_json) if restaurants_json and restaurants_json != "[]" else []
+                apartment['cafes_list'] = json.loads(cafes_json) if cafes_json and cafes_json != "[]" else []
+                apartment['parks_list'] = json.loads(parks_json) if parks_json and parks_json != "[]" else []
+                apartment['pois_list'] = json.loads(pois_json) if pois_json and pois_json != "[]" else []
+                
+                print(f"     ✓ Parsed {len(apartment['restaurants_list'])} restaurants")
+                print(f"     ✓ Parsed {len(apartment['cafes_list'])} cafes")
+                print(f"     ✓ Parsed {len(apartment['parks_list'])} parks")
+                print(f"     ✓ Parsed {len(apartment['pois_list'])} POIs")
+                
+            except (json.JSONDecodeError, TypeError) as e:
+                print(f"     ⚠️  Error parsing place lists: {e}")
+                apartment['restaurants_list'] = []
+                apartment['cafes_list'] = []
+                apartment['parks_list'] = []
+                apartment['pois_list'] = []
+            
+            print(f"{'='*80}")
+            print(f"✅ SUCCESS: Returning apartment details for row {row_number}")
+            print(f"{'='*80}\n")
             return jsonify(apartment)
+        
+        print(f"❌ ERROR: Row {row_number} out of range (records: {len(records)})")
         return jsonify({'error': 'Not found'}), 404
     except Exception as e:
+        print(f"\n{'='*80}")
+        print(f"❌ FATAL ERROR in get_apartment_detailed for row {row_number}")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        print(f"{'='*80}")
         import traceback
         traceback.print_exc()
+        print(f"{'='*80}\n")
         return jsonify({'error': str(e)}), 500
 
 
@@ -1123,65 +1204,33 @@ def save_apartment_edits(row_number):
 
 @app.route('/run_analysis', methods=['POST'])
 def run_analysis():
-    """Run analysis on all apartments (same as main.py --analyze-new)"""
+    """Run analysis on all apartments"""
     try:
+        import sys
         from main import ApartmentAnalyzer
         
+        # Flush stdout to ensure prints appear in Flask logs
+        sys.stdout.flush()
+        
+        print("\n" + "="*70)
+        print("RUNNING ANALYSIS")
+        print("="*70)
+        sys.stdout.flush()
+        
         analyzer = ApartmentAnalyzer()
-        records = sheets_client.read_main_sheet()
         
-        # Find apartments that need analysis
-        # 1. Those without a weighted score
-        # 2. Those where last_updated > last_analyzed (data changed after analysis)
-        apartments_to_analyze = []
-        for i, record in enumerate(records):
-            # Skip rows without an address (empty rows)
-            address = record.get(config.SHEET_COLUMNS['address'], '').strip()
-            if not address:
-                continue
-            
-            weighted_score = record.get(config.SHEET_COLUMNS['weighted_score'])
-            last_updated = record.get(config.SHEET_COLUMNS['last_updated'], '')
-            last_analyzed = record.get(config.SHEET_COLUMNS['last_analyzed'], '')
-            
-            needs_analysis = False
-            reason = ""
-            
-            if not weighted_score:
-                needs_analysis = True
-                reason = "no score"
-            elif last_updated and last_analyzed:
-                # Compare timestamps - if updated after analyzed, re-analyze
-                try:
-                    from datetime import datetime
-                    updated_dt = datetime.strptime(last_updated, '%Y-%m-%d %H:%M:%S')
-                    analyzed_dt = datetime.strptime(last_analyzed, '%Y-%m-%d %H:%M:%S')
-                    if updated_dt > analyzed_dt:
-                        needs_analysis = True
-                        reason = "data changed"
-                except (ValueError, TypeError):
-                    pass  # If timestamps can't be parsed, skip re-analysis
-            elif last_updated and not last_analyzed:
-                # Has data but never analyzed
-                needs_analysis = True
-                reason = "never analyzed"
-            
-            # Require re-run if commute metadata missing (new columns)
-            if GoogleSheetsClient.needs_commute_metadata_refresh(record):
-                needs_analysis = True
-                if not reason:
-                    reason = "missing commute metadata"
-
-            if needs_analysis:
-                record['_row_number'] = i + 2  # +2 for header row and 1-indexing
-                record['_analysis_reason'] = reason
-                apartments_to_analyze.append(record)
+        # Use the centralized method that checks for missing score ranges
+        apartments_to_analyze = sheets_client.get_apartments_needing_analysis()
         
-        print(f"Found {len(apartments_to_analyze)} apartments to analyze")
+        sys.stdout.flush()
+        
+        print(f"\nFound {len(apartments_to_analyze)} apartments to analyze")
         for apt in apartments_to_analyze:
             reason = apt.get('_analysis_reason', 'unknown')
             address = apt.get(config.SHEET_COLUMNS['address'], 'Unknown')
-            print(f"  - {address}: {reason}")
+            print(f"  {apt['_row_number']}. {address[:50]} - {reason}")
+        
+        sys.stdout.flush()
         
         results = []
         for apartment in apartments_to_analyze:
@@ -1220,7 +1269,17 @@ def run_analysis():
             if criteria_results:
                 sheets_client.update_criteria_matrix(criteria_results)
         
-        return jsonify({'success': True, 'analyzed': len(results)})
+        # Small delay to allow Google Sheets API to propagate writes
+        # This ensures data is available when switching to Analysis tab
+        import time
+        time.sleep(1.5)
+        
+        message = f"Successfully analyzed {len(results)} apartment(s)"
+        return jsonify({
+            'success': True, 
+            'analyzed': len(results),
+            'message': message
+        })
     except Exception as e:
         return jsonify({'error': str(e), 'success': False}), 500
 
@@ -1389,7 +1448,7 @@ def get_analysis_data():
                     'commute_score': r.get(config.SHEET_COLUMNS.get('commute_score')),
                     'safety_score': r.get(config.SHEET_COLUMNS.get('combined_safety')),
                     'wfh_score': r.get(config.SHEET_COLUMNS.get('wfh_quality_score')),
-                    'location_vibe_score': r.get(config.SHEET_COLUMNS.get('location_vibe_score')),
+                    'happening_score': r.get(config.SHEET_COLUMNS.get('happening_score')),
                     'parking_score': r.get(config.SHEET_COLUMNS.get('parking_score')),
                     'gym_score': r.get(config.SHEET_COLUMNS.get('gym_score')),
                     'laundry_score': r.get(config.SHEET_COLUMNS.get('laundry_score')),
@@ -1586,9 +1645,173 @@ def clear_wfh(row_number):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/admin/force_recalculate', methods=['POST'])
+def admin_force_recalculate():
+    """
+    Force recalculation of specific score components by clearing them in the sheet.
+    Also clears the cache to ensure fresh API calls (e.g., for updated Claude prompts).
+    
+    Request body:
+    {
+        "component": "gym_score" | "laundry_score" | "all",
+        "addresses": ["addr1", "addr2"] or "all"
+    }
+    """
+    try:
+        data = request.json
+        component = data.get('component', 'all')
+        addresses = data.get('addresses', 'all')
+        
+        # Clear cache to ensure fresh API calls (especially for Claude prompt changes)
+        print("\n🗑️  Clearing cache for fresh analysis...")
+        if location_analyzer and hasattr(location_analyzer, 'cache'):
+            cleared_entries = location_analyzer.cache.clear_all()
+            print(f"  ✓ Cleared {cleared_entries} cache entries")
+        
+        # Get all apartments
+        records = sheets_client.read_main_sheet()
+        
+        # Filter by addresses if specified
+        if addresses != 'all':
+            records = [r for r in records if r.get(config.SHEET_COLUMNS["address"]) in addresses]
+        
+        # Determine which columns to clear
+        columns_to_clear = []
+        if component == 'gym_score' or component == 'all':
+            columns_to_clear.append(config.SHEET_COLUMNS["gym_score"])
+        if component == 'laundry_score' or component == 'all':
+            columns_to_clear.append(config.SHEET_COLUMNS["laundry_score"])
+        if component == 'all':
+            # Also clear score ranges to force full recalculation
+            columns_to_clear.extend([
+                config.SHEET_COLUMNS["score_min"],
+                config.SHEET_COLUMNS["score_max"],
+                config.SHEET_COLUMNS["weighted_score"]
+            ])
+        
+        # Get worksheet
+        sheet = sheets_client.spreadsheet.worksheet(sheets_client.MAIN_SHEET_NAME)
+        header_row = sheet.row_values(1)
+        
+        col_indices = {}
+        for col_name in columns_to_clear:
+            if col_name in header_row:
+                col_indices[col_name] = header_row.index(col_name) + 1  # 1-indexed
+        
+        # Get address column for finding rows
+        address_col_idx = header_row.index(config.SHEET_COLUMNS["address"]) + 1
+        address_col = sheet.col_values(address_col_idx)
+        
+        # Clear values for each apartment
+        cleared_count = 0
+        for record in records:
+            address = record.get(config.SHEET_COLUMNS["address"])
+            if not address:
+                continue
+            
+            # Find row number (skip header row)
+            row_num = None
+            for i, row_address in enumerate(address_col[1:], start=2):
+                if row_address == address:
+                    row_num = i
+                    break
+            
+            if row_num:
+                # Clear each column for this row
+                for col_name, col_idx in col_indices.items():
+                    col_letter = sheets_client._col_index_to_letter(col_idx - 1)
+                    sheet.update(f'{col_letter}{row_num}', [['']])
+                    print(f"  Cleared {col_name} for row {row_num} ({address[:50]})")
+                
+                cleared_count += 1
+        
+        return jsonify({
+            'success': True,
+            'cleared_count': cleared_count,
+            'columns': columns_to_clear,
+            'cache_cleared': True,
+            'message': f'Cleared {component} for {cleared_count} apartments and cleared cache. Run analysis to recalculate with fresh API calls.'
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 def open_browser():
     """Open browser after a short delay"""
     webbrowser.open('http://127.0.0.1:5000')
+
+
+@app.route('/exclude_place', methods=['POST'])
+def exclude_place():
+    """
+    Add or remove a place from the exclusion list
+    
+    Request body:
+    {
+        "action": "add" | "remove",
+        "place_id": "ChIJ...",
+        "place_name": "Place Name",
+        "place_type": "restaurant" | "cafe" | "park",
+        "reason": "Optional reason for exclusion"
+    }
+    """
+    print("\n" + "="*80)
+    print("🚫 /exclude_place endpoint called")
+    print("="*80)
+    
+    try:
+        data = request.json
+        print(f"📋 Request data: {data}")
+        
+        action = data.get('action')
+        place_id = data.get('place_id')
+        
+        print(f"  Action: {action}")
+        print(f"  Place ID: {place_id}")
+        
+        if not action or not place_id:
+            print(f"  ❌ Missing required fields!")
+            return jsonify({'error': 'Missing required fields: action, place_id'}), 400
+        
+        if action == 'add':
+            place_name = data.get('place_name', 'Unknown')
+            place_type = data.get('place_type', 'unknown')
+            reason = data.get('reason', '')
+            
+            print(f"  Place Name: {place_name}")
+            print(f"  Place Type: {place_type}")
+            print(f"  Reason: {reason}")
+            print(f"  📝 Calling sheets_client.add_excluded_place()...")
+            
+            sheets_client.add_excluded_place(place_id, place_name, place_type, reason)
+            
+            print(f"  ✅ Successfully added to exclusion list!")
+            print("="*80 + "\n")
+            return jsonify({'success': True, 'message': f'Added {place_name} to exclusion list'})
+        
+        elif action == 'remove':
+            print(f"  📝 Calling sheets_client.remove_excluded_place()...")
+            sheets_client.remove_excluded_place(place_id)
+            print(f"  ✅ Successfully removed from exclusion list!")
+            print("="*80 + "\n")
+            return jsonify({'success': True, 'message': 'Removed place from exclusion list'})
+        
+        else:
+            print(f"  ❌ Invalid action: {action}")
+            print("="*80 + "\n")
+            return jsonify({'error': 'Invalid action. Must be "add" or "remove"'}), 400
+    
+    except Exception as e:
+        print(f"❌ Exception in exclude_place endpoint:")
+        print(f"  Error type: {type(e).__name__}")
+        print(f"  Error message: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        print("="*80 + "\n")
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':

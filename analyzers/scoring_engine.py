@@ -59,10 +59,10 @@ class CommuteScore(ScoreComponent):
         
         # Adjust duration for hill access difficulty
         effective_duration = self.duration_mins
+        hill_penalty = 0
         if self.on_steep_hill and config.TERRAIN_SCORING["commute_time_adjustment"]["enabled"]:
             hill_penalty = config.TERRAIN_SCORING["commute_time_adjustment"]["hill_access_penalty"]
             effective_duration += hill_penalty
-            self.details['hill_access_penalty_mins'] = hill_penalty
         
         # Duration score
         if effective_duration <= ideal_duration:
@@ -89,6 +89,7 @@ class CommuteScore(ScoreComponent):
             "route_bonus": round(route_bonus_points, 2),
             "annoyingness_score": round(annoyingness_score, 2),
             "annoyingness_penalty": round(annoying_penalty, 2),
+            "hill_access_penalty_mins": hill_penalty,
         }
         return self.raw_value
 
@@ -144,36 +145,74 @@ class QuietnessScore(ScoreComponent):
 
 
 @dataclass
-class LocationVibeScore(ScoreComponent):
-    """How happening the neighborhood is"""
+class HappeningScore(ScoreComponent):
+    """How happening the neighborhood is - includes POI proximity"""
     restaurants: int = 0
     cafes: int = 0
     parks: int = 0
+    avg_walk_to_poi_mins: Optional[float] = None
+    pois_within_1_mile: int = 0
     
     def calculate(self, config_data: dict, **kwargs) -> float:
-        """Calculate location vibe score"""
-        sub_weights = config_data.get("sub_weights", {})
-        normalization = config_data.get("normalization", {})
+        """Calculate happening score with POI integration"""
+        scoring = config_data.get("scoring", {})
         
-        # Normalize counts to 0-10 scale
-        rest_score = min(10.0, self.restaurants / normalization.get("restaurants_divisor", 2.0))
-        cafe_score = min(10.0, self.cafes / normalization.get("cafes_divisor", 1.5))
-        park_score = min(10.0, self.parks * normalization.get("parks_multiplier", 3.0))
+        # Restaurants (20%): 0 = 0 pts, 3+ = 10 pts
+        rest_max = scoring.get("restaurants", {}).get("max", 3)
+        rest_score = min(self.restaurants / rest_max, 1.0) * 10 if rest_max > 0 else 0
+        rest_weighted = rest_score * scoring.get("restaurants", {}).get("weight", 0.20)
         
-        self.raw_value = (
-            rest_score * sub_weights.get("restaurants", 0.4) +
-            cafe_score * sub_weights.get("cafes", 0.4) +
-            park_score * sub_weights.get("parks", 0.2)
-        )
+        # Cafes (20%): 0 = 0 pts, 3+ = 10 pts
+        cafe_max = scoring.get("cafes", {}).get("max", 3)
+        cafe_score = min(self.cafes / cafe_max, 1.0) * 10 if cafe_max > 0 else 0
+        cafe_weighted = cafe_score * scoring.get("cafes", {}).get("weight", 0.20)
+        
+        # Avg walk to POIs (30%): 5 min = 10 pts, 25+ min = 0 pts
+        if self.avg_walk_to_poi_mins is not None:
+            min_mins = scoring.get("avg_walk_to_poi", {}).get("min_mins", 5)
+            max_mins = scoring.get("avg_walk_to_poi", {}).get("max_mins", 25)
+            clamped = max(min_mins, min(self.avg_walk_to_poi_mins, max_mins))
+            poi_walk_score = 10 * (1 - (clamped - min_mins) / (max_mins - min_mins))
+        else:
+            poi_walk_score = 0
+        poi_walk_weighted = poi_walk_score * scoring.get("avg_walk_to_poi", {}).get("weight", 0.30)
+        
+        # POIs within 1 mile (25%): 0 = 0 pts, 5+ = 10 pts
+        poi_count_max = scoring.get("pois_within_1_mile", {}).get("max", 5)
+        poi_count_score = min(self.pois_within_1_mile / poi_count_max, 1.0) * 10 if poi_count_max > 0 else 0
+        poi_count_weighted = poi_count_score * scoring.get("pois_within_1_mile", {}).get("weight", 0.25)
+        
+        # Parks (15%): 0 = 0 pts, 3+ = 10 pts
+        park_max = scoring.get("parks", {}).get("max", 3)
+        park_score = min(self.parks / park_max, 1.0) * 10 if park_max > 0 else 0
+        park_weighted = park_score * scoring.get("parks", {}).get("weight", 0.15)
+        
+        # Sum weighted components
+        total = rest_weighted + cafe_weighted + poi_walk_weighted + poi_count_weighted + park_weighted
+        
+        # Cap at 10 to keep it on the same 0-10 scale as other components
+        # (prevents locations with many amenities from dominating the overall score)
+        self.raw_value = min(total, 10.0)
         
         self.details = {
             "restaurants": self.restaurants,
+            "restaurants_score": round(rest_score, 2),
+            "restaurants_weighted": round(rest_weighted, 2),
             "cafes": self.cafes,
+            "cafes_score": round(cafe_score, 2),
+            "cafes_weighted": round(cafe_weighted, 2),
+            "avg_walk_to_poi_mins": self.avg_walk_to_poi_mins,
+            "poi_walk_score": round(poi_walk_score, 2),
+            "poi_walk_weighted": round(poi_walk_weighted, 2),
+            "pois_within_1_mile": self.pois_within_1_mile,
+            "poi_count_score": round(poi_count_score, 2),
+            "poi_count_weighted": round(poi_count_weighted, 2),
             "parks": self.parks,
-            "rest_score": round(rest_score, 2),
-            "cafe_score": round(cafe_score, 2),
-            "park_score": round(park_score, 2),
+            "parks_score": round(park_score, 2),
+            "parks_weighted": round(park_weighted, 2),
+            "total_uncapped": round(total, 2),  # For debugging
         }
+        
         return self.raw_value
 
 
@@ -184,17 +223,15 @@ class WFHQualityScore(ScoreComponent):
     desk_space: float = 0.0
     quietness_score: Optional[QuietnessScore] = None
     kitchen: float = 0.0
-    location_vibe_score: Optional[LocationVibeScore] = None
     inputs_available: bool = True
     
     def calculate(self, config_data: dict, **kwargs) -> float:
         """Calculate WFH quality score"""
-        self.dependencies = ["quietness", "location_vibe"]
+        self.dependencies = ["quietness"]
         
         sub_weights = config_data.get("sub_weights", {})
         
         quietness_value = self.quietness_score.raw_value if self.quietness_score else 0.0
-        location_vibe_value = self.location_vibe_score.raw_value if self.location_vibe_score else 0.0
         
         if not self.inputs_available:
             self.raw_value = 0.0
@@ -203,17 +240,15 @@ class WFHQualityScore(ScoreComponent):
                 "desk_space": self.desk_space,
                 "quietness": round(quietness_value, 2),
                 "kitchen": self.kitchen,
-                "location_vibe": round(location_vibe_value, 2),
                 "inputs_available": False,
             }
             return self.raw_value
         
         self.raw_value = (
-            self.natural_light * sub_weights.get("natural_light", 0.25) +
-            self.desk_space * sub_weights.get("desk_space", 0.25) +
-            quietness_value * sub_weights.get("quietness", 0.20) +
-            self.kitchen * sub_weights.get("kitchen", 0.15) +
-            location_vibe_value * sub_weights.get("location_vibe", 0.15)
+            self.natural_light * sub_weights.get("natural_light", 0.30) +
+            self.desk_space * sub_weights.get("desk_space", 0.30) +
+            quietness_value * sub_weights.get("quietness", 0.25) +
+            self.kitchen * sub_weights.get("kitchen", 0.15)
         )
         
         self.details = {
@@ -221,9 +256,9 @@ class WFHQualityScore(ScoreComponent):
             "desk_space": self.desk_space,
             "quietness": round(quietness_value, 2),
             "kitchen": self.kitchen,
-            "location_vibe": round(location_vibe_value, 2),
             "inputs_available": True,
         }
+        
         return self.raw_value
 
 
@@ -354,49 +389,69 @@ class LaundryScore(ScoreComponent):
 
 @dataclass
 class GymScore(ScoreComponent):
-    """Gym availability score"""
-    gym_within_10min: bool = False
-    gym_quality: float = 0.0
+    """Gym availability score - scaled by walking time only"""
+    gym_within_10min: bool = False  # Legacy field, kept for display
+    gym_walk_time_mins: Optional[float] = None  # Actual walking time in minutes - PRIMARY scoring factor
     elevation_gain_to_gym: Optional[float] = None
-    office_gym_only: bool = False  # New field for office-only option
+    office_gym_only: bool = False
     
     def calculate(self, config_data: dict, **kwargs) -> float:
-        """Calculate gym score"""
+        """
+        Calculate gym score based ONLY on walking time.
+        Quality/rating is ignored since gyms are hand-picked by user.
+        Score scales smoothly from 10 (0 min) to 0 (20+ min).
+        """
         scoring = config_data.get("scoring", {})
+        
+        print(f"    [GymScore.calculate] Input values:")
+        print(f"      gym_walk_time_mins: {self.gym_walk_time_mins}")
+        print(f"      gym_within_10min: {self.gym_within_10min}")
+        print(f"      office_gym_only: {self.office_gym_only}")
         
         # If only office gym is available, apply negative score
         if self.office_gym_only:
             score = scoring.get("office_gym_only", -5.0)
             self.details.update({
                 "gym_within_10min": False,
-                "gym_quality": 0.0,
+                "gym_walk_time_mins": None,
                 "office_gym_only": True,
                 "note": "No suitable nearby gyms - office gym only"
             })
             self.raw_value = score
+            print(f"      → Using office_gym_only: score = {score}")
             return self.raw_value
         
-        # Normal gym scoring
-        if self.gym_within_10min and self.gym_quality >= 7.0:
-            score = scoring.get("has_nearby_good_gym", 10.0)
-        elif self.gym_within_10min:
-            score = scoring.get("has_nearby_ok_gym", 6.0)
+        # Scale score based on walking time ONLY
+        if self.gym_walk_time_mins is not None:
+            # Linear scale: 0 min = 10 points, 20 min = 0 points
+            max_acceptable_mins = 20.0
+            
+            if self.gym_walk_time_mins <= 0:
+                score = 10.0
+            elif self.gym_walk_time_mins >= max_acceptable_mins:
+                score = 0.0
+            else:
+                # Linear interpolation based on walking time
+                score = 10.0 * (1.0 - (self.gym_walk_time_mins / max_acceptable_mins))
+            
+            self.details.update({
+                "gym_walk_time_mins": round(self.gym_walk_time_mins, 1),
+                "gym_within_10min": self.gym_walk_time_mins <= max_acceptable_mins,
+                "scoring_method": f"Distance-only: {round(self.gym_walk_time_mins, 1)} min walk = {round(score, 1)}/10"
+            })
+            print(f"      → Distance-only scoring: walk_time={self.gym_walk_time_mins} min, score = {score:.1f}")
         else:
-            score = scoring.get("no_nearby_gym", 0.0)
-        
-        # Adjust score for elevation gain (makes gym feel farther)
-        if self.elevation_gain_to_gym is not None and config.TERRAIN_SCORING["gym_distance_penalty"]["enabled"]:
-            penalty = self._calculate_hill_penalty()
-            score -= penalty
-            self.details['hill_penalty'] = round(penalty, 2)
+            # Fallback: if no walk time, assume no suitable gym
+            score = 0.0
+            print(f"      → No walk time data, assuming no suitable gym: score = {score}")
+            
+            self.details.update({
+                "gym_within_10min": False,
+                "note": "No walking time data available - needs recalculation"
+            })
         
         self.raw_value = max(0.0, min(10.0, score))
-        self.details.update({
-            "gym_within_10min": self.gym_within_10min,
-            "gym_quality": self.gym_quality,
-            "elevation_gain_to_gym": self.elevation_gain_to_gym,
-            "office_gym_only": False,
-        })
+        print(f"      → Final gym score: {self.raw_value}")
         return self.raw_value
     
     def _calculate_hill_penalty(self) -> float:
@@ -652,11 +707,6 @@ def _value_or_default(value, default=0.0):
     return default if value is None else value
 
 
-def _value_or_default(value, default=0.0):
-    """Return default when value is None; otherwise keep the provided value."""
-    return default if value is None else value
-
-
 def build_scorecard(apartment_data: Dict[str, Any]) -> ApartmentScoreCard:
     """
     Build a complete scorecard from apartment data
@@ -717,18 +767,6 @@ def build_scorecard(apartment_data: Dict[str, Any]) -> ApartmentScoreCard:
         quietness.raw_value = 0.0
     components["quietness"] = quietness
     
-    # Location vibe (used by WFH quality)
-    location_vibe = LocationVibeScore(
-        name="location_vibe",
-        raw_value=0.0,
-        weight=0.0,
-        restaurants=apartment_data.get("restaurants_nearby", 0),
-        cafes=apartment_data.get("cafes_nearby", 0),
-        parks=apartment_data.get("parks_nearby", 0),
-    )
-    location_vibe.calculate(config.SCORE_COMPONENTS["location_vibe"])
-    components["location_vibe"] = location_vibe
-    
     # Commute
     commute = CommuteScore(
         name="commute",
@@ -751,11 +789,24 @@ def build_scorecard(apartment_data: Dict[str, Any]) -> ApartmentScoreCard:
         desk_space=_value_or_default(apartment_data.get("desk_space_quality"), 0.0),
         quietness_score=quietness,
         kitchen=_value_or_default(apartment_data.get("kitchen_quality"), 0.0),
-        location_vibe_score=location_vibe,
         inputs_available=has_wfh_inputs,
     )
     wfh_quality.calculate(config.SCORE_COMPONENTS["wfh_quality"])
     components["wfh_quality"] = wfh_quality
+    
+    # Happening (formerly Location Vibe, now standalone top-level category)
+    happening = HappeningScore(
+        name="happening",
+        raw_value=0.0,
+        weight=config.SCORE_COMPONENTS["happening"]["weight"],
+        restaurants=apartment_data.get("restaurants_nearby", 0),
+        cafes=apartment_data.get("cafes_nearby", 0),
+        parks=apartment_data.get("parks_nearby", 0),
+        avg_walk_to_poi_mins=apartment_data.get("avg_walk_to_poi_mins"),
+        pois_within_1_mile=apartment_data.get("pois_within_1_mile", 0),
+    )
+    happening.calculate(config.SCORE_COMPONENTS["happening"])
+    components["happening"] = happening
     
     # Safety
     safety = SafetyScore(
@@ -853,7 +904,7 @@ def build_scorecard(apartment_data: Dict[str, Any]) -> ApartmentScoreCard:
         raw_value=0.0,
         weight=config.SCORE_COMPONENTS["gym_nearby"]["weight"],
         gym_within_10min=apartment_data.get("gym_within_10min", False),
-        gym_quality=apartment_data.get("gym_quality", 0.0),
+        gym_walk_time_mins=apartment_data.get("gym_walk_time_mins"),
         elevation_gain_to_gym=apartment_data.get("elevation_to_gym"),
         office_gym_only=apartment_data.get("office_gym_only", False),
     )

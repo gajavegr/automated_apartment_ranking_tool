@@ -9,7 +9,7 @@ Analyzes:
 
 import os
 import requests
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Union
 from datetime import datetime, timedelta
 import time
 
@@ -21,12 +21,13 @@ from utils.rate_limiter import get_rate_limiter
 class LocationAnalyzer:
     """Analyzer for apartment location and surroundings"""
     
-    def __init__(self, google_maps_api_key: str = None):
+    def __init__(self, google_maps_api_key: str = None, sheets_client=None):
         """
         Initialize location analyzer
         
         Args:
             google_maps_api_key: Google Maps API key
+            sheets_client: Optional GoogleSheetsClient for exclusion list
         """
         self.api_key = google_maps_api_key or config.GOOGLE_MAPS_API_KEY
         if not self.api_key:
@@ -34,6 +35,29 @@ class LocationAnalyzer:
         
         self.cache = get_cache()
         self.rate_limiter = get_rate_limiter()
+        self.sheets_client = sheets_client
+        self._excluded_places_cache = None
+        self._excluded_places_cache_time = None
+    
+    def _get_excluded_places(self) -> List[str]:
+        """Get list of excluded place IDs with caching"""
+        from datetime import datetime, timedelta
+        
+        # Cache for 5 minutes
+        if (self._excluded_places_cache is not None and 
+            self._excluded_places_cache_time is not None and
+            datetime.now() - self._excluded_places_cache_time < timedelta(minutes=5)):
+            return self._excluded_places_cache
+        
+        if self.sheets_client:
+            try:
+                self._excluded_places_cache = self.sheets_client.get_excluded_places()
+                self._excluded_places_cache_time = datetime.now()
+                return self._excluded_places_cache
+            except Exception as e:
+                print(f"Warning: Could not fetch excluded places: {e}")
+        
+        return []
     
     def _make_places_api_request(self, url: str, params: dict, timeout: int = 10) -> dict:
         """
@@ -786,46 +810,50 @@ class LocationAnalyzer:
         
         return result
     
-    def get_nearby_amenities(self, lat: float, lng: float) -> Dict[str, int]:
+    def get_nearby_amenities(self, lat: float, lng: float, return_details: bool = False, poi_names: List[str] = None) -> Dict[str, Any]:
         """
-        Get count of nearby amenities
+        Get count of nearby amenities (vegetarian-friendly restaurants/cafes with 4+ stars)
         
         Args:
             lat: Latitude
             lng: Longitude
+            return_details: If True, return detailed lists of places; if False, return counts only
+            poi_names: List of POI names to skip Claude verification (already known to be good)
             
         Returns:
-            Dictionary with amenity counts
+            Dictionary with amenity counts (and details if return_details=True)
         """
-        cache_key = f"amenities_{lat}_{lng}"
+        cache_key = f"amenities_{lat}_{lng}{'_details' if return_details else ''}"
         cached = self.cache.get(cache_key)
         if cached:
             return cached
         
         result = {
-            'restaurants': 0,
-            'cafes': 0,
-            'parks': 0,
+            'restaurants': 0 if not return_details else [],
+            'cafes': 0 if not return_details else [],
+            'parks': 0 if not return_details else [],
         }
         
         try:
-            # Search for restaurants
-            result['restaurants'] = self._search_places(
-                lat, lng, 'restaurant', config.PLACES_SEARCH_RADIUS
+            # Search for vegetarian-friendly restaurants (4+ stars)
+            print("🥗 Searching for vegetarian-friendly restaurants...")
+            result['restaurants'] = self._search_vegetarian_places(
+                lat, lng, 'restaurant', config.PLACES_SEARCH_RADIUS, return_details, poi_names
             )
             
             time.sleep(0.1)  # Rate limiting
             
-            # Search for cafes
-            result['cafes'] = self._search_places(
-                lat, lng, 'cafe', config.PLACES_SEARCH_RADIUS
+            # Search for cafes (4+ stars)
+            print("☕ Searching for quality cafes...")
+            result['cafes'] = self._search_vegetarian_places(
+                lat, lng, 'cafe', config.PLACES_SEARCH_RADIUS, return_details, poi_names
             )
             
             time.sleep(0.1)
             
-            # Search for parks
+            # Search for parks (no filtering needed)
             result['parks'] = self._search_places(
-                lat, lng, 'park', config.PLACES_SEARCH_RADIUS
+                lat, lng, 'park', config.PLACES_SEARCH_RADIUS, return_details
             )
             
             self.cache.set(cache_key, result)
@@ -905,8 +933,13 @@ class LocationAnalyzer:
         
         return result
     
-    def _search_places(self, lat: float, lng: float, place_type: str, radius: int) -> int:
-        """Search for places and return count"""
+    def _search_places(self, lat: float, lng: float, place_type: str, radius: int, return_details: bool = False) -> Union[int, List[Dict]]:
+        """
+        Search for places and return count or detailed list
+        
+        Args:
+            return_details: If True, return list of place dicts; if False, return count only
+        """
         try:
             url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
             params = {
@@ -919,12 +952,248 @@ class LocationAnalyzer:
             data = self._make_places_api_request(url, params, timeout=10)
             
             if data['status'] == 'OK':
-                return len(data.get('results', []))
+                results = data.get('results', [])
+                
+                # Filter out excluded places
+                excluded_place_ids = self._get_excluded_places()
+                filtered_results = [p for p in results if p.get('place_id') not in excluded_place_ids]
+                
+                if return_details:
+                    return [{
+                        'name': p.get('name', 'Unknown'),
+                        'place_id': p.get('place_id'),
+                        'rating': p.get('rating', 0),
+                        'address': p.get('vicinity', ''),
+                        'types': p.get('types', [])
+                    } for p in filtered_results]
+                else:
+                    return len(filtered_results)
         
         except Exception as e:
             print(f"Error searching for {place_type}: {e}")
         
-        return 0
+        return [] if return_details else 0
+    
+    def _search_vegetarian_places(self, lat: float, lng: float, place_type: str, radius: int, return_details: bool = False, poi_names: List[str] = None) -> Union[int, List[Dict]]:
+        """
+        Search for vegetarian-friendly places with 4+ star rating using Claude to analyze menus
+        
+        Args:
+            lat: Latitude
+            lng: Longitude
+            place_type: Type of place ('restaurant' or 'cafe')
+            radius: Search radius in meters
+            return_details: If True, return list of place dicts; if False, return count only
+            poi_names: List of POI names to skip Claude verification (already known to be good)
+            
+        Returns:
+            Count of vegetarian-friendly places with 4+ star rating, or list of place details if return_details=True
+        """
+        try:
+            # First, get all places with 4+ star rating
+            url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+            params = {
+                'location': f"{lat},{lng}",
+                'radius': radius,
+                'type': place_type,
+                'key': self.api_key,
+            }
+            
+            data = self._make_places_api_request(url, params, timeout=10)
+            
+            if data['status'] != 'OK':
+                return [] if return_details else 0
+            
+            places = data.get('results', [])
+            
+            # Filter by rating first (4+ stars)
+            high_rated_places = [p for p in places if p.get('rating', 0) >= 4.0]
+            
+            if not high_rated_places:
+                return [] if return_details else 0
+            
+            print(f"  Found {len(high_rated_places)} {place_type}s with 4+ stars, checking vegetarian options...")
+            
+            # Check vegetarian-friendliness using Claude for top-rated places
+            # To avoid too many API calls, limit to checking top 20 by rating
+            top_places = sorted(high_rated_places, key=lambda p: p.get('rating', 0), reverse=True)[:20]
+            
+            # Get exclusion list
+            excluded_place_ids = self._get_excluded_places()
+            
+            # Normalize POI names for comparison (if provided)
+            poi_names_normalized = set()
+            if poi_names:
+                poi_names_normalized = {name.lower().strip() for name in poi_names if name}
+                if poi_names_normalized:
+                    print(f"  ℹ️  Checking against {len(poi_names_normalized)} POI names for auto-inclusion")
+            
+            vegetarian_places = []
+            claude_checks = 0
+            poi_auto_includes = 0
+            
+            for place in top_places:
+                place_id = place.get('place_id')
+                place_name = place.get('name', 'Unknown')
+                
+                # Skip if excluded
+                if place_id in excluded_place_ids:
+                    continue
+                
+                # Check if this place is in the POI list - if so, auto-include without Claude check
+                place_name_normalized = place_name.lower().strip()
+                is_in_poi_list = place_name_normalized in poi_names_normalized
+                
+                # Try fuzzy matching if exact match fails (e.g., "Tartine Bakery" vs "Tartine")
+                if not is_in_poi_list and poi_names_normalized:
+                    for poi_name in poi_names_normalized:
+                        # Check if POI name is a substring of place name or vice versa
+                        if (poi_name in place_name_normalized or 
+                            place_name_normalized in poi_name):
+                            is_in_poi_list = True
+                            break
+                
+                if is_in_poi_list:
+                    # Auto-include places from POI list (no Claude API call needed!)
+                    print(f"    ✓ {place_name} is in your POI list - auto-including (skipping Claude check)")
+                    poi_auto_includes += 1
+                    is_vegetarian = True
+                else:
+                    # Check with Claude
+                    is_vegetarian = self._is_vegetarian_friendly(place_id, place_name, place_type)
+                    claude_checks += 1
+                    # Rate limit between Claude API calls
+                    time.sleep(0.2)
+                
+                if is_vegetarian:
+                    if return_details:
+                        vegetarian_places.append({
+                            'name': place_name,
+                            'place_id': place_id,
+                            'rating': place.get('rating', 0),
+                            'address': place.get('vicinity', ''),
+                            'types': place.get('types', [])
+                        })
+                    else:
+                        vegetarian_places.append(place)
+            
+            if return_details:
+                print(f"  ✓ Found {len(vegetarian_places)} vegetarian-friendly {place_type}s ({poi_auto_includes} from POI list, {claude_checks} Claude checks)")
+                return vegetarian_places
+            else:
+                vegetarian_count = len(vegetarian_places)
+                print(f"  ✓ Found {vegetarian_count} vegetarian-friendly {place_type}s ({poi_auto_includes} from POI list, {claude_checks} Claude checks)")
+                return vegetarian_count
+        
+        except Exception as e:
+            print(f"Error searching for vegetarian {place_type}: {e}")
+            return [] if return_details else 0
+    
+    def _is_vegetarian_friendly(self, place_id: str, place_name: str, place_type: str) -> bool:
+        """
+        Use Claude to determine if a place is vegetarian-friendly based on available info
+        
+        Args:
+            place_id: Google Place ID
+            place_name: Name of the place
+            place_type: Type ('restaurant' or 'cafe')
+            
+        Returns:
+            True if vegetarian-friendly, False otherwise
+        """
+        cache_key = f"veg_friendly_{place_id}"
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            return cached
+        
+        try:
+            # Get place details from Google Places API
+            details_url = "https://maps.googleapis.com/maps/api/place/details/json"
+            params = {
+                'place_id': place_id,
+                'fields': 'name,types,editorial_summary,website,reviews',
+                'key': self.api_key,
+            }
+            
+            self.rate_limiter.wait_if_needed('google_places')
+            response = requests.get(details_url, params=params, timeout=10)
+            details_data = response.json()
+            
+            if details_data['status'] != 'OK':
+                return False
+            
+            place_details = details_data.get('result', {})
+            types = place_details.get('types', [])
+            summary = place_details.get('editorial_summary', {}).get('overview', '')
+            reviews = place_details.get('reviews', [])
+            
+            # Build context for Claude
+            context = f"Restaurant: {place_name}\n"
+            context += f"Type: {place_type}\n"
+            context += f"Categories: {', '.join(types)}\n"
+            if summary:
+                context += f"Summary: {summary}\n"
+            if reviews:
+                context += "\nRecent reviews:\n"
+                for review in reviews[:3]:  # First 3 reviews
+                    context += f"- {review.get('text', '')[:200]}...\n"
+            
+            # Use Claude to analyze
+            import anthropic
+            claude_key = config.ANTHROPIC_API_KEY
+            if not claude_key:
+                print(f"  ⚠️  No Anthropic API key, skipping {place_name}")
+                return False
+            
+            client = anthropic.Anthropic(api_key=claude_key)
+            
+            prompt = f"""Determine if this restaurant/cafe is suitable for vegetarians.
+
+{context}
+
+IMPORTANT: Vegetarian-friendly means:
+- Has vegetarian options (dishes with NO meat/fish/poultry)
+- Vegan options count as vegetarian-friendly (vegan ⊂ vegetarian)
+- Places with dairy/eggs are fine (lacto-ovo vegetarian)
+- **Bakeries, cafes, and dessert shops are ALWAYS vegetarian-friendly** (coffee, pastries, desserts)
+
+Consider:
+1. Explicit vegetarian/vegan menu items mentioned?
+2. Cuisine type with good veg options (Indian, Mediterranean, Thai, Italian, Mexican, etc.)?
+3. Reviews mention vegetarian/vegan dishes positively?
+4. Is it a bakery, cafe, coffee shop, or dessert place? → **YES (automatically suitable)**
+
+NOT suitable:
+- Steakhouses or BBQ joints (primarily meat-focused)
+- Fast food burger/chicken places with only meat options
+- Seafood-only restaurants with no alternatives
+
+Respond with ONLY the word "YES" or "NO" (nothing else)."""
+
+            message = client.messages.create(
+                model="claude-3-5-haiku-20241022",  # Latest Haiku 3.5 - fast, cheap, and most up-to-date
+                max_tokens=100,  # Allow reasoning for debugging
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            response_text = message.content[0].text.strip()
+            
+            # Parse only the first line for YES/NO decision
+            first_line = response_text.split('\n')[0].strip().upper()
+            is_veg_friendly = first_line.startswith("YES")
+            
+            # For debugging, show full response (but truncate if very long)
+            response_preview = response_text if len(response_text) <= 100 else response_text[:100] + "..."
+            print(f"    {'✓' if is_veg_friendly else '✗'} {place_name}: {response_preview}")
+            
+            # Cache result
+            self.cache.set(cache_key, is_veg_friendly)
+            return is_veg_friendly
+            
+        except Exception as e:
+            print(f"    ⚠️  Error checking {place_name}: {e}")
+            # On error, be conservative and return False
+            return False
     
     def _haversine_distance(self, lat1: float, lng1: float, lat2: float, lng2: float) -> float:
         """Calculate distance in miles between two coordinates"""
@@ -1022,16 +1291,73 @@ class LocationAnalyzer:
             'is_steep_hill': abs(gain) > 40
         }
     
+    def _strip_apartment_number(self, address: str) -> str:
+        """
+        Remove apartment/unit numbers from address while preserving essential components
+        
+        Handles various formats:
+        - "123 Main St apt 4, City, CA 12345"
+        - "123 Main St #456, City, CA 12345"
+        - "123 Main St Unit 4B, City, CA 12345"
+        - "123 Main St, Apt. 4, City, CA 12345"
+        
+        Args:
+            address: Full address including apartment number
+            
+        Returns:
+            Address with apartment number removed, validated to have city and zip
+        """
+        import re
+        
+        # Common apartment designators (case-insensitive)
+        apt_patterns = [
+            r'\s+apt\.?\s+\w+',          # apt 4, apt. 4
+            r'\s+apartment\s+\w+',        # apartment 4
+            r'\s+unit\.?\s+\w+',          # unit 4, unit. 4
+            r'\s+#\s*\w+',                # #4, # 4
+            r'\s+ste\.?\s+\w+',           # ste 4, ste. 4
+            r'\s+suite\.?\s+\w+',         # suite 4, suite. 4
+            r',\s*apt\.?\s+\w+',          # , apt 4
+            r',\s*apartment\s+\w+',       # , apartment 4
+            r',\s*unit\.?\s+\w+',         # , unit 4
+            r',\s*#\s*\w+',               # , #4
+            r',\s*ste\.?\s+\w+',          # , ste 4
+            r',\s*suite\.?\s+\w+',        # , suite 4
+        ]
+        
+        cleaned = address
+        for pattern in apt_patterns:
+            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+        
+        # Clean up any double commas or extra spaces
+        cleaned = re.sub(r',\s*,', ',', cleaned)  # Remove double commas
+        cleaned = re.sub(r'\s+', ' ', cleaned)     # Normalize whitespace
+        cleaned = cleaned.strip()
+        
+        # Validate that we still have essential components
+        # Must have: street address, city, state, and zip code
+        # Pattern: "number street, city, state zip"
+        essential_pattern = r'\d+\s+.+,\s*.+,\s*[A-Z]{2}\s+\d{5}'
+        
+        if re.search(essential_pattern, cleaned):
+            return cleaned
+        else:
+            # If cleaning broke the address, return original
+            # (better to have apartment number than invalid address)
+            print(f"  ⚠️  Address cleaning may have removed too much, using original")
+            return address
+    
     def get_building_year(self, address: str) -> Optional[int]:
         """
         Attempt to find the year a building was built
         
         Uses multiple strategies:
         1. Google Places API (sometimes has this data)
-        2. Street View metadata (earliest available image)
+        2. Claude AI web search and extraction (most reliable)
+        3. Street View metadata (earliest available image as fallback)
         
         Args:
-            address: Full address string
+            address: Full address string (may include apartment number)
             
         Returns:
             Year as integer, or None if not found
@@ -1041,10 +1367,16 @@ class LocationAnalyzer:
         if cached:
             return cached
         
+        # Strip apartment number for better Claude search results
+        # (Building records typically don't include apartment numbers)
+        building_address = self._strip_apartment_number(address)
+        if building_address != address:
+            print(f"  🏢 Using building address for search: {building_address}")
+        
         result = None
         
         try:
-            # First try: Google Places API
+            # First try: Google Places API (quick but rarely has this data)
             coords = self.geocode_address(address)
             if coords:
                 lat, lng = coords
@@ -1083,7 +1415,83 @@ class LocationAnalyzer:
                         if opening_date and 'year' in opening_date:
                             result = int(opening_date['year'])
             
-            # Second try: Street View metadata (earliest image date as proxy)
+            # Second try: Use Claude to search and extract building year
+            if not result:
+                try:
+                    import anthropic
+                    import os
+                    
+                    api_key = os.getenv('ANTHROPIC_API_KEY')
+                    if api_key:
+                        client = anthropic.Anthropic(api_key=api_key)
+                        
+                        prompt = f"""You are helping find the construction year for a residential building in San Francisco.
+
+Building Address: {building_address}
+
+Please search for information about when this building was constructed. Look for:
+- Property records
+- Historical building databases
+- Real estate listings
+- San Francisco property assessor records
+- Architectural databases
+
+Respond with ONLY the 4-digit year (e.g., 1925) if you can find it with high confidence.
+If you cannot find reliable information, respond with "UNKNOWN".
+
+Do not include any explanation, just the year or "UNKNOWN"."""
+                        
+                        print(f"  🤖 Asking Claude to find building year for {building_address}...")
+                        
+                        # Try latest Sonnet first, fallback to older versions if not available
+                        models_to_try = [
+                            "claude-sonnet-4-5-20250929",  # Latest Sonnet 4.5 (September 2025)
+                            "claude-3-5-sonnet-20241022",  # Sonnet 3.5 (October 2024)
+                            "claude-3-5-sonnet-20240620",  # Earlier Sonnet 3.5
+                            "claude-3-sonnet-20240229",    # Sonnet 3 fallback
+                        ]
+                        
+                        response = None
+                        last_error = None
+                        
+                        for model in models_to_try:
+                            try:
+                                response = client.messages.create(
+                                    model=model,
+                                    max_tokens=50,
+                                    messages=[{
+                                        "role": "user",
+                                        "content": prompt
+                                    }]
+                                )
+                                print(f"  ✓ Using model: {model}")
+                                break
+                            except Exception as model_error:
+                                last_error = model_error
+                                if "404" in str(model_error) or "not_found" in str(model_error):
+                                    continue  # Try next model
+                                else:
+                                    raise  # Other error, don't retry
+                        
+                        if not response:
+                            raise Exception(f"All Claude models failed. Last error: {last_error}")
+                        
+                        response_text = response.content[0].text.strip()
+                        print(f"  Claude response: {response_text}")
+                        
+                        # Try to extract year from response
+                        if response_text != "UNKNOWN":
+                            # Look for 4-digit year
+                            import re
+                            year_match = re.search(r'\b(1[89]\d{2}|20[0-2]\d)\b', response_text)
+                            if year_match:
+                                result = int(year_match.group(1))
+                                print(f"  ✓ Claude found building year: {result}")
+                            
+                except Exception as claude_error:
+                    print(f"  ⚠️  Claude search failed: {claude_error}")
+            
+            # Third try: Street View metadata (earliest image date as proxy)
             if not result and coords:
                 metadata_url = "https://maps.googleapis.com/maps/api/streetview/metadata"
                 metadata_params = {
@@ -1106,14 +1514,16 @@ class LocationAnalyzer:
             
             if result:
                 self.cache.set(cache_key, result)
-                print(f"  Found building year: {result}")
+                print(f"  ✓ Found building year: {result}")
             else:
-                print(f"  Could not determine building year automatically")
+                print(f"  ❌ Could not determine building year automatically")
             
             return result
         
         except Exception as e:
             print(f"  Error finding building year: {e}")
+            import traceback
+            traceback.print_exc()
             return None
         
     
@@ -1264,6 +1674,7 @@ class LocationAnalyzer:
         # Try multiple search terms - prioritize specific chains that might not show up in type search
         search_terms = [
             'Live Fit Gym',  # Specific chain that's missing from type search
+            'LuxFit',        # LuxFit Mission Rock and LuxFit SF
             'Crunch Fitness',
             'Planet Fitness',
             '24 Hour Fitness',
@@ -1811,6 +2222,9 @@ class LocationAnalyzer:
             return []
         
         try:
+            # Rate limit: Google Directions API (Distance Matrix uses same quota)
+            self.rate_limiter.wait_if_needed('google_directions')
+            
             # Distance Matrix API
             url = "https://maps.googleapis.com/maps/api/distancematrix/json"
             
@@ -1870,4 +2284,126 @@ class LocationAnalyzer:
         c = 2 * atan2(sqrt(a), sqrt(1-a))
         
         return R * c
+    
+    def get_avg_walk_time_to_places_of_interest(self, apartment_lat: float, apartment_lng: float, 
+                                                 places_of_interest: List[Dict]) -> Dict[str, Any]:
+        """
+        Calculate average walking time to top 5 nearest places of interest
+        
+        Args:
+            apartment_lat: Apartment latitude
+            apartment_lng: Apartment longitude
+            places_of_interest: List of dicts with 'Name', 'Latitude', 'Longitude'
+            
+        Returns:
+            Dict with avg_walk_time_mins, nearest_places_info, and count
+        """
+        if not places_of_interest:
+            return {
+                'avg_walk_time_mins': None,
+                'nearest_places': [],
+                'count': 0
+            }
+        
+        # Step 1: Build list of place coords and filter to SF area only
+        place_coords = []
+        for place in places_of_interest:
+            try:
+                lat = float(place.get('Latitude', 0))
+                lng = float(place.get('Longitude', 0))
+                if lat and lng:
+                    # Basic SF bounds check (approximately)
+                    if 37.7 <= lat <= 37.83 and -122.52 <= lng <= -122.35:
+                        place_coords.append({
+                            'name': place.get('Name', 'Unknown'),
+                            'lat': lat,
+                            'lng': lng
+                        })
+            except (ValueError, TypeError):
+                continue
+        
+        if not place_coords:
+            return {
+                'avg_walk_time_mins': None,
+                'nearest_places': [],
+                'count': 0
+            }
+        
+        # Step 2: Filter to places within ~2 miles using haversine (cheap, no API call)
+        # This reduces the number of places we need to query with Distance Matrix API
+        INITIAL_FILTER_RADIUS_MILES = 2.0
+        nearby_places = []
+        for place_data in place_coords:
+            haversine_dist = self._calculate_distance(
+                apartment_lat, apartment_lng,
+                place_data['lat'], place_data['lng']
+            )
+            if haversine_dist <= INITIAL_FILTER_RADIUS_MILES:
+                nearby_places.append({
+                    **place_data,
+                    'haversine_dist': haversine_dist
+                })
+        
+        if not nearby_places:
+            print(f"  ℹ️  No places of interest within {INITIAL_FILTER_RADIUS_MILES} miles (filtered from {len(place_coords)} total SF places)")
+            return {
+                'avg_walk_time_mins': None,
+                'nearest_places': [],
+                'count': 0
+            }
+        
+        print(f"  ✓ Filtered to {len(nearby_places)} places within {INITIAL_FILTER_RADIUS_MILES} miles (from {len(place_coords)} total SF places)")
+        
+        # Step 3: Calculate walking times using Distance Matrix API
+        # Batch requests if needed (API limit is 100 elements per request)
+        MAX_DESTINATIONS_PER_BATCH = 25  # Conservative limit to avoid hitting API quotas
+        
+        all_walking_times = []
+        for batch_start in range(0, len(nearby_places), MAX_DESTINATIONS_PER_BATCH):
+            batch_end = min(batch_start + MAX_DESTINATIONS_PER_BATCH, len(nearby_places))
+            batch_places = nearby_places[batch_start:batch_end]
+            
+            print(f"  📍 Fetching walking times for batch {batch_start//MAX_DESTINATIONS_PER_BATCH + 1} ({len(batch_places)} places)...")
+            
+            coords_list = [(p['lat'], p['lng']) for p in batch_places]
+            batch_walking_times = self._get_walking_times(apartment_lat, apartment_lng, coords_list)
+            all_walking_times.extend(batch_walking_times)
+            
+            # Brief pause between batches to respect rate limits
+            if batch_end < len(nearby_places):
+                time.sleep(0.5)
+        
+        # Step 4: Combine results and sort by walking time
+        place_walk_times = []
+        for i, place_data in enumerate(nearby_places):
+            walk_time_data = all_walking_times[i]
+            walk_time = walk_time_data.get('duration_mins')
+            
+            if walk_time is not None:
+                place_walk_times.append({
+                    'name': place_data['name'],
+                    'walk_time_mins': walk_time,
+                    'haversine_dist': place_data['haversine_dist'],
+                    'distance_miles': walk_time_data.get('distance_miles')
+                })
+        
+        if not place_walk_times:
+            return {
+                'avg_walk_time_mins': None,
+                'nearest_places': [],
+                'count': 0
+            }
+        
+        # Sort by walk time and take top 5
+        place_walk_times.sort(key=lambda x: x['walk_time_mins'])
+        top_5 = place_walk_times[:5]
+        
+        # Calculate average
+        avg_walk_time = sum(p['walk_time_mins'] for p in top_5) / len(top_5)
+        
+        return {
+            'avg_walk_time_mins': round(avg_walk_time, 1),
+            'nearest_places': top_5,
+            'count': len(top_5)
+        }
 

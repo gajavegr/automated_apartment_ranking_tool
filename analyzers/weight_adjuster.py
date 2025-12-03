@@ -37,10 +37,10 @@ class WeightAdjuster:
             'quietness_score': 'wfh_quality',
             'kitchen_quality': 'wfh_quality',
             
-            # Location Vibe fields
-            'restaurants_nearby': 'location_vibe',
-            'cafes_nearby': 'location_vibe',
-            'parks_nearby': 'location_vibe',
+            # Happening fields
+            'restaurants_nearby': 'happening',
+            'cafes_nearby': 'happening',
+            'parks_nearby': 'happening',
             
             # Parking fields
             'street_parking_ease': 'parking',

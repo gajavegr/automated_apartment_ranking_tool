@@ -65,11 +65,18 @@ SHEET_COLUMNS = {
     "study_door_type": "Study Door Type",
     "kitchen_quality": "Kitchen Quality",
     
-    # Location Vibe
-    "location_vibe_score": "Location Vibe Score",
+    # Happening Score (formerly Location Vibe)
+    "happening_score": "Happening Score",
     "restaurants_nearby": "Restaurants Nearby",
+    "restaurants_list": "Restaurants List (JSON)",
     "cafes_nearby": "Cafes Nearby",
+    "cafes_list": "Cafes List (JSON)",
     "parks_nearby": "Parks Nearby",
+    "parks_list": "Parks List (JSON)",
+    "pois_list": "POIs List (JSON)",
+    "avg_walk_to_poi_mins": "Avg Walk to Top 5 POIs (min)",
+    "nearest_poi_count": "Nearest POIs Count",
+    "pois_within_1_mile": "POIs Within 1 Mile",
     
     # Parking
     "parking_type": "Parking Type",
@@ -82,10 +89,13 @@ SHEET_COLUMNS = {
     
     # Other amenities
     "laundry_type": "Laundry Type",
+    "laundry_score": "Laundry Score",
     "floor_level": "Floor Level",
     "view_quality": "View Quality",
-    "gym_within_10min": "Gym Within 10min",
+    "gym_within_10min": "Gym Within 20min Walk",  # Updated from 10min to 20min
+    "gym_walk_time_mins": "Time to Nearest Gym (min)",  # Walking time in minutes
     "gym_quality": "Gym Quality",
+    "gym_score": "Gym Score",
     "office_gym_only": "Office Gym Only",  # New field for office-only option
     "rent_control": "Rent Control Protected",
     "year_built": "Year Built",
@@ -116,16 +126,116 @@ SHEET_COLUMNS = {
 }
 
 # San Francisco Neighborhoods
+# Comprehensive list including official names and commonly-used informal names
+# NOTE: This list includes both Google Maps API names AND common informal names
 SF_NEIGHBORHOODS = [
-    "Alamo Square", "Bayview", "Castro", "Chinatown", "Civic Center",
-    "Cole Valley", "Dogpatch", "Downtown", "Embarcadero", "Excelsior",
-    "Financial District", "Fisherman's Wharf", "Glen Park", "Haight-Ashbury",
-    "Hayes Valley", "Inner Richmond", "Inner Sunset", "Japantown", "Laurel Heights",
-    "Lower Haight", "Marina", "Mission", "Mission Bay", "Nob Hill", "Noe Valley",
-    "North Beach", "Outer Richmond", "Outer Sunset", "Pacific Heights", "Panhandle",
-    "Portola", "Potrero Hill", "Presidio", "Russian Hill", "SOMA", "South Beach",
-    "Tenderloin", "Telegraph Hill", "Twin Peaks", "Union Square", "Upper Market",
-    "Van Ness", "Visitacion Valley", "Western Addition", "West Portal"
+    "Alamo Square",
+    "Anza Vista",
+    "Balboa Park",
+    "Balboa Terrace",
+    "Bayview",
+    "Bernal Heights",
+    "Castro",
+    "Chinatown",
+    "Civic Center",
+    "Cole Valley",
+    "Corona Heights",
+    "Cow Hollow",
+    "Crocker-Amazon",
+    "Design District",
+    "Diamond Heights",
+    "Dogpatch",
+    "Dolores Heights",  # Google Maps API name
+    "Downtown",
+    "Duboce Triangle",
+    "Embarcadero",
+    "Eureka Valley",
+    "Excelsior",
+    "FiDi",  # Financial District informal name
+    "Fillmore",
+    "Financial District",
+    "Fisherman's Wharf",
+    "Forest Hill",
+    "Glen Park",
+    "Golden Gate Heights",
+    "Haight-Ashbury",
+    "Hayes Valley",
+    "Hunters Point",
+    "Ingleside",
+    "Inner Mission",
+    "Inner Parkside",
+    "Inner Richmond",
+    "Inner Sunset",
+    "Japantown",
+    "Jordan Park",
+    "Lake Street",
+    "Lakeside",
+    "Laurel Heights",
+    "Lincoln Park",
+    "Little Hollywood",
+    "Lone Mountain",
+    "Lower Haight",
+    "Lower Nob Hill",
+    "Lower Pacific Heights",
+    "Marina",
+    "Merced Heights",
+    "Miraloma Park",
+    "Mission",
+    "Mission Bay",
+    "Mission Dolores",
+    "Mission Terrace",
+    "Nob Hill",
+    "NoPa",  # Informal name
+    "Noe Valley",
+    "North Beach",
+    "North Embarcadero",
+    "North of the Panhandle",  # Google Maps API name for NoPa
+    "North Panhandle",
+    "Oceanview",
+    "OMI",  # Ocean View, Merced Heights, Ingleside
+    "Outer Mission",
+    "Outer Parkside",
+    "Outer Richmond",
+    "Outer Sunset",
+    "Pacific Heights",
+    "Panhandle",
+    "Parkmerced",
+    "Parkside",
+    "Polk Gulch",
+    "Portola",
+    "Potrero Hill",
+    "Presidio",
+    "Presidio Heights",
+    "Richmond",
+    "Rincon Hill",
+    "Russian Hill",
+    "Sea Cliff",
+    "Showplace Square",
+    "SoMa",  # Informal name
+    "South Beach",
+    "South of Market",  # Google Maps API name for SoMa
+    "St. Francis Wood",
+    "Stonestown",
+    "Sunnyside",
+    "Sunset",
+    "Telegraph Hill",
+    "Tenderloin",
+    "Tendernob",  # Tender Nob (between Tenderloin and Nob Hill)
+    "The Castro",
+    "The Haight",
+    "The Marina",
+    "The Mission",
+    "The Richmond",
+    "The Sunset",
+    "Twin Peaks",
+    "Union Square",
+    "Upper Market",
+    "Van Ness",
+    "Visitacion Valley",
+    "West Portal",
+    "Western Addition",
+    "Westwood Highlands",
+    "Westwood Park",
 ]
 
 # Scoring Components Configuration
@@ -142,13 +252,12 @@ SCORE_COMPONENTS = {
     },
     "wfh_quality": {
         "weight": 0.20,
-        "inputs": ["natural_light", "desk_space", "quietness", "kitchen", "location_vibe"],
+        "inputs": ["natural_light", "desk_space", "quietness", "kitchen"],
         "sub_weights": {
-            "natural_light": 0.25,
-            "desk_space": 0.25,
-            "quietness": 0.20,
+            "natural_light": 0.30,
+            "desk_space": 0.30,
+            "quietness": 0.25,
             "kitchen": 0.15,
-            "location_vibe": 0.15,
         }
     },
     "quietness": {
@@ -168,17 +277,14 @@ SCORE_COMPONENTS = {
             }
         }
     },
-    "location_vibe": {
-        "weight": 0.0,  # Input to wfh_quality only
-        "sub_weights": {
-            "restaurants": 0.4,
-            "cafes": 0.4,
-            "parks": 0.2,
-        },
-        "normalization": {
-            "restaurants_divisor": 2.0,  # Score = min(10, count / divisor)
-            "cafes_divisor": 1.5,
-            "parks_multiplier": 3.0,  # Score = min(10, count * multiplier)
+    "happening": {
+        "weight": 0.10,  # Standalone category weight
+        "scoring": {
+            "restaurants": {"max": 3, "weight": 0.20},
+            "cafes": {"max": 3, "weight": 0.20},
+            "avg_walk_to_poi": {"min_mins": 5, "max_mins": 25, "weight": 0.30},
+            "pois_within_1_mile": {"max": 5, "weight": 0.25},
+            "parks": {"max": 3, "weight": 0.15}
         }
     },
     "safety": {
@@ -189,6 +295,7 @@ SCORE_COMPONENTS = {
         "weight": 0.15,
         "inputs": ["parking_type", "parking_enclosure", "distance", "street_ease"],
         "base_scores": {
+            "two_parking_spaces": 11,  # Premium: 2 dedicated spots (superlative bonus)
             "single_garage": 10,
             "dedicated_spot_car_and_motorcycle": 9,
             "dedicated_spot_car_only": 7,

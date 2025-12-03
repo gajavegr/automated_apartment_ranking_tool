@@ -33,6 +33,8 @@ class GoogleSheetsClient:
     SCATTER_PLOT_SHEET_NAME = "Price vs Score"
     CRITERIA_MATRIX_SHEET_NAME = "Criteria Matrix"
     APPROVED_GYMS_SHEET_NAME = "Approved Gyms"
+    PLACES_OF_INTEREST_SHEET_NAME = "Places of Interest"
+    EXCLUDED_PLACES_SHEET_NAME = "Excluded Places"
     USER_EDITS_LOG_SHEET_NAME = "User Edits Log"
     
     def __init__(self, credentials_path: str = None, sheet_id: str = None):
@@ -97,6 +99,7 @@ class GoogleSheetsClient:
         # Main data sheet
         main_sheet = self._get_or_create_worksheet(self.MAIN_SHEET_NAME)
         self._initialize_main_sheet(main_sheet)
+        self._format_json_columns(main_sheet)
         
         # Scatter plot sheet
         scatter_sheet = self._get_or_create_worksheet(self.SCATTER_PLOT_SHEET_NAME)
@@ -105,6 +108,56 @@ class GoogleSheetsClient:
         # Criteria matrix sheet
         criteria_sheet = self._get_or_create_worksheet(self.CRITERIA_MATRIX_SHEET_NAME)
         self._initialize_criteria_matrix_sheet(criteria_sheet)
+    
+    def _format_json_columns(self, sheet: gspread.Worksheet) -> None:
+        """
+        Format JSON columns to use CLIP instead of WRAP to prevent row height issues.
+        This can be called multiple times safely to ensure formatting is preserved.
+        """
+        try:
+            # Get header row to find JSON column indices
+            headers = sheet.row_values(1)
+            
+            json_columns = [
+                config.SHEET_COLUMNS.get("commute_details"),
+                config.SHEET_COLUMNS.get("crime_details"),
+                config.SHEET_COLUMNS.get("restaurants_list"),
+                config.SHEET_COLUMNS.get("cafes_list"),
+                config.SHEET_COLUMNS.get("parks_list"),
+                config.SHEET_COLUMNS.get("pois_list")
+            ]
+            
+            formatted_any = False
+            for col_name in json_columns:
+                if col_name and col_name in headers:
+                    col_idx = headers.index(col_name)
+                    col_letter = self._col_index_to_letter(col_idx)
+                    
+                    # Format entire column to use CLIP wrap strategy
+                    # Use update_acell with formatOnly to preserve existing values
+                    sheet.format(f'{col_letter}:{col_letter}', {
+                        'wrapStrategy': 'CLIP',
+                        'verticalAlignment': 'TOP'
+                    })
+                    formatted_any = True
+                    print(f"  ✓ Formatted {col_name} column ({col_letter}) to use CLIP wrap strategy")
+            
+            if not formatted_any:
+                print(f"  ℹ️  No JSON columns found to format")
+                    
+        except Exception as e:
+            print(f"  ⚠️  Warning: Could not format JSON columns: {e}")
+    
+    def ensure_json_columns_formatted(self) -> None:
+        """
+        Public method to ensure JSON columns are formatted with CLIP.
+        Can be called after any operation that might reset formatting.
+        """
+        try:
+            sheet = self.spreadsheet.worksheet(self.MAIN_SHEET_NAME)
+            self._format_json_columns(sheet)
+        except Exception as e:
+            print(f"  ⚠️  Warning: Could not format JSON columns: {e}")
     
     def _initialize_main_sheet(self, sheet: gspread.Worksheet) -> None:
         """Initialize main data sheet with headers"""
@@ -137,7 +190,7 @@ class GoogleSheetsClient:
             config.SHEET_COLUMNS["double_pane_windows"],
             config.SHEET_COLUMNS["study_door_type"],
             config.SHEET_COLUMNS["kitchen_quality"],
-            config.SHEET_COLUMNS["location_vibe_score"],
+            config.SHEET_COLUMNS["happening_score"],
             config.SHEET_COLUMNS["restaurants_nearby"],
             config.SHEET_COLUMNS["cafes_nearby"],
             config.SHEET_COLUMNS["parks_nearby"],
@@ -287,7 +340,7 @@ class GoogleSheetsClient:
     
     def get_apartments_needing_analysis(self) -> List[Dict[str, Any]]:
         """
-        Get apartments that need analysis (have URL but no weighted score)
+        Get apartments that need analysis (have address but missing data)
         
         Returns:
             List of apartment records that need analysis
@@ -295,18 +348,63 @@ class GoogleSheetsClient:
         records = self.read_main_sheet()
         needing_analysis = []
         
+        print(f"\n🔍 Checking {len(records)} records for analysis needs...")
+        
         for i, record in enumerate(records):
+            address = record.get(config.SHEET_COLUMNS["address"], "").strip()
+            
+            # Skip rows without addresses
+            if not address:
+                continue
+            
+            print(f"\n  📍 Row {i+2}: {address[:50]}...")
+            
             zillow_url = record.get(config.SHEET_COLUMNS["zillow_url"], "").strip()
             weighted_score = record.get(config.SHEET_COLUMNS["weighted_score"], "")
-            address = record.get(config.SHEET_COLUMNS["address"], "Unknown address")
+            score_min_raw = record.get(config.SHEET_COLUMNS["score_min"], "")
+            score_max_raw = record.get(config.SHEET_COLUMNS["score_max"], "")
+            gym_score_raw = record.get(config.SHEET_COLUMNS["gym_score"], "")
+            
+            print(f"     Weighted Score: {weighted_score}")
+            print(f"     Score Min (raw): {repr(score_min_raw)}")
+            print(f"     Score Max (raw): {repr(score_max_raw)}")
+            print(f"     Gym Score (raw): {repr(gym_score_raw)}")
             
             needs_analysis = False
             reason = None
             
-            if zillow_url and not weighted_score:
+            # Convert score_min/max to float for comparison
+            try:
+                score_min = float(score_min_raw) if score_min_raw not in ("", None) else None
+                score_max = float(score_max_raw) if score_max_raw not in ("", None) else None
+                gym_score = float(gym_score_raw) if gym_score_raw not in ("", None) else None
+                print(f"     Score Min (parsed): {score_min}")
+                print(f"     Score Max (parsed): {score_max}")
+                print(f"     Gym Score (parsed): {gym_score}")
+            except (ValueError, TypeError) as e:
+                score_min = None
+                score_max = None
+                gym_score = None
+                print(f"     ⚠️  Error parsing scores: {e}")
+            
+            # Check if missing score entirely
+            if not weighted_score:
                 needs_analysis = True
                 reason = "no score"
-            elif zillow_url and self.needs_commute_metadata_refresh(record):
+                print(f"     ❌ No weighted score")
+            # Check if gym score is missing
+            elif gym_score is None:
+                needs_analysis = True
+                reason = "missing gym score"
+                print(f"     ❌ Missing gym score")
+            # Check if score range data is missing, zero, or invalid
+            # Score of 0 doesn't make sense - apartments should have positive scores
+            elif score_min is None or score_max is None or score_min == 0 or score_max == 0:
+                needs_analysis = True
+                reason = "missing or invalid score range data"
+                print(f"     ❌ Invalid score range (min={score_min}, max={score_max})")
+            # Check if missing metadata
+            elif self.needs_commute_metadata_refresh(record):
                 needs_analysis = True
                 # Determine specific reason
                 route_annoy_col = config.SHEET_COLUMNS.get("route_annoyingness")
@@ -325,12 +423,17 @@ class GoogleSheetsClient:
                     reason = f"missing {', '.join(missing_parts)}"
                 else:
                     reason = "missing commute metadata"
+                print(f"     ❌ Missing metadata: {reason}")
+            else:
+                print(f"     ✅ All data present, skipping")
             
             if needs_analysis:
                 record['_row_number'] = i + 2  # +2 for 1-indexed and header row
                 record['_analysis_reason'] = reason
                 needing_analysis.append(record)
+                print(f"     ➡️  WILL ANALYZE: {reason}")
         
+        print(f"\n📊 Summary: {len(needing_analysis)} apartments need analysis\n")
         return needing_analysis
     
     def write_apartment_data(self, row_number: int, data: Dict[str, Any]) -> None:
@@ -369,10 +472,17 @@ class GoogleSheetsClient:
             "double_pane_windows": config.SHEET_COLUMNS["double_pane_windows"],
             "study_door_type": config.SHEET_COLUMNS["study_door_type"],
             "kitchen_quality": config.SHEET_COLUMNS["kitchen_quality"],
-            "location_vibe_score": config.SHEET_COLUMNS["location_vibe_score"],
+            "happening_score": config.SHEET_COLUMNS["happening_score"],
             "restaurants_nearby": config.SHEET_COLUMNS["restaurants_nearby"],
+            "restaurants_list": config.SHEET_COLUMNS["restaurants_list"],
             "cafes_nearby": config.SHEET_COLUMNS["cafes_nearby"],
+            "cafes_list": config.SHEET_COLUMNS["cafes_list"],
             "parks_nearby": config.SHEET_COLUMNS["parks_nearby"],
+            "parks_list": config.SHEET_COLUMNS["parks_list"],
+            "pois_list": config.SHEET_COLUMNS["pois_list"],
+            "avg_walk_to_poi_mins": config.SHEET_COLUMNS["avg_walk_to_poi_mins"],
+            "nearest_poi_count": config.SHEET_COLUMNS["nearest_poi_count"],
+            "pois_within_1_mile": config.SHEET_COLUMNS["pois_within_1_mile"],
             "parking_type": config.SHEET_COLUMNS["parking_type"],
             "parking_enclosure": config.SHEET_COLUMNS["parking_enclosure"],
             "parking_distance": config.SHEET_COLUMNS["parking_distance"],
@@ -381,16 +491,25 @@ class GoogleSheetsClient:
             "visitor_parking_ease": config.SHEET_COLUMNS["visitor_parking_ease"],
             "parking_score": config.SHEET_COLUMNS["parking_score"],
             "laundry_type": config.SHEET_COLUMNS["laundry_type"],
+            "laundry_score": config.SHEET_COLUMNS["laundry_score"],
+            "gym_score": config.SHEET_COLUMNS["gym_score"],
             "floor_level": config.SHEET_COLUMNS["floor_level"],
             "view_quality": config.SHEET_COLUMNS["view_quality"],
             "gym_within_10min": config.SHEET_COLUMNS["gym_within_10min"],
+            "gym_walk_time_mins": config.SHEET_COLUMNS["gym_walk_time_mins"],
             "gym_quality": config.SHEET_COLUMNS["gym_quality"],
+            "selected_gyms": config.SHEET_COLUMNS["selected_gyms"],
+            "office_gym_only": config.SHEET_COLUMNS["office_gym_only"],
             "rent_control": config.SHEET_COLUMNS["rent_control"],
             "year_built": config.SHEET_COLUMNS["year_built"],
             "neighborhood": config.SHEET_COLUMNS["neighborhood"],
             "neighborhoods": config.SHEET_COLUMNS["neighborhoods"],
             "tour_questions": config.SHEET_COLUMNS["tour_questions"],
             "weighted_score": config.SHEET_COLUMNS["weighted_score"],
+            "score_min": config.SHEET_COLUMNS["score_min"],
+            "score_max": config.SHEET_COLUMNS["score_max"],
+            "score_certainty": config.SHEET_COLUMNS["score_certainty"],
+            "score_vs_max": config.SHEET_COLUMNS["score_vs_max"],
             "value_ratio": config.SHEET_COLUMNS["value_ratio"],
             "last_updated": config.SHEET_COLUMNS["last_updated"],
             "last_analyzed": config.SHEET_COLUMNS["last_analyzed"],
@@ -409,6 +528,8 @@ class GoogleSheetsClient:
         
         # Create update dict mapping column letter to value
         updates = {}
+        json_column_letters = []  # Track JSON columns to format
+        
         for data_key, column_name in column_mapping.items():
             if data_key in data:
                 try:
@@ -418,10 +539,14 @@ class GoogleSheetsClient:
                     
                     if value is None:
                         value = ""
-                    # Serialize JSON fields
-                    if data_key in ['commute_details_json', 'crime_details_json'] and isinstance(value, dict):
-                        import json
-                        value = json.dumps(value)
+                    # Serialize JSON fields (they're already strings from main.py, but check dict types from other sources)
+                    json_data_keys = ['commute_details_json', 'crime_details_json', 'restaurants_list', 'cafes_list', 'parks_list', 'pois_list']
+                    if data_key in json_data_keys:
+                        if isinstance(value, dict) or isinstance(value, list):
+                            import json
+                            value = json.dumps(value)
+                        # Track this cell for CLIP formatting
+                        json_column_letters.append(f"{col_letter}{row_number}")
                     
                     updates[f"{col_letter}{row_number}"] = value
                     if data_key == 'crime_details_json':
@@ -430,10 +555,22 @@ class GoogleSheetsClient:
                 except ValueError:
                     print(f"Warning: Column {column_name} not found in sheet")
         
-        # Batch update
+        # Batch update values
         if updates:
             update_list = [{'range': cell, 'values': [[value]]} for cell, value in updates.items()]
-            sheet.batch_update(update_list)
+            sheet.batch_update(update_list, value_input_option='USER_ENTERED')
+            
+            # Apply CLIP formatting to JSON cells to prevent wrapping
+            if json_column_letters:
+                for cell_range in json_column_letters:
+                    try:
+                        sheet.format(cell_range, {
+                            'wrapStrategy': 'CLIP',
+                            'verticalAlignment': 'TOP'
+                        })
+                    except Exception as e:
+                        # Don't fail the whole operation if formatting fails
+                        print(f"  ⚠️  Warning: Could not format {cell_range} as CLIP: {e}")
     
     def clear_wfh_fields(self, row_number: int) -> None:
         """
@@ -628,6 +765,153 @@ class GoogleSheetsClient:
         except Exception as e:
             print(f"Error reading approved gyms: {e}")
             return []
+    
+    def get_places_of_interest(self) -> List[Dict]:
+        """Get list of user's places of interest in SF"""
+        try:
+            worksheet = self.spreadsheet.worksheet(self.PLACES_OF_INTEREST_SHEET_NAME)
+            records = worksheet.get_all_records()
+            # Filter to SF area (lat between 37.6 and 37.9, lng between -122.6 and -122.3)
+            sf_places = []
+            for place in records:
+                lat = place.get('Latitude')
+                lng = place.get('Longitude')
+                if lat and lng:
+                    try:
+                        lat_float = float(lat)
+                        lng_float = float(lng)
+                        # SF bounding box
+                        if 37.6 <= lat_float <= 37.9 and -122.6 <= lng_float <= -122.3:
+                            sf_places.append(place)
+                    except (ValueError, TypeError):
+                        continue
+            return sf_places
+        except WorksheetNotFound:
+            print(f"⚠️  '{self.PLACES_OF_INTEREST_SHEET_NAME}' sheet not found. Please create it.")
+            return []
+        except Exception as e:
+            print(f"Error reading places of interest: {e}")
+            return []
+    
+    def get_excluded_places(self) -> List[str]:
+        """
+        Get list of place_ids that have been excluded from happening score calculations
+        
+        Returns:
+            List of place_ids to exclude
+        """
+        try:
+            worksheet = self.spreadsheet.worksheet(self.EXCLUDED_PLACES_SHEET_NAME)
+            records = worksheet.get_all_records()
+            return [record.get('Place ID') for record in records if record.get('Place ID')]
+        except WorksheetNotFound:
+            # Create the sheet if it doesn't exist
+            self._initialize_excluded_places_sheet()
+            return []
+        except Exception as e:
+            print(f"Error reading excluded places: {e}")
+            return []
+    
+    def add_excluded_place(self, place_id: str, place_name: str, place_type: str, reason: str = "") -> None:
+        """
+        Add a place to the exclusion list
+        
+        Args:
+            place_id: Google Place ID
+            place_name: Name of the place
+            place_type: Type ('restaurant', 'cafe', 'park')
+            reason: Optional reason for exclusion
+        """
+        print(f"\n  📝 add_excluded_place() called in GoogleSheetsClient")
+        print(f"    Place ID: {place_id}")
+        print(f"    Place Name: {place_name}")
+        print(f"    Place Type: {place_type}")
+        print(f"    Reason: {reason}")
+        
+        try:
+            # Get or create the worksheet
+            print(f"    🔍 Getting or creating '{self.EXCLUDED_PLACES_SHEET_NAME}' worksheet...")
+            try:
+                worksheet = self.spreadsheet.worksheet(self.EXCLUDED_PLACES_SHEET_NAME)
+                print(f"    ✓ Found existing worksheet")
+            except WorksheetNotFound:
+                print(f"    ⚠️  Worksheet not found, creating new one...")
+                self._initialize_excluded_places_sheet()
+                worksheet = self.spreadsheet.worksheet(self.EXCLUDED_PLACES_SHEET_NAME)
+                print(f"    ✓ Created and initialized worksheet")
+            
+            # Check if already excluded
+            print(f"    🔍 Checking if place is already excluded...")
+            excluded = self.get_excluded_places()
+            print(f"    Current exclusion list: {excluded}")
+            
+            if place_id in excluded:
+                print(f"    ℹ️  {place_name} is already in exclusion list")
+                return
+            
+            print(f"    ✓ Place not in exclusion list, adding...")
+            new_row = [
+                place_id,
+                place_name,
+                place_type,
+                reason,
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            ]
+            print(f"    📋 New row data: {new_row}")
+            
+            print(f"    📤 Appending row to worksheet...")
+            worksheet.append_row(new_row)
+            print(f"    ✅ Successfully added {place_name} to exclusion list!")
+            
+        except Exception as e:
+            print(f"    ❌ Error adding excluded place: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+    
+    def remove_excluded_place(self, place_id: str) -> None:
+        """
+        Remove a place from the exclusion list
+        
+        Args:
+            place_id: Google Place ID to remove
+        """
+        try:
+            worksheet = self.spreadsheet.worksheet(self.EXCLUDED_PLACES_SHEET_NAME)
+            records = worksheet.get_all_records()
+            
+            # Find the row with this place_id
+            for idx, record in enumerate(records):
+                if record.get('Place ID') == place_id:
+                    row_num = idx + 2  # +1 for header, +1 for 0-index
+                    worksheet.delete_rows(row_num)
+                    print(f"  ✓ Removed {record.get('Place Name')} from exclusion list")
+                    return
+            
+            print(f"  ℹ️  Place ID {place_id} not found in exclusion list")
+        except Exception as e:
+            print(f"Error removing excluded place: {e}")
+    
+    def _initialize_excluded_places_sheet(self) -> None:
+        """Initialize Excluded Places sheet with headers"""
+        try:
+            worksheet = self.spreadsheet.worksheet(self.EXCLUDED_PLACES_SHEET_NAME)
+        except WorksheetNotFound:
+            worksheet = self.spreadsheet.add_worksheet(
+                title=self.EXCLUDED_PLACES_SHEET_NAME,
+                rows=100,
+                cols=5
+            )
+        
+        # Set headers
+        headers = ["Place ID", "Place Name", "Type", "Reason", "Date Added"]
+        worksheet.update('A1:E1', [headers])
+        
+        # Format header row
+        worksheet.format('A1:E1', {
+            'textFormat': {'bold': True},
+            'backgroundColor': {'red': 0.9, 'green': 0.9, 'blue': 0.9}
+        })
     
     def add_approved_gym(self, gym_data: Dict) -> None:
         """Add a gym to approved list or increment usage count"""

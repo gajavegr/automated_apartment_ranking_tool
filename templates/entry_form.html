@@ -130,6 +130,7 @@
                         <label>Parking Type *</label>
                         <div class="multi-select-wrapper">
                             <div class="multi-select-options">
+                                <label><input type="checkbox" name="parking_type" value="two_parking_spaces"> ⭐ 2 Parking Spaces (Premium)</label>
                                 <label><input type="checkbox" name="parking_type" value="single_garage"> Single Garage</label>
                                 <label><input type="checkbox" name="parking_type" value="dedicated_spot_car_and_motorcycle"> Dedicated Spot (Car + Motorcycle)</label>
                                 <label><input type="checkbox" name="parking_type" value="dedicated_spot_car_only"> Dedicated Spot (Car Only)</label>
@@ -439,11 +440,34 @@
                             <button type="button" 
                                     id="autoDetectYearBtn" 
                                     class="btn btn-secondary"
-                                    style="white-space: nowrap;">
+                                    onclick="autoDetectYear()"
+                                    style="white-space: nowrap; min-width: 140px;">
                                 🔍 Auto-Detect
                             </button>
+                            <button type="button" 
+                                    onclick="showCopySearchHelper()"
+                                    class="btn btn-secondary"
+                                    style="white-space: nowrap; min-width: 140px;">
+                                📋 Copy Search
+                            </button>
                         </div>
-                        <small>For rent control eligibility (pre-1979 in SF). Click Auto-Detect to try finding it automatically.</small>
+                        <div id="yearBuiltSearchHelper" style="margin-top: 8px; padding: 8px; background: #f0f8ff; border: 1px solid #cce5ff; border-radius: 4px; display: none;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="font-size: 0.9em; color: #555; flex: 1;">
+                                    <strong>Search query:</strong> <span id="yearBuiltSearchQuery" style="font-family: monospace; color: #0066cc;"></span>
+                                </span>
+                                <button type="button" 
+                                        onclick="copyYearBuiltSearchToClipboard()"
+                                        class="btn btn-secondary"
+                                        style="padding: 4px 12px; font-size: 0.85em; white-space: nowrap;">
+                                    📋 Copy to Clipboard
+                                </button>
+                            </div>
+                            <small style="color: #666; display: block; margin-top: 4px;">
+                                💡 Paste this into Google to manually find the building construction year.
+                            </small>
+                        </div>
+                        <small>For rent control eligibility (pre-1979 in SF). Auto-Detect uses AI, or use Copy Search for manual lookup.</small>
                     </div>
 
                     <div class="form-actions">
@@ -495,6 +519,9 @@
                     <h2 style="margin-right: 20px;">Apartment Analysis</h2>
                     <button id="runAnalysisBtn" class="btn btn-primary" onclick="runAnalysis()">
                         Run Analysis
+                    </button>
+                    <button id="refreshDataBtn" class="btn btn-secondary" onclick="refreshAnalysisData()" style="margin-left: 10px;" title="Refresh data from Google Sheets">
+                        🔄 Refresh
                     </button>
                     <button id="adjustWeightsBtn" class="btn btn-secondary" onclick="showWeightAdjustments()" style="margin-left: 10px;">
                         Adjust Weights
@@ -763,32 +790,89 @@
                                     </div>
                                 </div>
 
-                                <!-- Location Vibe Score -->
+                                <!-- Happening Score -->
                                 <div class="score-component">
                                     <div class="component-header">
-                                        <strong>Location Vibe</strong>
-                                        <span id="vibeScore" class="component-score">--</span>
+                                        <strong>Happening</strong>
+                                        <span id="happeningScore" class="component-score">--</span>
                                     </div>
-                                    <div class="component-meta" id="vibeMeta"></div>
+                                    <div class="component-meta" id="happeningMeta"></div>
                                     <div class="component-details">
                                         <div class="field-row">
-                                            <label>Restaurants Nearby:</label>
-                                            <span id="vibeRestaurants" class="field-value">--</span>
-                                            <input type="number" id="editVibeRestaurants" class="edit-field" style="display: none;" min="0" max="100">
+                                            <label>Restaurants Nearby (veg-friendly, 4+ ⭐):</label>
+                                            <span id="happeningRestaurants" class="field-value">--</span>
+                                            <input type="number" id="editHappeningRestaurants" class="edit-field" style="display: none;" min="0" max="100">
                                         </div>
                                         <div class="field-row">
-                                            <label>Cafes Nearby:</label>
-                                            <span id="vibeCafes" class="field-value">--</span>
-                                            <input type="number" id="editVibeCafes" class="edit-field" style="display: none;" min="0" max="100">
+                                            <label>Cafes Nearby (4+ ⭐):</label>
+                                            <span id="happeningCafes" class="field-value">--</span>
+                                            <input type="number" id="editHappeningCafes" class="edit-field" style="display: none;" min="0" max="100">
                                         </div>
                                         <div class="field-row">
                                             <label>Parks Nearby:</label>
-                                            <span id="vibeParks" class="field-value">--</span>
-                                            <input type="number" id="editVibeParks" class="edit-field" style="display: none;" min="0" max="100">
+                                            <span id="happeningParks" class="field-value">--</span>
+                                            <input type="number" id="editHappeningParks" class="edit-field" style="display: none;" min="0" max="100">
                                         </div>
-                                        <div id="vibeFormulaText" style="margin-top: 10px; color: #555; font-size: 0.85em;">
-                                            <strong>How it's calculated:</strong> Each count is normalized to 0-10 scale, then weighted:
-                                            Restaurants (40%) + Cafes (40%) + Parks (20%). More restaurants/cafes = more happening neighborhood.
+                                        <div class="field-row">
+                                            <label>Avg Walk to Top 5 POIs:</label>
+                                            <span id="happeningAvgPOIWalk" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row">
+                                            <label>POIs Within 1 Mile:</label>
+                                            <span id="happeningPOIsWithinMile" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row" style="border-top: 1px dashed #ddd; padding-top: 8px; margin-top: 8px;">
+                                            <label>Total Score (uncapped):</label>
+                                            <span id="happeningUncapped" class="field-value" style="color: #888; font-style: italic;">--</span>
+                                            <span style="color: #666; font-size: 0.85em; margin-left: 8px;">(capped at 10 for final score)</span>
+                                        </div>
+                                        <div id="happeningFormulaText" style="margin-top: 10px; color: #555; font-size: 0.85em;">
+                                            <strong>How it's calculated:</strong> 
+                                            Restaurants (20%, 3+ = max) + Cafes (20%, 3+ = max) + 
+                                            Avg Walk to POIs (30%, 5min = max, 25min = 0) + 
+                                            POIs Within 1 Mile (25%, 5+ = max) + Parks (15%, 3+ = max).
+                                            Restaurants and cafes are filtered for 4+ stars and vegetarian-friendly options.
+                                            <strong>Note:</strong> Final score is capped at 10/10 to keep it balanced with other components.
+                                        </div>
+                                        
+                                        <!-- Expandable place lists -->
+                                        <div style="margin-top: 15px;">
+                                            <button type="button" onclick="togglePlaceLists()" style="background: #2196F3; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9em;">
+                                                📍 View Place Details
+                                            </button>
+                                            <div id="placeLists" style="display: none; margin-top: 10px; padding: 10px; background: #f9f9f9; border-radius: 4px; border: 1px solid #ddd;">
+                                                <!-- Restaurants -->
+                                                <div style="margin-bottom: 15px;">
+                                                    <h4 style="margin: 5px 0; color: #333;">🥗 Vegetarian-Friendly Restaurants</h4>
+                                                    <div id="restaurantsList" style="max-height: 200px; overflow-y: auto;">
+                                                        <p style="color: #888; font-style: italic;">Loading...</p>
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- Cafes -->
+                                                <div style="margin-bottom: 15px;">
+                                                    <h4 style="margin: 5px 0; color: #333;">☕ Quality Cafes</h4>
+                                                    <div id="cafesList" style="max-height: 200px; overflow-y: auto;">
+                                                        <p style="color: #888; font-style: italic;">Loading...</p>
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- Parks -->
+                                                <div style="margin-bottom: 15px;">
+                                                    <h4 style="margin: 5px 0; color: #333;">🌳 Parks</h4>
+                                                    <div id="parksList" style="max-height: 200px; overflow-y: auto;">
+                                                        <p style="color: #888; font-style: italic;">Loading...</p>
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- POIs -->
+                                                <div>
+                                                    <h4 style="margin: 5px 0; color: #333;">📌 Personal Places of Interest (Top 5 Nearest)</h4>
+                                                    <div id="poisList" style="max-height: 200px; overflow-y: auto;">
+                                                        <p style="color: #888; font-style: italic;">Loading...</p>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -840,21 +924,20 @@
                                     <div class="component-meta" id="gymMeta"></div>
                                     <div class="component-details">
                                         <div class="field-row">
-                                            <label>Within 10 min:</label>
-                                            <span id="gymWithin10" class="field-value">--</span>
+                                            <label>Walking time:</label>
+                                            <span id="gymWalkTime" class="field-value">--</span>
                                         </div>
                                         <div class="field-row">
-                                            <label>Quality:</label>
-                                            <span id="gymQuality" class="field-value">--</span>
-                                            <input type="number" id="editGymQuality" class="edit-field" style="display: none;" min="0" max="10" step="0.1">
+                                            <label>Within 20 min walk:</label>
+                                            <span id="gymWithin10" class="field-value">--</span>
                                         </div>
                                         <div id="gymFormulaText" style="margin-top: 10px; color: #555; font-size: 0.85em;">
                                             <strong>How it's calculated:</strong> 
-                                            Good gym within 10min (rating ≥7) = 10 points. 
-                                            OK gym within 10min (rating <7) = 6 points. 
-                                            No nearby gym = 0 points. 
-                                            Office gym only = -5 points (inconvenient, limited hours). 
-                                            Penalty applied for steep hills (makes gym feel farther).
+                                            Score scales linearly with walking time to nearest selected gym: 
+                                            <strong>0 min = 10 points</strong>, <strong>20 min = 0 points</strong>.
+                                            Example: 5 min walk = 7.5 pts, 10 min = 5.0 pts, 15 min = 2.5 pts.
+                                            Elevation gain penalties make uphill gyms "feel farther" by adding virtual minutes.
+                                            Office gym only = -5 points (inconvenient, limited hours).
                                         </div>
                                     </div>
                                 </div>
@@ -986,6 +1069,33 @@
                     </div>
 
                     <!-- Future Admin Features -->
+                    <div class="admin-section">
+                        <h3>🔧 Data Recalculation</h3>
+                        <p>Force recalculation of apartment scores and computed fields.</p>
+                        
+                        <div class="admin-actions">
+                            <button id="forceRecalcBtn" class="btn btn-warning" onclick="forceFullRecalculation()">
+                                🔄 Force Full Recalculation
+                            </button>
+                        </div>
+                        
+                        <div id="recalcStatus" class="recalc-status" style="display: none; margin-top: 15px;">
+                            <div id="recalcDetails"></div>
+                        </div>
+                        
+                        <div class="admin-note">
+                            <strong>⚠️ Warning:</strong> This will clear ALL computed fields (scores, commute data, location data) 
+                            for all apartments and force a complete re-analysis. Use this when:
+                            <ul>
+                                <li>Scoring methodology has changed (e.g., gym scoring algorithm)</li>
+                                <li>You suspect cached data is outdated or incorrect</li>
+                                <li>You want to ensure everything is recalculated from scratch</li>
+                            </ul>
+                            <strong>Note:</strong> Manual entries (WFH ratings, parking types, etc.) will NOT be cleared.
+                        </div>
+                    </div>
+                    
+                    <!-- Other Admin Tools -->
                     <div class="admin-section">
                         <h3>🔧 Other Tools</h3>
                         <p>Additional admin features coming soon:</p>
@@ -1457,18 +1567,8 @@
             updateMapsAndData(lat, lng, place.formatted_address);
         }
 
-        // SF Neighborhoods list
-        const SF_NEIGHBORHOODS = [
-            "Alamo Square", "Bayview", "Castro", "Chinatown", "Civic Center",
-            "Cole Valley", "Dogpatch", "Downtown", "Embarcadero", "Excelsior",
-            "Financial District", "Fisherman's Wharf", "Glen Park", "Haight-Ashbury",
-            "Hayes Valley", "Inner Richmond", "Inner Sunset", "Japantown", "Laurel Heights",
-            "Lower Haight", "Marina", "Mission", "Mission Bay", "Nob Hill", "Noe Valley",
-            "North Beach", "Outer Richmond", "Outer Sunset", "Pacific Heights", "Panhandle",
-            "Portola", "Potrero Hill", "Presidio", "Russian Hill", "SOMA", "South Beach",
-            "Tenderloin", "Telegraph Hill", "Twin Peaks", "Union Square", "Upper Market",
-            "Van Ness", "Visitacion Valley", "Western Addition", "West Portal"
-        ];
+        // SF Neighborhoods list (pulled from backend config.py)
+        const SF_NEIGHBORHOODS = {{ sf_neighborhoods|tojson|safe }};
 
         function initializeNeighborhoods() {
             const container = document.getElementById('neighborhoodOptions');
@@ -2022,18 +2122,21 @@
             }
         }
 
-        // Auto-detect building year
-        document.getElementById('autoDetectYearBtn').addEventListener('click', async function() {
+        // Auto-detect building year (onclick version)
+        async function autoDetectYear() {
             const address = document.getElementById('address').value.trim();
             if (!address) {
                 alert('Please enter an address first');
                 return;
             }
             
-            const btn = this;
+            const btn = document.getElementById('autoDetectYearBtn');
             const originalText = btn.textContent;
             btn.textContent = '⏳ Detecting...';
             btn.disabled = true;
+            
+            // Update the search helper with the cleaned building address
+            updateYearBuiltSearchHelper(address);
             
             try {
                 const response = await fetch('/get_building_year', {
@@ -2051,17 +2154,103 @@
                         btn.textContent = originalText;
                     }, 2000);
                 } else {
-                    alert('Could not automatically determine building year. Please enter manually.');
+                    // Show search helper on failure
+                    document.getElementById('yearBuiltSearchHelper').style.display = 'block';
+                    alert('Could not automatically determine building year.\n\nClick "Copy Search" button to get a search query for manual lookup.');
                     btn.textContent = originalText;
                 }
             } catch (error) {
                 console.error('Error detecting year:', error);
-                alert('Error detecting building year');
+                // Show search helper on error
+                document.getElementById('yearBuiltSearchHelper').style.display = 'block';
+                alert('Error detecting building year.\n\nClick "Copy Search" button to get a search query for manual lookup.');
                 btn.textContent = originalText;
             } finally {
                 btn.disabled = false;
             }
-        });
+        }
+
+        function showCopySearchHelper() {
+            const address = document.getElementById('address').value.trim();
+            if (!address) {
+                alert('Please enter an address first');
+                return;
+            }
+            
+            // Update and show the search helper
+            updateYearBuiltSearchHelper(address);
+            const helper = document.getElementById('yearBuiltSearchHelper');
+            helper.style.display = 'block';
+            
+            // Auto-copy to clipboard
+            copyYearBuiltSearchToClipboard();
+        }
+
+        function updateYearBuiltSearchHelper(address) {
+            // Strip apartment number from address (same logic as backend)
+            const buildingAddress = stripApartmentNumber(address);
+            const searchQuery = `when was ${buildingAddress} built?`;
+            document.getElementById('yearBuiltSearchQuery').textContent = searchQuery;
+        }
+
+        function stripApartmentNumber(address) {
+            // Remove common apartment designators
+            let cleaned = address;
+            const aptPatterns = [
+                /\s+apt\.?\s+\w+/gi,
+                /\s+apartment\s+\w+/gi,
+                /\s+unit\.?\s+\w+/gi,
+                /\s+#\s*\w+/gi,
+                /\s+ste\.?\s+\w+/gi,
+                /\s+suite\.?\s+\w+/gi,
+                /,\s*apt\.?\s+\w+/gi,
+                /,\s*apartment\s+\w+/gi,
+                /,\s*unit\.?\s+\w+/gi,
+                /,\s*#\s*\w+/gi,
+                /,\s*ste\.?\s+\w+/gi,
+                /,\s*suite\.?\s+\w+/gi,
+            ];
+            
+            aptPatterns.forEach(pattern => {
+                cleaned = cleaned.replace(pattern, '');
+            });
+            
+            // Clean up double commas and extra spaces
+            cleaned = cleaned.replace(/,\s*,/g, ',');
+            cleaned = cleaned.replace(/\s+/g, ' ');
+            cleaned = cleaned.trim();
+            
+            return cleaned || address; // Fallback to original if cleaning fails
+        }
+
+        function copyYearBuiltSearchToClipboard() {
+            const searchQuery = document.getElementById('yearBuiltSearchQuery').textContent;
+            
+            if (!searchQuery || searchQuery === '') {
+                alert('No search query available. Make sure you entered an address.');
+                return;
+            }
+            
+            navigator.clipboard.writeText(searchQuery).then(() => {
+                // Find all copy buttons and update them
+                const btns = document.querySelectorAll('button[onclick*="copyYearBuiltSearchToClipboard"]');
+                btns.forEach(btn => {
+                    const originalText = btn.textContent;
+                    btn.textContent = '✓ Copied!';
+                    btn.style.background = '#28a745';
+                    btn.style.color = 'white';
+                    
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.style.background = '';
+                        btn.style.color = '';
+                    }, 2000);
+                });
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+                alert('Failed to copy to clipboard. Please select and copy manually.');
+            });
+        }
 
         // Form validation
         // Parking cost change handler - show/hide required indicator
@@ -2221,6 +2410,36 @@
                 updatePhotoSelectorHelper();
                 resultsContainer.classList.remove('detail-shown');
                 resultsContainer.classList.remove('hidden');
+            }
+        }
+
+        // Refresh analysis data from Google Sheets
+        async function refreshAnalysisData() {
+            const refreshBtn = document.getElementById('refreshDataBtn');
+            const originalText = refreshBtn.innerHTML;
+            
+            try {
+                // Update button to show loading state
+                refreshBtn.disabled = true;
+                refreshBtn.innerHTML = '🔄 Refreshing...';
+                
+                // Reload the data
+                await loadAnalysisData();
+                
+                // Show success feedback
+                refreshBtn.innerHTML = '✓ Refreshed!';
+                setTimeout(() => {
+                    refreshBtn.innerHTML = originalText;
+                    refreshBtn.disabled = false;
+                }, 1500);
+                
+            } catch (error) {
+                console.error('Error refreshing data:', error);
+                refreshBtn.innerHTML = '✗ Error';
+                setTimeout(() => {
+                    refreshBtn.innerHTML = originalText;
+                    refreshBtn.disabled = false;
+                }, 2000);
             }
         }
 
@@ -2517,7 +2736,7 @@
             const bestCommutePartner = getBest(comparisonData, 'commute_partner', false);
             const bestSafety = getBest(comparisonData, 'safety_score', true);
             const bestWFH = getBest(comparisonData, 'wfh_score', true);
-            const bestVibe = getBest(comparisonData, 'location_vibe_score', true);
+            const bestHappening = getBest(comparisonData, 'happening_score', true);
             const bestParking = getBest(comparisonData, 'parking_score', true);
             const bestGym = getBest(comparisonData, 'gym_score', true);
             const bestLaundry = getBest(comparisonData, 'laundry_score', true);
@@ -2602,8 +2821,8 @@
                             ${comparisonData.map(apt => formatCell(apt.wfh_score, bestWFH, true, false, '/10')).join('')}
                         </tr>
                         <tr>
-                            <td class="comparison-label">🌆 Location Vibe</td>
-                            ${comparisonData.map(apt => formatCell(apt.location_vibe_score, bestVibe, true, false, '/10')).join('')}
+                            <td class="comparison-label">🌆 Happening</td>
+                            ${comparisonData.map(apt => formatCell(apt.happening_score, bestHappening, true, false, '/10')).join('')}
                         </tr>
                         <tr>
                             <td class="comparison-label">🅿️ Parking</td>
@@ -2732,19 +2951,38 @@
             
             try {
                 const response = await fetch(`/get_apartment_detailed/${rowNumber}`);
+                
+                if (!response.ok) {
+                    console.error(`[showDetailPanel] ❌ HTTP Error: ${response.status}`);
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
                 const data = await response.json();
                 
                 if (data.error) {
+                    console.error(`[showDetailPanel] ❌ Server error:`, data.error);
                     alert('Error loading apartment: ' + data.error);
                     return;
                 }
                 
                 originalApartmentData = data;
-                populateDetailPanel(data);
+                
+                try {
+                    populateDetailPanel(data);
+                    // Success - no logging needed
+                } catch (populateError) {
+                    console.error(`[showDetailPanel] ❌ ERROR in populateDetailPanel:`, populateError);
+                    console.error('Stack trace:', populateError.stack);
+                    alert('Error populating apartment details: ' + populateError.message);
+                    throw populateError;
+                }
                 
             } catch (error) {
-                console.error('Error loading apartment details:', error);
-                alert('Error loading apartment details');
+                console.error('[showDetailPanel] ❌ FATAL ERROR:', error);
+                console.error('Error type:', error.constructor.name);
+                console.error('Error message:', error.message);
+                console.error('Stack trace:', error.stack);
+                alert('Error loading apartment details: ' + error.message);
             }
         }
 
@@ -2858,15 +3096,50 @@
             // Display Quietness breakdown
             populateQuietnessBreakdown(components['quietness'], data);
             
-            // Display WFH formula
+            // Display WFH formula (no longer includes Happening)
             document.getElementById('wfhFormulaText').textContent = 
-                'WFH Quality = 0.25 × Natural Light + 0.25 × Desk Space + 0.20 × Work Area Quietness + 0.15 × Kitchen Quality + 0.15 × Location Vibe. Each attribute rated 1-10.';
+                'WFH Quality = 0.30 × Natural Light + 0.30 × Desk Space + 0.25 × Work Area Quietness + 0.15 × Kitchen Quality. Each attribute rated 1-10.';
             
-            updateComponentScoreDisplay('vibeScore', components['location_vibe']);
-            updateComponentMeta('vibeMeta', components['location_vibe']);
-            document.getElementById('vibeRestaurants').textContent = data['Restaurants Nearby'] || '--';
-            document.getElementById('vibeCafes').textContent = data['Cafes Nearby'] || '--';
-            document.getElementById('vibeParks').textContent = data['Parks Nearby'] || '--';
+            updateComponentScoreDisplay('happeningScore', components['happening']);
+            updateComponentMeta('happeningMeta', components['happening']);
+            document.getElementById('happeningRestaurants').textContent = data['Restaurants Nearby'] || '--';
+            document.getElementById('happeningCafes').textContent = data['Cafes Nearby'] || '--';
+            document.getElementById('happeningParks').textContent = data['Parks Nearby'] || '--';
+            
+            // POI fields
+            const avgPOIWalk = data['Avg Walk to Top 5 POIs (min)'];
+            if (avgPOIWalk !== null && avgPOIWalk !== undefined && avgPOIWalk !== '') {
+                document.getElementById('happeningAvgPOIWalk').textContent = `${parseFloat(avgPOIWalk).toFixed(1)} min`;
+            } else {
+                document.getElementById('happeningAvgPOIWalk').textContent = 'N/A';
+            }
+            
+            const poisWithinMile = data['POIs Within 1 Mile'];
+            document.getElementById('happeningPOIsWithinMile').textContent = 
+                (poisWithinMile !== null && poisWithinMile !== undefined && poisWithinMile !== '') ? poisWithinMile : 'N/A';
+            
+            // Display uncapped happening score from component details
+            const happeningComponent = components['happening'];
+            if (happeningComponent && happeningComponent.details && typeof happeningComponent.details.total_uncapped === 'number') {
+                const uncappedScore = happeningComponent.details.total_uncapped;
+                const cappedScore = happeningComponent.raw_score || 0;
+                const wasCapped = uncappedScore > 10.0;
+                
+                document.getElementById('happeningUncapped').textContent = uncappedScore.toFixed(2);
+                
+                // Highlight if it was capped
+                if (wasCapped) {
+                    document.getElementById('happeningUncapped').style.color = '#ff6b6b';
+                    document.getElementById('happeningUncapped').style.fontWeight = 'bold';
+                    document.getElementById('happeningUncapped').title = `This location scored ${uncappedScore.toFixed(2)}, but was capped at ${cappedScore.toFixed(2)} to maintain balance`;
+                } else {
+                    document.getElementById('happeningUncapped').style.color = '#888';
+                    document.getElementById('happeningUncapped').style.fontWeight = 'normal';
+                    document.getElementById('happeningUncapped').title = 'Score was not capped (< 10)';
+                }
+            } else {
+                document.getElementById('happeningUncapped').textContent = 'N/A';
+            }
             
             updateComponentScoreDisplay('parkingScore', components['parking']);
             updateComponentMeta('parkingMeta', components['parking']);
@@ -2878,8 +3151,15 @@
             
             updateComponentScoreDisplay('gymScore', components['gym_nearby']);
             updateComponentMeta('gymMeta', components['gym_nearby']);
+            // Gym walk time
+            const gymWalkTime = data['Time to Nearest Gym (min)'];
+            if (gymWalkTime !== null && gymWalkTime !== undefined && gymWalkTime !== '') {
+                document.getElementById('gymWalkTime').textContent = `${parseFloat(gymWalkTime).toFixed(1)} min`;
+            } else {
+                document.getElementById('gymWalkTime').textContent = 'N/A';
+            }
+            
             document.getElementById('gymWithin10').textContent = data['Gym Within 10min'] ? 'Yes' : 'No';
-            document.getElementById('gymQuality').textContent = data['Gym Quality'] ? data['Gym Quality'].toFixed(1) : '--';
             
             updateComponentScoreDisplay('laundryScore', components['laundry']);
             updateComponentMeta('laundryMeta', components['laundry']);
@@ -2908,18 +3188,41 @@
             
             // Populate edit fields with current values
             // Note: Commute times (AM/PM) are calculated from API, not manually editable
-            document.getElementById('editCommutePartner').value = data['Commute Time (Partner)'] || '';
-            document.getElementById('editSafetyOpenData').value = data['Safety Score (OpenData)'] || '';
-            document.getElementById('editWfhNaturalLight').value = typeof naturalLightValue === 'number' ? naturalLightValue : '';
-            document.getElementById('editWfhDeskSpace').value = typeof deskSpaceValue === 'number' ? deskSpaceValue : '';
-            document.getElementById('editWfhQuietness').value = data['Quietness Score'] || '';
-            document.getElementById('editWfhKitchen').value = typeof kitchenValue === 'number' ? kitchenValue : '';
-            document.getElementById('editVibeRestaurants').value = data['Restaurants Nearby'] || '';
-            document.getElementById('editVibeCafes').value = data['Cafes Nearby'] || '';
-            document.getElementById('editVibeParks').value = data['Parks Nearby'] || '';
-            document.getElementById('editParkingStreetEase').value = data['Street Parking Ease'] || '';
-            document.getElementById('editParkingVisitorEase').value = data['Visitor Parking Ease'] || '';
-            document.getElementById('editGymQuality').value = data['Gym Quality'] || '';
+            const editCommutePartner = document.getElementById('editCommutePartner');
+            if (editCommutePartner) editCommutePartner.value = data['Commute Time (Partner)'] || '';
+            
+            const editSafetyOpenData = document.getElementById('editSafetyOpenData');
+            if (editSafetyOpenData) editSafetyOpenData.value = data['Safety Score (OpenData)'] || '';
+            
+            const editWfhNaturalLight = document.getElementById('editWfhNaturalLight');
+            if (editWfhNaturalLight) editWfhNaturalLight.value = typeof naturalLightValue === 'number' ? naturalLightValue : '';
+            
+            const editWfhDeskSpace = document.getElementById('editWfhDeskSpace');
+            if (editWfhDeskSpace) editWfhDeskSpace.value = typeof deskSpaceValue === 'number' ? deskSpaceValue : '';
+            
+            const editWfhQuietness = document.getElementById('editWfhQuietness');
+            if (editWfhQuietness) editWfhQuietness.value = data['Quietness Score'] || '';
+            
+            const editWfhKitchen = document.getElementById('editWfhKitchen');
+            if (editWfhKitchen) editWfhKitchen.value = typeof kitchenValue === 'number' ? kitchenValue : '';
+            
+            const editHappeningRestaurants = document.getElementById('editHappeningRestaurants');
+            if (editHappeningRestaurants) editHappeningRestaurants.value = data['Restaurants Nearby'] || '';
+            
+            const editHappeningCafes = document.getElementById('editHappeningCafes');
+            if (editHappeningCafes) editHappeningCafes.value = data['Cafes Nearby'] || '';
+            
+            const editHappeningParks = document.getElementById('editHappeningParks');
+            if (editHappeningParks) editHappeningParks.value = data['Parks Nearby'] || '';
+            
+            const editParkingStreetEase = document.getElementById('editParkingStreetEase');
+            if (editParkingStreetEase) editParkingStreetEase.value = data['Street Parking Ease'] || '';
+            
+            const editParkingVisitorEase = document.getElementById('editParkingVisitorEase');
+            if (editParkingVisitorEase) editParkingVisitorEase.value = data['Visitor Parking Ease'] || '';
+            
+            const editGymQuality = document.getElementById('editGymQuality');
+            if (editGymQuality) editGymQuality.value = data['Gym Quality'] || '';
             
             // Populate double-pane windows checkbox
             const doublePaneCheckbox = document.getElementById('editWfhWindowsCheckbox');
@@ -3711,9 +4014,9 @@
                 desk_space: parseFloat(document.getElementById('editWfhDeskSpace').value) || null,
                 quietness: parseFloat(document.getElementById('editWfhQuietness').value) || null,
                 kitchen: parseFloat(document.getElementById('editWfhKitchen').value) || null,
-                restaurants: parseInt(document.getElementById('editVibeRestaurants').value) || null,
-                cafes: parseInt(document.getElementById('editVibeCafes').value) || null,
-                parks: parseInt(document.getElementById('editVibeParks').value) || null,
+                restaurants: parseInt(document.getElementById('editHappeningRestaurants').value) || null,
+                cafes: parseInt(document.getElementById('editHappeningCafes').value) || null,
+                parks: parseInt(document.getElementById('editHappeningParks').value) || null,
                 street_ease: parseInt(document.getElementById('editParkingStreetEase').value) || null,
                 visitor_ease: parseInt(document.getElementById('editParkingVisitorEase').value) || null,
                 gym_quality: parseFloat(document.getElementById('editGymQuality').value) || null
@@ -4056,6 +4359,297 @@
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Sync Schema';
+            }
+        }
+
+        async function forceFullRecalculation() {
+            const confirmed = confirm(
+                '⚠️ WARNING: This will clear ALL computed fields (scores, gym data, commute data, location analysis) ' +
+                'for ALL apartments and force complete re-analysis.\n\n' +
+                'Manual entries (WFH ratings, parking types, etc.) will be preserved.\n\n' +
+                'This may take several minutes and consume API quota.\n\n' +
+                'Are you sure you want to continue?'
+            );
+            
+            if (!confirmed) return;
+            
+            const btn = document.getElementById('forceRecalcBtn');
+            const statusDiv = document.getElementById('recalcStatus');
+            const detailsDiv = document.getElementById('recalcDetails');
+            
+            btn.disabled = true;
+            btn.textContent = '🔄 Clearing data...';
+            statusDiv.style.display = 'block';
+            detailsDiv.innerHTML = '<p>⏳ Clearing computed fields...</p>';
+            
+            try {
+                // Step 1: Clear all computed fields
+                const clearResponse = await fetch('/admin/force_recalculate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        component: 'all',
+                        addresses: 'all'
+                    })
+                });
+                
+                const clearData = await clearResponse.json();
+                
+                if (!clearData.success) {
+                    detailsDiv.innerHTML = `<p class="error">❌ Error: ${clearData.error}</p>`;
+                    return;
+                }
+                
+                detailsDiv.innerHTML = `
+                    <div class="schema-success">
+                        <p>✅ Cleared computed fields for ${clearData.cleared_count} apartments</p>
+                        <p>📋 Columns cleared: ${clearData.columns.join(', ')}</p>
+                        <p>⏳ Starting analysis...</p>
+                    </div>
+                `;
+                
+                btn.textContent = '🔄 Running analysis...';
+                
+                // Step 2: Run analysis
+                const analysisResponse = await fetch('/run_analysis', { method: 'POST' });
+                const analysisData = await analysisResponse.json();
+                
+                if (analysisData.success) {
+                    detailsDiv.innerHTML = `
+                        <div class="schema-success">
+                            <h5>✅ Full Recalculation Complete!</h5>
+                            <p><strong>Cleared:</strong> ${clearData.cleared_count} apartments</p>
+                            <p><strong>Analyzed:</strong> ${analysisData.analyzed} apartments</p>
+                            ${analysisData.failed_count > 0 ? `<p class="error"><strong>Failed:</strong> ${analysisData.failed_count} apartments</p>` : ''}
+                            <p><strong>Message:</strong> ${analysisData.message}</p>
+                            <p>💡 Click the 🔄 Refresh button in the Analysis tab to see updated scores.</p>
+                        </div>
+                    `;
+                } else {
+                    detailsDiv.innerHTML = `
+                        <div class="schema-issue">
+                            <p class="error">⚠️ Cleared data but analysis had issues:</p>
+                            <p>${analysisData.error || analysisData.message}</p>
+                            <p>💡 Try running "Run Analysis" manually from the Analysis tab.</p>
+                        </div>
+                    `;
+                }
+                
+            } catch (error) {
+                console.error('Error during force recalculation:', error);
+                detailsDiv.innerHTML = `
+                    <p class="error">❌ Error: ${error.message}</p>
+                    <p>Please try running "Run Analysis" manually from the Analysis tab.</p>
+                `;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔄 Force Full Recalculation';
+            }
+        }
+        
+        // Toggle place lists visibility
+        function togglePlaceLists() {
+            const placeLists = document.getElementById('placeLists');
+            if (placeLists.style.display === 'none') {
+                placeLists.style.display = 'block';
+                loadPlaceLists();
+            } else {
+                placeLists.style.display = 'none';
+            }
+        }
+        
+        // Load and display place lists from JSON data
+        function loadPlaceLists() {
+            console.log('🔍 loadPlaceLists() called');
+            console.log('  Current row number (from global var):', currentApartmentRowNumber);
+            if (!currentApartmentRowNumber) {
+                console.warn('  ❌ No row number found in currentApartmentRowNumber');
+                return;
+            }
+            
+            console.log(`  📡 Fetching data for row ${currentApartmentRowNumber}...`);
+            fetch(`/get_apartment_detailed/${currentApartmentRowNumber}`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log('  ✓ Received data:', data);
+                    console.log('  📋 Available keys:', Object.keys(data));
+                    
+                    // Try both capitalized and lowercase keys
+                    const restaurantsJson = data['Restaurants List (JSON)'] || data['restaurants_list'] || '[]';
+                    const cafesJson = data['Cafes List (JSON)'] || data['cafes_list'] || '[]';
+                    const parksJson = data['Parks List (JSON)'] || data['parks_list'] || '[]';
+                    const poisJson = data['POIs List (JSON)'] || data['pois_list'] || '[]';
+                    
+                    console.log('  🍽️  Restaurants JSON:', restaurantsJson?.substring(0, 100));
+                    console.log('  ☕ Cafes JSON:', cafesJson?.substring(0, 100));
+                    console.log('  🌳 Parks JSON:', parksJson?.substring(0, 100));
+                    console.log('  📌 POIs JSON:', poisJson?.substring(0, 100));
+                    
+                    // Parse JSON lists
+                    let restaurants, cafes, parks, pois;
+                    try {
+                        restaurants = JSON.parse(restaurantsJson);
+                        console.log('  ✓ Parsed restaurants:', restaurants);
+                    } catch(e) {
+                        console.error('  ❌ Error parsing restaurants:', e);
+                        restaurants = [];
+                    }
+                    
+                    try {
+                        cafes = JSON.parse(cafesJson);
+                        console.log('  ✓ Parsed cafes:', cafes);
+                    } catch(e) {
+                        console.error('  ❌ Error parsing cafes:', e);
+                        cafes = [];
+                    }
+                    
+                    try {
+                        parks = JSON.parse(parksJson);
+                        console.log('  ✓ Parsed parks:', parks);
+                    } catch(e) {
+                        console.error('  ❌ Error parsing parks:', e);
+                        parks = [];
+                    }
+                    
+                    try {
+                        pois = JSON.parse(poisJson);
+                        console.log('  ✓ Parsed pois:', pois);
+                    } catch(e) {
+                        console.error('  ❌ Error parsing pois:', e);
+                        pois = [];
+                    }
+                    
+                    // Display restaurants
+                    console.log('  📝 Displaying restaurants...');
+                    displayPlaceList('restaurantsList', restaurants, 'restaurant');
+                    
+                    // Display cafes
+                    console.log('  📝 Displaying cafes...');
+                    displayPlaceList('cafesList', cafes, 'cafe');
+                    
+                    // Display parks
+                    console.log('  📝 Displaying parks...');
+                    displayPlaceList('parksList', parks, 'park');
+                    
+                    // Display POIs
+                    console.log('  📝 Displaying POIs...');
+                    displayPOIList('poisList', pois);
+                    
+                    console.log('  ✅ All place lists displayed!');
+                })
+                .catch(error => {
+                    console.error('❌ Error loading place lists:', error);
+                    document.getElementById('restaurantsList').innerHTML = '<p style="color: red;">Error loading data</p>';
+                    document.getElementById('cafesList').innerHTML = '<p style="color: red;">Error loading data</p>';
+                    document.getElementById('parksList').innerHTML = '<p style="color: red;">Error loading data</p>';
+                    document.getElementById('poisList').innerHTML = '<p style="color: red;">Error loading data</p>';
+                });
+        }
+        
+        // Display a list of places with exclude buttons
+        function displayPlaceList(containerId, places, placeType) {
+            const container = document.getElementById(containerId);
+            if (!places || places.length === 0) {
+                container.innerHTML = '<p style="color: #888; font-style: italic;">No places found</p>';
+                return;
+            }
+            
+            const html = places.map(place => `
+                <div style="padding: 8px; margin-bottom: 8px; background: white; border-radius: 4px; border: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center;">
+                    <div style="flex: 1;">
+                        <strong>${place.name}</strong>
+                        <div style="font-size: 0.85em; color: #666;">
+                            ${place.rating ? '⭐ ' + place.rating : ''} 
+                            ${place.address || ''}
+                        </div>
+                    </div>
+                    <button onclick="excludePlace('${place.place_id}', '${place.name.replace(/'/g, "\\'")}', '${placeType}')" 
+                            style="background: #f44336; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85em; white-space: nowrap;">
+                        ❌ Exclude
+                    </button>
+                </div>
+            `).join('');
+            
+            container.innerHTML = html;
+        }
+        
+        // Display POI list (slightly different format with walk time)
+        function displayPOIList(containerId, pois) {
+            const container = document.getElementById(containerId);
+            if (!pois || pois.length === 0) {
+                container.innerHTML = '<p style="color: #888; font-style: italic;">No POIs calculated</p>';
+                return;
+            }
+            
+            const html = pois.map(poi => `
+                <div style="padding: 8px; margin-bottom: 8px; background: white; border-radius: 4px; border: 1px solid #e0e0e0;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <strong>${poi.name}</strong>
+                        <span style="color: #2196F3; font-weight: bold;">${poi.walk_time_mins?.toFixed(1)} min walk</span>
+                    </div>
+                    ${poi.haversine_dist ? `<div style="font-size: 0.85em; color: #888;">~${poi.haversine_dist.toFixed(2)} mi direct</div>` : ''}
+                </div>
+            `).join('');
+            
+            container.innerHTML = html;
+        }
+        
+        // Exclude a place
+        async function excludePlace(placeId, placeName, placeType) {
+            console.log('🚫 excludePlace() called');
+            console.log('  Place ID:', placeId);
+            console.log('  Place Name:', placeName);
+            console.log('  Place Type:', placeType);
+            
+            if (!confirm(`Exclude "${placeName}" from future Happening score calculations?\n\nThis will add it to the exclusion list and you'll need to re-run analysis to see updated scores.`)) {
+                console.log('  ❌ User cancelled exclusion');
+                return;
+            }
+            
+            console.log('  ✓ User confirmed exclusion');
+            
+            try {
+                const requestBody = {
+                    action: 'add',
+                    place_id: placeId,
+                    place_name: placeName,
+                    place_type: placeType,
+                    reason: 'Manually excluded by user'
+                };
+                
+                console.log('  📡 Sending request to /exclude_place...');
+                console.log('  Request body:', requestBody);
+                
+                const response = await fetch('/exclude_place', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                console.log('  ✓ Response received:', response);
+                console.log('  Response status:', response.status);
+                console.log('  Response ok:', response.ok);
+                
+                const data = await response.json();
+                console.log('  📋 Response data:', data);
+                
+                if (data.success) {
+                    console.log('  ✅ Place excluded successfully!');
+                    alert(`✅ ${placeName} has been excluded.\n\nRe-run analysis to update Happening scores.`);
+                    // Reload the place lists
+                    console.log('  🔄 Reloading place lists...');
+                    loadPlaceLists();
+                } else {
+                    console.error('  ❌ Exclusion failed:', data.error);
+                    alert(`❌ Error: ${data.error || 'Failed to exclude place'}`);
+                }
+            } catch (error) {
+                console.error('❌ Exception in excludePlace:', error);
+                console.error('  Error message:', error.message);
+                console.error('  Error stack:', error.stack);
+                alert(`❌ Error: ${error.message}`);
             }
         }
     </script>
