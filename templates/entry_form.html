@@ -17,6 +17,7 @@
         <div class="tabs">
             <button class="tab active" onclick="showTab('entry')">Entry</button>
             <button class="tab" onclick="showTab('analysis')">Analysis</button>
+            <button class="tab" onclick="showTab('preferences')">Preferences</button>
             <button class="tab" onclick="showTab('admin')">Admin</button>
         </div>
 
@@ -1142,6 +1143,9 @@
                 </div>
             </div>
 
+            <!-- Preferences Tab -->
+            {% include 'preferences_tab.html' %}
+
             <!-- Admin Tab -->
             <div id="adminTab" class="tab-content" style="display: none;">
                 <div class="admin-container">
@@ -1212,6 +1216,7 @@
 
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="{{ url_for('static', filename='preferences.js') }}"></script>
     <script>
         let map;
         let streetView;
@@ -2463,9 +2468,16 @@
                 if (analysisResults.classList.contains('hidden')) {
                     loadAnalysisData();
                 }
+            } else if (tabName === 'preferences') {
+                document.getElementById('preferencesTab').style.display = 'block';
+                document.querySelectorAll('.tab')[2].classList.add('active');
+                // Load profiles when tab is shown
+                if (typeof loadProfiles === 'function') {
+                    loadProfiles();
+                }
             } else if (tabName === 'admin') {
                 document.getElementById('adminTab').style.display = 'block';
-                document.querySelectorAll('.tab')[2].classList.add('active');
+                document.querySelectorAll('.tab')[3].classList.add('active');
             }
         }
 

@@ -2116,3 +2116,98 @@ input[type="range"]::-moz-range-thumb {
     color: #666;
 }
 
+/* Profile View Styles */
+.profile-view-section {
+    margin-bottom: 24px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #eee;
+}
+
+.profile-view-section:last-child {
+    border-bottom: none;
+}
+
+.profile-view-section h4 {
+    margin: 0 0 12px 0;
+    color: #1d1d1f;
+    font-size: 16px;
+}
+
+.weights-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.weights-list .weight-item {
+    display: grid;
+    grid-template-columns: 120px 1fr 60px;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    background: #f5f5f7;
+    border-radius: 6px;
+}
+
+.weight-bar {
+    height: 8px;
+    background: linear-gradient(90deg, #0066cc, #5ac8fa);
+    border-radius: 4px;
+    min-width: 10px;
+}
+
+.criteria-list-view {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.criterion-detail {
+    padding: 12px;
+    background: #f5f5f7;
+    border-radius: 8px;
+    border-left: 4px solid #0066cc;
+}
+
+.criterion-header-view {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.priority-badge {
+    background: #0066cc;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.threshold-values {
+    display: flex;
+    gap: 16px;
+    font-size: 13px;
+    flex-wrap: wrap;
+}
+
+.tier-ideal {
+    color: #34c759;
+}
+
+.tier-acceptable {
+    color: #ff9500;
+}
+
+.tier-veto {
+    color: #ff3b30;
+}
+
+.veto-reason {
+    display: block;
+    margin-top: 6px;
+    color: #666;
+    font-style: italic;
+}
+

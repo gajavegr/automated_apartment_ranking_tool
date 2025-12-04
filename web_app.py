@@ -20,6 +20,14 @@ from analyzers.location_analyzer import LocationAnalyzer
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
+# Register preference routes
+try:
+    from preferences.web_routes import register_preference_routes
+    register_preference_routes(app)
+    print("  ✓ Preference routes registered")
+except ImportError as e:
+    print(f"  ⚠️  Preference routes not available: {e}")
+
 # Initialize clients
 sheets_client = None
 location_analyzer = None
