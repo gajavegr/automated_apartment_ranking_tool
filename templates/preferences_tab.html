@@ -160,6 +160,24 @@
                     </div>
                 </div>
 
+                <div class="form-group">
+                    <label>Exclude Categories (Optional)</label>
+                    <p style="font-size: 12px; color: #86868b; margin: 4px 0 8px 0;">
+                        If certain categories have uniformly low scores across all apartments (e.g., commute), 
+                        you can exclude them from the evaluation to focus on differentiating factors.
+                    </p>
+                    <div id="evalExcludeCategoriesCheckboxes" class="category-checkboxes">
+                        <label><input type="checkbox" value="commute"> 🚗 Commute</label>
+                        <label><input type="checkbox" value="safety"> 🛡️ Safety</label>
+                        <label><input type="checkbox" value="wfh"> 💻 WFH Quality</label>
+                        <label><input type="checkbox" value="happening"> 🎉 Happening</label>
+                        <label><input type="checkbox" value="parking"> 🅿️ Parking</label>
+                        <label><input type="checkbox" value="gym"> 🏋️ Gym</label>
+                        <label><input type="checkbox" value="laundry"> 🧺 Laundry</label>
+                        <label><input type="checkbox" value="space"> 📐 Space & Luxury</label>
+                    </div>
+                </div>
+
                 <div class="form-row">
                     <div class="form-group">
                         <label for="evalMaxVetoes">Max Vetoes Allowed</label>
@@ -197,11 +215,21 @@
                     <table class="eval-table">
                         <thead>
                             <tr>
-                                <th>Rank</th>
-                                <th>Apartment</th>
-                                <th>Joint Score</th>
-                                <th>Vetoes</th>
-                                <th>Status</th>
+                                <th onclick="sortEvalTable('rank')" class="sortable-header" title="Click to sort">
+                                    Rank <span class="sort-indicator"></span>
+                                </th>
+                                <th onclick="sortEvalTable('apartment')" class="sortable-header" title="Click to sort">
+                                    Apartment <span class="sort-indicator"></span>
+                                </th>
+                                <th onclick="sortEvalTable('score')" class="sortable-header active" title="Click to sort">
+                                    Joint Score <span class="sort-indicator">▼</span>
+                                </th>
+                                <th onclick="sortEvalTable('vetoes')" class="sortable-header" title="Click to sort">
+                                    Vetoes <span class="sort-indicator"></span>
+                                </th>
+                                <th onclick="sortEvalTable('status')" class="sortable-header" title="Click to sort">
+                                    Status <span class="sort-indicator"></span>
+                                </th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -741,6 +769,33 @@
     gap: 12px;
 }
 
+.category-checkboxes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.category-checkboxes label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: #f5f5f7;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+
+.category-checkboxes label:hover {
+    background: #e8e8ed;
+}
+
+.category-checkboxes input[type="checkbox"] {
+    cursor: pointer;
+}
+
 .profile-checkbox {
     display: flex;
     align-items: center;
@@ -879,6 +934,32 @@
     color: #1d1d1f;
 }
 
+.eval-table th.sortable-header {
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.2s;
+}
+
+.eval-table th.sortable-header:hover {
+    background: #e8e8ed;
+}
+
+.eval-table th.sortable-header.active {
+    background: #e0e0e5;
+    color: #0066cc;
+}
+
+.eval-table .sort-indicator {
+    font-size: 10px;
+    margin-left: 4px;
+    color: #86868b;
+}
+
+.eval-table th.sortable-header.active .sort-indicator {
+    color: #0066cc;
+    font-weight: bold;
+}
+
 .eval-table tr:hover {
     background: #f9f9f9;
 }
@@ -895,7 +976,47 @@
 
 /* Detail Modal */
 .pref-detail-modal {
-    max-width: 800px;
+    max-width: 900px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.eval-detail-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    border-bottom: 2px solid #e0e0e0;
+}
+
+.eval-detail-tab {
+    padding: 10px 16px;
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    color: #666;
+    transition: all 0.2s;
+}
+
+.eval-detail-tab:hover {
+    color: #0066cc;
+    background: #f5f5f7;
+}
+
+.eval-detail-tab.active {
+    color: #0066cc;
+    border-bottom-color: #0066cc;
+    font-weight: 600;
+}
+
+.eval-detail-content {
+    display: none;
+}
+
+.eval-detail-content.active {
+    display: block;
 }
 
 .detail-section {

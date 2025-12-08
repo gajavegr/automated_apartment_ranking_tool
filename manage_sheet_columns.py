@@ -32,6 +32,7 @@ class SheetColumnManager:
         return [
             config.SHEET_COLUMNS["manual_safety"],
             config.SHEET_COLUMNS["address"],
+            config.SHEET_COLUMNS["availability_status"],
             config.SHEET_COLUMNS["price"],
             config.SHEET_COLUMNS["bedrooms"],
             config.SHEET_COLUMNS["bathrooms"],

@@ -77,6 +77,17 @@
                         <small>Start typing and select from suggestions</small>
                     </div>
 
+                    <div class="form-group">
+                        <label for="availability_status">Availability Status</label>
+                        <select id="availability_status" name="availability_status">
+                            <option value="Available">✅ Available</option>
+                            <option value="Pending">⏳ Pending</option>
+                            <option value="Rented">❌ Rented</option>
+                            <option value="Removed">🚫 Listing Removed</option>
+                        </select>
+                        <small>💡 Mark apartments as unavailable to exclude them from evaluations</small>
+                    </div>
+
                     <h2>Property Details</h2>
 
                     <div class="form-row">
@@ -1646,6 +1657,7 @@
             document.getElementById('zillow_url').value = data['Zillow URL'] || '';
             updateZillowLink(); // Update the link preview
             document.getElementById('address').value = data['Address'] || '';
+            document.getElementById('availability_status').value = data['Availability Status'] || 'Available';
             document.getElementById('manual_safety_rating').value = data['Manual Safety Rating'] || 5;
             document.getElementById('safetyValue').textContent = data['Manual Safety Rating'] || 5;
             

@@ -791,6 +791,7 @@ def add_apartment():
         data = {
             'zillow_url': request.form.get('zillow_url', '').strip(),
             'address': request.form.get('address', '').strip(),
+            'availability_status': request.form.get('availability_status', 'Available').strip(),
             'manual_safety_rating': float(request.form.get('manual_safety_rating', 5.0)),
             # Store multi-select values as newline-separated for better readability
             'parking_type': '\n'.join(parking_types) if parking_types else 'none',
@@ -1003,6 +1004,7 @@ def add_apartment():
         
         # Other columns (skip address since we handled it above)
         column_mapping = {
+            'availability_status': config.SHEET_COLUMNS['availability_status'],
             'price': config.SHEET_COLUMNS['price'],
             'bedrooms': config.SHEET_COLUMNS['bedrooms'],
             'bathrooms': config.SHEET_COLUMNS['bathrooms'],
@@ -1542,8 +1544,23 @@ def get_analysis_data():
         scatter_data = []
         unanalyzed_data = []
         
+        # Get availability column name
+        availability_col = config.SHEET_COLUMNS.get("availability_status")
+        
         for i, r in enumerate(records):
             address = r.get(config.SHEET_COLUMNS['address'], 'Unknown')
+            
+            # Skip if no address
+            if not address or not address.strip():
+                continue
+            
+            # Skip unavailable apartments
+            if availability_col:
+                status = r.get(availability_col, "").strip().lower()
+                if status and status != "available":
+                    print(f"[DEBUG] Skipping unavailable apartment: {address} (status: {status})")
+                    continue
+            
             weighted_score = r.get(config.SHEET_COLUMNS['weighted_score'])
             
             if weighted_score:

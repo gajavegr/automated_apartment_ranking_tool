@@ -173,6 +173,7 @@ class GoogleSheetsClient:
         headers = [
             config.SHEET_COLUMNS["manual_safety"],
             config.SHEET_COLUMNS["address"],
+            config.SHEET_COLUMNS["availability_status"],
             config.SHEET_COLUMNS["price"],
             config.SHEET_COLUMNS["bedrooms"],
             config.SHEET_COLUMNS["bathrooms"],
@@ -184,6 +185,7 @@ class GoogleSheetsClient:
             config.SHEET_COLUMNS["commute_details"],
             config.SHEET_COLUMNS["safety_score_opendata"],
             config.SHEET_COLUMNS["combined_safety"],
+            config.SHEET_COLUMNS["crime_details"],
             config.SHEET_COLUMNS["wfh_quality_score"],
             config.SHEET_COLUMNS["natural_light"],
             config.SHEET_COLUMNS["desk_space_quality"],
@@ -193,8 +195,15 @@ class GoogleSheetsClient:
             config.SHEET_COLUMNS["kitchen_quality"],
             config.SHEET_COLUMNS["happening_score"],
             config.SHEET_COLUMNS["restaurants_nearby"],
+            config.SHEET_COLUMNS["restaurants_list"],
             config.SHEET_COLUMNS["cafes_nearby"],
+            config.SHEET_COLUMNS["cafes_list"],
             config.SHEET_COLUMNS["parks_nearby"],
+            config.SHEET_COLUMNS["parks_list"],
+            config.SHEET_COLUMNS["pois_list"],
+            config.SHEET_COLUMNS["avg_walk_to_poi_mins"],
+            config.SHEET_COLUMNS["nearest_poi_count"],
+            config.SHEET_COLUMNS["pois_within_1_mile"],
             config.SHEET_COLUMNS["parking_type"],
             config.SHEET_COLUMNS["parking_enclosure"],
             config.SHEET_COLUMNS["parking_distance"],
@@ -221,15 +230,19 @@ class GoogleSheetsClient:
             config.SHEET_COLUMNS["neighborhoods"],
             config.SHEET_COLUMNS["tour_questions"],
             config.SHEET_COLUMNS["weighted_score"],
+            config.SHEET_COLUMNS["score_min"],
+            config.SHEET_COLUMNS["score_max"],
+            config.SHEET_COLUMNS["score_certainty"],
+            config.SHEET_COLUMNS["score_vs_max"],
             config.SHEET_COLUMNS["value_ratio"],
             config.SHEET_COLUMNS["last_updated"],
             config.SHEET_COLUMNS["last_analyzed"],
         ]
         
-        sheet.update('A1:AQ1', [headers])
+        sheet.update('A1:BA1', [headers])
         
         # Apply formatting
-        sheet.format('A1:AQ1', {
+        sheet.format('A1:BA1', {
             'textFormat': {'bold': True},
             'backgroundColor': {'red': 0.8, 'green': 0.8, 'blue': 0.8}
         })
@@ -462,6 +475,7 @@ class GoogleSheetsClient:
         # Build row data in correct column order
         row_data = []
         column_mapping = {
+            "availability_status": config.SHEET_COLUMNS["availability_status"],
             "price": config.SHEET_COLUMNS["price"],
             "bedrooms": config.SHEET_COLUMNS["bedrooms"],
             "bathrooms": config.SHEET_COLUMNS["bathrooms"],

@@ -135,6 +135,9 @@ SHEET_COLUMNS = {
     # Gym selection
     "selected_gyms": "Selected Gyms",
     
+    # Availability status
+    "availability_status": "Availability Status",
+    
     # Final scores
     "weighted_score": "Weighted Score",
     "value_ratio": "Value Ratio",
@@ -261,7 +264,7 @@ SCORE_COMPONENTS = {
         "weight": 0.10,  # Updated from 0.15 to 0.10 (QoL subsection)
         "preferences": {
             "ideal_duration": 30,  # Minutes
-            "acceptable_duration": 50,  # Minutes
+            "acceptable_duration": 60,  # Minutes (increased from 50 to allow more score variation)
             "preferred_route": "280",  # Highway preference
             "route_bonus": 1.5,  # Extra points for preferred route
             "annoyingness_penalty_weight": 0.35,  # (10-annoy) * weight = penalty in points

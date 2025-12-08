@@ -17,6 +17,10 @@ let quizState = {
 let currentEditingProfile = null;
 let cachedProfiles = [];
 let cachedApartments = [];
+let evalTableSortState = {
+    column: 'score',  // Default sort by score
+    ascending: false  // Descending by default
+};
 
 // Criteria definitions
 const CRITERIA = [
@@ -818,6 +822,9 @@ async function loadProfilesForEvaluation() {
     }
 }
 
+// Store max vetoes setting globally so renderEvaluationResults can access it
+let currentMaxVetoes = 0;
+
 async function runPreferenceEvaluation() {
     // Get selected profiles
     const checkboxes = document.querySelectorAll('#evalProfileCheckboxes input[type="checkbox"]:checked');
@@ -828,8 +835,15 @@ async function runPreferenceEvaluation() {
         return;
     }
     
+    // Get excluded categories
+    const excludeCheckboxes = document.querySelectorAll('#evalExcludeCategoriesCheckboxes input[type="checkbox"]:checked');
+    const excludedCategories = Array.from(excludeCheckboxes).map(cb => cb.value);
+    
     const maxVetoes = parseInt(document.getElementById('evalMaxVetoes').value);
     const topN = parseInt(document.getElementById('evalTopN').value);
+    
+    // Store for use in rendering
+    currentMaxVetoes = maxVetoes;
     
     try {
         // Show loading state
@@ -845,6 +859,7 @@ async function runPreferenceEvaluation() {
                 profiles: profileNames,
                 max_vetoes: maxVetoes,
                 top_n: topN,
+                excluded_categories: excludedCategories,
             }),
         });
         
@@ -906,34 +921,155 @@ function renderEvaluationResults(data) {
     document.getElementById('evalShortlistContent').innerHTML = shortlistHtml || '<p>No apartments passed all criteria.</p>';
     
     // Full results table
-    const tableHtml = data.evaluations.map(eval_ => `
+    const tableHtml = data.evaluations.map(eval_ => {
+        // Determine if this apartment should be marked as veto based on max_vetoes threshold
+        const isVeto = eval_.joint_veto_count > currentMaxVetoes;
+        
+        return `
         <tr>
             <td>${eval_.rank || '-'}</td>
             <td>${eval_.apartment_id}</td>
             <td>${(eval_.joint_satisfaction_score * 100).toFixed(1)}%</td>
             <td>${eval_.joint_veto_count}</td>
-            <td class="${eval_.any_veto ? 'status-veto' : 'status-ok'}">
-                ${eval_.any_veto ? '✗ VETO' : '✓ OK'}
+            <td class="${isVeto ? 'status-veto' : 'status-ok'}">
+                ${isVeto ? '✗ VETO' : '✓ OK'}
             </td>
             <td>
                 <button class="btn btn-small" onclick="showEvalDetail('${eval_.apartment_id}')">Details</button>
             </td>
         </tr>
-    `).join('');
+        `;
+    }).join('');
     
     document.getElementById('evalTableBody').innerHTML = tableHtml;
     
     // Store evaluations for detail view
     cachedApartments = data.evaluations;
+    
+    // Update sort indicators
+    updateEvalTableSortIndicators();
 }
 
-function showEvalDetail(apartmentId) {
+function sortEvalTable(column) {
+    // Toggle sort direction if clicking same column, otherwise default to descending
+    if (evalTableSortState.column === column) {
+        evalTableSortState.ascending = !evalTableSortState.ascending;
+    } else {
+        evalTableSortState.column = column;
+        evalTableSortState.ascending = (column === 'apartment'); // Apartment ascending by default, others descending
+    }
+    
+    // Sort the cached apartments
+    const sorted = [...cachedApartments].sort((a, b) => {
+        let aVal, bVal;
+        
+        switch(column) {
+            case 'rank':
+                aVal = a.rank || 999;
+                bVal = b.rank || 999;
+                break;
+            case 'apartment':
+                aVal = a.apartment_id.toLowerCase();
+                bVal = b.apartment_id.toLowerCase();
+                break;
+            case 'score':
+                aVal = a.joint_satisfaction_score || 0;
+                bVal = b.joint_satisfaction_score || 0;
+                break;
+            case 'vetoes':
+                aVal = a.joint_veto_count || 0;
+                bVal = b.joint_veto_count || 0;
+                break;
+            case 'status':
+                // Sort by veto status (OK before VETO)
+                const aIsVeto = a.joint_veto_count > currentMaxVetoes;
+                const bIsVeto = b.joint_veto_count > currentMaxVetoes;
+                aVal = aIsVeto ? 1 : 0;
+                bVal = bIsVeto ? 1 : 0;
+                break;
+            default:
+                return 0;
+        }
+        
+        // Compare
+        let comparison = 0;
+        if (aVal < bVal) comparison = -1;
+        if (aVal > bVal) comparison = 1;
+        
+        return evalTableSortState.ascending ? comparison : -comparison;
+    });
+    
+    // Re-render table with sorted data
+    const tableHtml = sorted.map(eval_ => {
+        const isVeto = eval_.joint_veto_count > currentMaxVetoes;
+        
+        return `
+        <tr>
+            <td>${eval_.rank || '-'}</td>
+            <td>${eval_.apartment_id}</td>
+            <td>${(eval_.joint_satisfaction_score * 100).toFixed(1)}%</td>
+            <td>${eval_.joint_veto_count}</td>
+            <td class="${isVeto ? 'status-veto' : 'status-ok'}">
+                ${isVeto ? '✗ VETO' : '✓ OK'}
+            </td>
+            <td>
+                <button class="btn btn-small" onclick="showEvalDetail('${eval_.apartment_id}')">Details</button>
+            </td>
+        </tr>
+        `;
+    }).join('');
+    
+    document.getElementById('evalTableBody').innerHTML = tableHtml;
+    
+    // Update sort indicators
+    updateEvalTableSortIndicators();
+}
+
+function updateEvalTableSortIndicators() {
+    // Remove active class from all headers
+    document.querySelectorAll('.eval-table th.sortable-header').forEach(th => {
+        th.classList.remove('active');
+        const indicator = th.querySelector('.sort-indicator');
+        if (indicator) indicator.textContent = '';
+    });
+    
+    // Add active class and indicator to current sort column
+    const columnMap = {
+        'rank': 0,
+        'apartment': 1,
+        'score': 2,
+        'vetoes': 3,
+        'status': 4
+    };
+    
+    const headerIndex = columnMap[evalTableSortState.column];
+    if (headerIndex !== undefined) {
+        const headers = document.querySelectorAll('.eval-table th.sortable-header');
+        if (headers[headerIndex]) {
+            headers[headerIndex].classList.add('active');
+            const indicator = headers[headerIndex].querySelector('.sort-indicator');
+            if (indicator) {
+                indicator.textContent = evalTableSortState.ascending ? '▲' : '▼';
+            }
+        }
+    }
+}
+
+async function showEvalDetail(apartmentId) {
     const eval_ = cachedApartments.find(e => e.apartment_id === apartmentId);
     if (!eval_) return;
     
     document.getElementById('prefDetailTitle').textContent = `Evaluation: ${apartmentId}`;
     
-    let html = '';
+    let html = `
+        <div class="eval-detail-tabs">
+            <button class="eval-detail-tab active" onclick="switchEvalDetailTab('evaluation')">📊 Preference Evaluation</button>
+            <button class="eval-detail-tab" onclick="switchEvalDetailTab('analysis')">🏠 Apartment Analysis</button>
+        </div>
+    `;
+    
+    // Evaluation Content (default view)
+    html += '<div id="evalDetailEvaluation" class="eval-detail-content active">';
     
     // Per-person breakdown
     for (const [personName, individual] of Object.entries(eval_.individual_evaluations)) {
@@ -973,8 +1109,140 @@ function showEvalDetail(apartmentId) {
         `;
     }
     
+    html += '</div>'; // Close evaluation content
+    
+    // Analysis Content (will be loaded async)
+    html += '<div id="evalDetailAnalysis" class="eval-detail-content hidden"><div class="loading-spinner">Loading apartment details...</div></div>';
+    
     document.getElementById('prefDetailContent').innerHTML = html;
     document.getElementById('prefDetailModal').classList.remove('hidden');
+    
+    // Load apartment analysis data asynchronously
+    try {
+        const response = await fetch('/get_apartment_list');
+        const apartments = await response.json();
+        
+        // Find the apartment by address
+        const apartment = apartments.find(apt => apt.address === apartmentId);
+        
+        if (apartment) {
+            // Build rich detail HTML similar to the Analysis tab
+            const analysisHtml = buildApartmentAnalysisHTML(apartment);
+            document.getElementById('evalDetailAnalysis').innerHTML = analysisHtml;
+        } else {
+            document.getElementById('evalDetailAnalysis').innerHTML = '<p>Apartment details not found.</p>';
+        }
+    } catch (error) {
+        console.error('Error loading apartment analysis:', error);
+        document.getElementById('evalDetailAnalysis').innerHTML = '<p>Error loading apartment details.</p>';
+    }
+}
+
+function switchEvalDetailTab(tabName) {
+    // Update tab buttons
+    document.querySelectorAll('.eval-detail-tab').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    event.target.classList.add('active');
+    
+    // Update content
+    document.querySelectorAll('.eval-detail-content').forEach(content => {
+        content.classList.add('hidden');
+    });
+    document.getElementById(`evalDetail${tabName.charAt(0).toUpperCase() + tabName.slice(1)}`).classList.remove('hidden');
+}
+
+function buildApartmentAnalysisHTML(apartment) {
+    // Build a simplified version of the detail panel for the modal
+    return `
+        <div class="apartment-analysis-summary" style="padding: 16px;">
+            <div class="score-overview" style="background: #f5f5f7; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+                <h4 style="margin: 0 0 12px 0;">Overall Score</h4>
+                <div style="font-size: 32px; font-weight: 600; color: #0066cc;">${apartment.score || 'N/A'}</div>
+                ${apartment.score_min && apartment.score_max ? `
+                    <div style="font-size: 14px; color: #86868b;">Range: ${apartment.score_min} - ${apartment.score_max}</div>
+                ` : ''}
+            </div>
+            
+            <div class="score-breakdown">
+                <h4>Score Breakdown</h4>
+                <div class="component-scores" style="display: grid; gap: 12px;">
+                    ${apartment.commute_score !== undefined ? `
+                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
+                            <span>🚗 Commute</span>
+                            <strong>${apartment.commute_score}</strong>
+                        </div>
+                    ` : ''}
+                    ${apartment.safety_score !== undefined ? `
+                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
+                            <span>🛡️ Safety</span>
+                            <strong>${apartment.safety_score}</strong>
+                        </div>
+                    ` : ''}
+                    ${apartment.wfh_score !== undefined ? `
+                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
+                            <span>💻 WFH Quality</span>
+                            <strong>${apartment.wfh_score}</strong>
+                        </div>
+                    ` : ''}
+                    ${apartment.happening_score !== undefined ? `
+                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
+                            <span>🎉 Happening</span>
+                            <strong>${apartment.happening_score}</strong>
+                        </div>
+                    ` : ''}
+                    ${apartment.parking_score !== undefined ? `
+                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
+                            <span>🅿️ Parking</span>
+                            <strong>${apartment.parking_score}</strong>
+                        </div>
+                    ` : ''}
+                    ${apartment.gym_score !== undefined ? `
+                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
+                            <span>🏋️ Gym</span>
+                            <strong>${apartment.gym_score}</strong>
+                        </div>
+                    ` : ''}
+                    ${apartment.laundry_score !== undefined ? `
+                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
+                            <span>🧺 Laundry</span>
+                            <strong>${apartment.laundry_score}</strong>
+                        </div>
+                    ` : ''}
+                    ${apartment.space_luxury_score !== undefined ? `
+                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
+                            <span>📐 Space & Luxury</span>
+                            <strong>${apartment.space_luxury_score}</strong>
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+            
+            <div class="key-details" style="margin-top: 20px;">
+                <h4>Key Details</h4>
+                <div style="display: grid; gap: 8px; font-size: 14px;">
+                    <div><strong>Price:</strong> $${apartment.price || 'N/A'}</div>
+                    <div><strong>Bedrooms:</strong> ${apartment.bedrooms || 'N/A'}</div>
+                    <div><strong>Bathrooms:</strong> ${apartment.bathrooms || 'N/A'}</div>
+                    <div><strong>Square Feet:</strong> ${apartment.sqft || 'N/A'}</div>
+                    <div><strong>Commute (You):</strong> ${apartment.commute_you || 'N/A'} min</div>
+                    <div><strong>Commute (Partner):</strong> ${apartment.commute_partner || 'N/A'} min</div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 16px; text-align: center;">
+                <button class="btn btn-primary" onclick="window.open('/','_blank').focus(); setTimeout(() => {
+                    const selector = document.querySelector('#apartment_selector');
+                    if (selector) {
+                        selector.value = '${apartment.row}';
+                        loadSelectedApartment();
+                    }
+                }, 1000)">
+                    📝 Open in Editor
+                </button>
+            </div>
+        </div>
+    `;
 }
 
 function closePrefDetailModal() {

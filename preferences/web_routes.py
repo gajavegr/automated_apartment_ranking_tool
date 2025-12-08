@@ -416,11 +416,13 @@ def api_evaluate_from_sheet():
     try:
         # Import here to avoid circular imports
         from utils.google_sheets import GoogleSheetsClient
+        import config
         
         data = request.get_json()
         profile_names = data.get("profiles", [])
         max_vetoes = data.get("max_vetoes", 0)
         top_n = data.get("top_n", 20)
+        excluded_categories = data.get("excluded_categories", [])  # New parameter
         
         if not profile_names:
             return jsonify({"success": False, "error": "At least one profile is required"}), 400
@@ -431,6 +433,11 @@ def api_evaluate_from_sheet():
         if not profiles:
             return jsonify({"success": False, "error": "No valid profiles found"}), 400
         
+        # Filter out excluded categories from profiles
+        if excluded_categories:
+            for profile in profiles.values():
+                profile.criteria = [c for c in profile.criteria if c.id not in excluded_categories]
+        
         # Read apartments from sheet
         sheets_client = GoogleSheetsClient()
         sheet_rows = sheets_client.read_main_sheet()
@@ -438,8 +445,17 @@ def api_evaluate_from_sheet():
         if not sheet_rows:
             return jsonify({"success": False, "error": "No apartments found in sheet"}), 400
         
+        # Filter out unavailable apartments
+        availability_col = config.SHEET_COLUMNS.get("availability_status")
+        available_rows = []
+        for row in sheet_rows:
+            # Include row if no availability status or if it's "Available"
+            status = row.get(availability_col, "").strip().lower() if availability_col else ""
+            if not status or status == "available":
+                available_rows.append(row)
+        
         # Normalize apartments
-        normalized = [normalize_apartment_data(row) for row in sheet_rows]
+        normalized = [normalize_apartment_data(row) for row in available_rows]
         
         # Create evaluator and evaluate
         evaluator = PreferenceEvaluator(profiles)
@@ -457,6 +473,9 @@ def api_evaluate_from_sheet():
         return jsonify({
             "success": True,
             "total_apartments": len(sheet_rows),
+            "available_apartments": len(available_rows),
+            "unavailable_count": len(sheet_rows) - len(available_rows),
+            "excluded_categories": excluded_categories,
             "evaluations": eval_results,
             "shortlist": shortlist_results,
             "summary": summary,
