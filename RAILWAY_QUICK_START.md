@@ -40,6 +40,12 @@ CACHE_EXPIRE_HOURS=168
 4. Paste the entire JSON as the value
 5. Railway handles multi-line values automatically ✅
 
+**⚠️ IMPORTANT:** Do NOT set `GOOGLE_SHEETS_CREDENTIALS_PATH` in Railway!
+- Railway may show it as a "suggested variable" because it's in the code
+- **Ignore that suggestion** - leave it unset
+- Our code automatically writes credentials to the right path when you provide `GOOGLE_SHEETS_CREDENTIALS_JSON`
+- Only set `GOOGLE_SHEETS_CREDENTIALS_JSON` (the actual JSON content)
+
 **Method 2: Via Railway CLI**
 
 ```bash

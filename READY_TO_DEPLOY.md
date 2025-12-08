@@ -125,6 +125,12 @@ CACHE_EXPIRE_HOURS=168
 4. Paste into Railway variable value field
 5. Railway handles the multi-line JSON automatically!
 
+**⚠️ Railway will show "suggested variables":**
+- You may see `GOOGLE_SHEETS_CREDENTIALS_PATH` in suggestions
+- **IGNORE IT** - do NOT set this variable in Railway!
+- Our code automatically handles the path when you set `GOOGLE_SHEETS_CREDENTIALS_JSON`
+- Only the 4 required variables above are needed
+
 ### Step 4: Deploy & Test
 
 1. Railway auto-deploys after you add environment variables
