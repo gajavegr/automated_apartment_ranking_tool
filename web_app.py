@@ -1492,6 +1492,63 @@ def reanalyze_apartment(row_number):
         return jsonify({'error': str(e), 'success': False}), 500
 
 
+@app.route('/reanalyze_sheet_only/<int:row_number>', methods=['POST'])
+def reanalyze_sheet_only(row_number):
+    """
+    Recalculate only sheet-based fields (e.g., updated parking/laundry) without external API calls.
+    Useful when categories were cleaned up and we just need to refresh the scorecard.
+    """
+    try:
+        import sys
+        from main import ApartmentAnalyzer
+        
+        sys.stdout.flush()
+        
+        print("\n" + "="*70)
+        print(f"SHEET-ONLY REANALYSIS FOR ROW {row_number}")
+        print("="*70)
+        sys.stdout.flush()
+        
+        # Get the apartment data
+        all_records = sheets_client.read_main_sheet()
+        if row_number - 2 >= len(all_records):
+            return jsonify({'error': 'Invalid row number', 'success': False}), 400
+        
+        apartment = all_records[row_number - 2]  # -2 for header and 1-indexing
+        apartment['_row_number'] = row_number
+        
+        address = apartment.get(config.SHEET_COLUMNS['address'], 'Unknown')
+        print(f"Analyzing (sheet-only): {address}")
+        sys.stdout.flush()
+        
+        analyzer = ApartmentAnalyzer()
+        result = analyzer.analyze_apartment(apartment, force_refresh=False, components_to_recalc=['sheet_only'])
+        
+        if result and 'error' not in result:
+            print(f"Writing sheet-only recalculation results to row {row_number}")
+            sheets_client.write_apartment_data(row_number, result)
+            sheets_client.update_scatter_plot_data()
+            
+            print(f"✓ Sheet-only reanalysis complete for {address}")
+            sys.stdout.flush()
+            
+            return jsonify({
+                'success': True,
+                'address': address,
+                'weighted_score': result.get('weighted_score', 0)
+            })
+        else:
+            error_msg = result.get('error', 'Unknown error') if result else 'Analysis failed'
+            return jsonify({'error': error_msg, 'success': False}), 500
+            
+    except Exception as e:
+        print(f"Error in sheet-only reanalysis: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.stdout.flush()
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
 @app.route('/analyze_edits', methods=['GET'])
 def analyze_edits():
     """Analyze user edits and return weight adjustment suggestions"""

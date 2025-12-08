@@ -9,6 +9,7 @@ Provides utilities for:
 
 from typing import Dict, List, Any, Optional
 from pathlib import Path
+import json
 import config
 
 from .schemas import (
@@ -16,6 +17,7 @@ from .schemas import (
     JointEvaluation,
     TierLevel,
     FIELD_ALIASES,
+    AnnoyingnessWeights,
 )
 
 
@@ -121,8 +123,24 @@ def _compute_derived_fields(data: Dict[str, Any]) -> None:
     if "wfh_score" not in data and "wfh_quality_score" in data:
         data["wfh_score"] = data["wfh_quality_score"]
     
-    # Price/monthly cost alias
-    if "monthly_cost" not in data and "price" in data:
+    # Total monthly cost (rent + parking)
+    # This is the primary price field used for evaluation
+    base_price = data.get("price")
+    parking_cost = data.get("parking_cost", 0)
+    if base_price is not None:
+        try:
+            price_val = float(base_price)
+            parking_val = float(parking_cost) if parking_cost else 0.0
+            data["total_monthly_cost"] = price_val + parking_val
+            data["base_rent"] = price_val  # Keep original rent for reference
+            # Update monthly_cost and price to use total for preference evaluation
+            data["monthly_cost"] = data["total_monthly_cost"]
+            data["price"] = data["total_monthly_cost"]
+        except (ValueError, TypeError):
+            # Fallback to just using base price
+            if "monthly_cost" not in data:
+                data["monthly_cost"] = base_price
+    elif "monthly_cost" not in data and "price" in data:
         data["monthly_cost"] = data["price"]
     
     # Gym walk time
@@ -135,11 +153,121 @@ def _compute_derived_fields(data: Dict[str, Any]) -> None:
         commute_you = data.get("commute_time_you")
         if commute_you is not None:
             data["commute_duration"] = commute_you
+    
+    # Extract transit details from commute_details JSON
+    _extract_transit_details(data)
+
+
+def _extract_transit_details(data: Dict[str, Any]) -> None:
+    """
+    Extract transit-specific details from commute_details JSON and calculate
+    transit annoyingness score.
+    
+    Populates the following fields:
+    - transit_walking_minutes: Total walking time in transit commute
+    - transit_transfers: Number of transit transfers (segments - 1)
+    - transit_annoyingness: Calculated annoyingness score (0-10, higher is better)
+    - partner_transit_details: Dict with walking_minutes, num_transfers, total_duration_mins
+    
+    Args:
+        data: Normalized apartment data dictionary (modified in place).
+    """
+    commute_details = data.get("commute_details")
+    
+    # If commute_details is a string, try to parse as JSON
+    if isinstance(commute_details, str):
+        try:
+            commute_details = json.loads(commute_details)
+        except (json.JSONDecodeError, TypeError):
+            commute_details = None
+    
+    if not commute_details or not isinstance(commute_details, dict):
+        return
+    
+    # Look for partner commute (typically transit)
+    partner_commute = commute_details.get("partner", {})
+    transit_details = partner_commute.get("transit_details", {})
+    
+    if transit_details:
+        # Extract walking minutes
+        walking_minutes = transit_details.get("walking_minutes", 0)
+        data["transit_walking_minutes"] = walking_minutes
+        
+        # Count transfers (number of transit segments minus 1)
+        transit_segments = transit_details.get("transit_segments", [])
+        num_transfers = max(0, len(transit_segments) - 1)
+        data["transit_transfers"] = num_transfers
+        
+        # Get total duration from partner commute
+        total_duration = partner_commute.get("duration_mins", 0)
+        
+        # Store partner transit details for evaluation engine
+        data["partner_transit_details"] = {
+            "walking_minutes": walking_minutes,
+            "num_transfers": num_transfers,
+            "total_duration_mins": total_duration,
+            "transit_segments": transit_segments,
+        }
+        
+        # Calculate transit annoyingness using default weights
+        # (profiles can override with their own weights during evaluation)
+        transit_annoyingness = _calculate_transit_annoyingness(
+            walking_minutes=walking_minutes,
+            num_transfers=num_transfers,
+            total_duration_mins=total_duration,
+        )
+        data["transit_annoyingness"] = transit_annoyingness
+    
+    # Also extract driver route annoyingness if not already present
+    driver_commute = commute_details.get("driver", {})
+    if "route_annoyingness" not in data or data["route_annoyingness"] is None:
+        annoyingness_data = driver_commute.get("annoyingness", {})
+        if isinstance(annoyingness_data, dict):
+            data["route_annoyingness"] = annoyingness_data.get("score")
+
+
+def _calculate_transit_annoyingness(
+    walking_minutes: float,
+    num_transfers: int,
+    total_duration_mins: float = 0,
+    weights: Optional[AnnoyingnessWeights] = None,
+    ideal_duration: int = 30,
+) -> float:
+    """
+    Calculate transit annoyingness score based on walking time and transfers.
+    
+    Args:
+        walking_minutes: Total walking time in the transit route.
+        num_transfers: Number of transfers (transit segments - 1).
+        total_duration_mins: Total commute duration in minutes.
+        weights: Optional custom weights (uses defaults if not provided).
+        ideal_duration: Ideal commute duration for duration penalty.
+        
+    Returns:
+        Annoyingness score from 0-10 (higher is better/less annoying).
+    """
+    if weights is None:
+        weights = AnnoyingnessWeights()
+    
+    # Calculate penalties (capped to avoid extreme scores)
+    walk_penalty = min(3.0, walking_minutes * weights.walk_time_weight)
+    transfer_penalty = min(3.0, num_transfers * weights.transfer_weight)
+    
+    # Duration penalty for time over ideal
+    duration_over_ideal = max(0, total_duration_mins - ideal_duration)
+    duration_penalty = min(2.0, duration_over_ideal * weights.duration_weight)
+    
+    # Calculate score (10 = perfect, 0 = terrible)
+    total_penalty = walk_penalty + transfer_penalty + duration_penalty
+    score = max(0.0, 10.0 - total_penalty)
+    
+    return round(score, 2)
 
 
 def generate_preference_summary(
     evaluations: List[JointEvaluation],
     profiles: Dict[str, PreferenceProfile],
+    max_vetoes: int = 0,
 ) -> Dict[str, Any]:
     """
     Generate a summary of preference-based evaluation results.
@@ -164,7 +292,8 @@ def generate_preference_summary(
         }
     
     total = len(evaluations)
-    passing = sum(1 for e in evaluations if not e.any_veto)
+    # Passing = evaluations whose joint veto count is within the allowed threshold
+    passing = sum(1 for e in evaluations if e.joint_veto_count <= max_vetoes)
     vetoed = total - passing
     
     # Criteria breakdown

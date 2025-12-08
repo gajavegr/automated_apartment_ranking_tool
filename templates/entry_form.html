@@ -720,10 +720,16 @@
                                     Select an apartment
                                 </span>
                             </h3>
-                            <div style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
+                            <div style="display: flex; gap: 10px; align-items: center; margin-top: 5px; flex-wrap: wrap;">
                             <a id="detailZillowLink" href="#" target="_blank" rel="noopener noreferrer" style="display: none;">View on Zillow</a>
                                 <button id="enableEditBtn" class="btn btn-secondary btn-sm" onclick="enableEditing()" style="display: inline-block;">✏️ Edit Scores</button>
-                                <button id="reanalyzeBtn" class="btn btn-secondary btn-sm" onclick="reanalyzeApartment()" style="display: inline-block;" title="Force reanalysis of this apartment">🔄 Reanalyze</button>
+                                <div style="display: flex; gap: 5px; align-items: center;">
+                                    <button id="reanalyzeBtn" class="btn btn-secondary btn-sm" onclick="reanalyzeApartment()" style="display: inline-block;" title="Force reanalysis of this apartment">🔄 Reanalyze</button>
+                                    <label style="display: flex; align-items: center; gap: 5px; font-size: 0.9em; margin: 0; white-space: nowrap;">
+                                        <input type="checkbox" id="sheetOnlyCheckbox" style="margin: 0;">
+                                        <span>Sheet data only</span>
+                                    </label>
+                                </div>
                                 <div id="editControls" style="display: none; gap: 5px;">
                                     <button class="btn btn-primary btn-sm" onclick="saveEdits()">💾 Save</button>
                                     <button class="btn btn-secondary btn-sm" onclick="cancelEdits()">✖ Cancel</button>
@@ -1414,7 +1420,7 @@
 
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <script src="{{ url_for('static', filename='preferences.js') }}"></script>
+    <script src="{{ url_for('static', filename='preferences.js') }}?v=20251208v7"></script>
     <script>
         let map;
         let streetView;
@@ -2847,7 +2853,15 @@
             const btn = document.getElementById('reanalyzeBtn');
             const originalText = btn.textContent;
             
-            if (!confirm(`Reanalyze apartment at row ${rowToReanalyze}?\n\nThis will recalculate all scores and update the Google Sheet.`)) {
+            // Check if sheet-only mode is enabled
+            const sheetOnlyCheckbox = document.getElementById('sheetOnlyCheckbox');
+            const sheetOnly = sheetOnlyCheckbox && sheetOnlyCheckbox.checked;
+            
+            const confirmMsg = sheetOnly 
+                ? `Reanalyze apartment at row ${rowToReanalyze}?\n\nThis will recalculate scores using ONLY existing sheet data (no API calls).`
+                : `Reanalyze apartment at row ${rowToReanalyze}?\n\nThis will recalculate all scores and update the Google Sheet.`;
+            
+            if (!confirm(confirmMsg)) {
                 return;
             }
             
@@ -2855,14 +2869,18 @@
             btn.textContent = '⏳ Analyzing...';
             
             try {
-                const response = await fetch(`/reanalyze/${rowToReanalyze}`, {
+                const endpoint = sheetOnly ? `/reanalyze_sheet_only/${rowToReanalyze}` : `/reanalyze/${rowToReanalyze}`;
+                const response = await fetch(endpoint, {
                     method: 'POST'
                 });
                 
                 const data = await response.json();
                 
                 if (data.success) {
-                    alert('Reanalysis complete! Scores updated.');
+                    const msg = sheetOnly 
+                        ? 'Reanalysis complete! Scores recalculated from sheet data.'
+                        : 'Reanalysis complete! Scores updated.';
+                    alert(msg);
                     // Reload the analysis data to show updated scores
                     await loadAnalysisData();
                     // Reload the detailed view for this apartment using the stored row number

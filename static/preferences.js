@@ -267,6 +267,344 @@ function closeProfileEditor() {
     currentEditingProfile = null;
 }
 
+// ================== PROFILE COMPARISON ==================
+
+let cachedFullProfiles = []; // Store full profile data for comparison
+
+async function compareProfiles() {
+    if (cachedProfiles.length < 2) {
+        alert('You need at least 2 profiles to compare. Create another profile first.');
+        return;
+    }
+    
+    document.getElementById('profileCompareModal').classList.remove('hidden');
+    document.getElementById('profileCompareContent').innerHTML = '<div class="loading-spinner">Loading comparison...</div>';
+    
+    // Fetch full profile data for each profile
+    try {
+        const fullProfiles = [];
+        for (const profileSummary of cachedProfiles) {
+            const response = await fetch(`/preferences/api/profiles/${encodeURIComponent(profileSummary.name)}`);
+            const data = await response.json();
+            if (data.success && data.profile) {
+                fullProfiles.push(data.profile);
+            }
+        }
+        
+        cachedFullProfiles = fullProfiles;
+        
+        if (fullProfiles.length < 2) {
+            document.getElementById('profileCompareContent').innerHTML = '<p class="error">Could not load profile data for comparison.</p>';
+            return;
+        }
+        
+        // Build comparison content
+        const html = buildProfileComparisonHTML(fullProfiles);
+        document.getElementById('profileCompareContent').innerHTML = html;
+    } catch (error) {
+        console.error('Error loading profiles for comparison:', error);
+        document.getElementById('profileCompareContent').innerHTML = `<p class="error">Error: ${error.message}</p>`;
+    }
+}
+
+function closeProfileCompare() {
+    document.getElementById('profileCompareModal').classList.add('hidden');
+}
+
+function buildProfileComparisonHTML(profiles) {
+    const profileColors = {
+        0: { bg: '#0066cc', light: '#e8f4ff' },
+        1: { bg: '#9c27b0', light: '#f3e5f5' },
+        2: { bg: '#ff9500', light: '#fff8e1' },
+        3: { bg: '#34c759', light: '#e8f5e9' },
+    };
+    
+    let html = '';
+    
+    // Profile summary cards
+    html += '<div class="profile-compare-header">';
+    profiles.forEach((profile, index) => {
+        const colors = profileColors[index % Object.keys(profileColors).length];
+        
+        const criteriaCount = profile.criteria?.length || 0;
+        // Sort criteria by priority to find top priority
+        const sortedCriteria = [...(profile.criteria || [])].sort((a, b) => a.priority_order - b.priority_order);
+        const topPriority = sortedCriteria[0]?.display_name || 'N/A';
+        
+        html += `
+            <div class="profile-compare-card" style="border-top: 4px solid ${colors.bg};">
+                <h4 style="color: ${colors.bg};">${profile.person_name}</h4>
+                <div class="profile-stats">
+                    <div>${criteriaCount} criteria</div>
+                    <div>Top priority: <strong>${topPriority}</strong></div>
+                </div>
+            </div>
+        `;
+    });
+    html += '</div>';
+    
+    // Collect all unique criteria across profiles
+    const allCriteria = new Map();
+    profiles.forEach(profile => {
+        (profile.criteria || []).forEach(criterion => {
+            if (!allCriteria.has(criterion.id)) {
+                allCriteria.set(criterion.id, {
+                    id: criterion.id,
+                    display_name: criterion.display_name,
+                    profiles: {}
+                });
+            }
+            allCriteria.get(criterion.id).profiles[profile.person_name] = criterion;
+        });
+    });
+    
+    // Sort by average priority
+    const sortedCriteria = Array.from(allCriteria.values()).sort((a, b) => {
+        const avgA = Object.values(a.profiles).reduce((sum, p) => sum + (p.priority_order || 99), 0) / Object.keys(a.profiles).length;
+        const avgB = Object.values(b.profiles).reduce((sum, p) => sum + (p.priority_order || 99), 0) / Object.keys(b.profiles).length;
+        return avgA - avgB;
+    });
+    
+    // Build criteria comparison using stacked sliders (same format as apartment evaluation)
+    html += '<div class="criteria-sliders-container">';
+    
+    sortedCriteria.forEach(criterionData => {
+        html += buildComparisonCriterionSliderRow(criterionData, profiles, profileColors);
+    });
+    
+    html += '</div>';
+    
+    return html;
+}
+
+function buildComparisonCriterionSliderRow(criterionData, profiles, profileColors) {
+    const icon = getCriterionIcon(criterionData.id);
+    
+    // Build threshold info for visualization
+    const criterionInfo = {
+        display_name: criterionData.display_name,
+        profiles: {}
+    };
+    
+    let isLowerBetter = true;
+    
+    profiles.forEach(profile => {
+        const criterion = criterionData.profiles[profile.person_name];
+        if (criterion) {
+            const op = criterion.ideal?.[0]?.operator || 'lte';
+            isLowerBetter = op === 'lte' || op === 'lt';
+            
+            criterionInfo.profiles[profile.person_name] = {
+                ideal: criterion.ideal?.[0]?.value,
+                acceptable: criterion.acceptable?.[0]?.value,
+                veto: criterion.veto?.[0]?.value,
+                is_lower_better: isLowerBetter,
+                priority_order: criterion.priority_order,
+            };
+        }
+    });
+    
+    criterionInfo.is_lower_better = isLowerBetter;
+    
+    // Calculate unified bounds
+    const unifiedBounds = calculateComparisonBounds(criterionInfo, profiles.map(p => p.person_name));
+    
+    let html = `
+        <div class="criterion-slider-row">
+            <div class="criterion-slider-header">
+                <div class="criterion-slider-title">
+                    ${icon} ${criterionData.display_name}
+                </div>
+            </div>
+            
+            <div class="slider-profiles-stack">
+    `;
+    
+    // Build stacked sliders for each profile
+    profiles.forEach((profile, index) => {
+        const profileData = criterionInfo.profiles[profile.person_name];
+        if (!profileData) return;
+        
+        const colors = profileColors[index % Object.keys(profileColors).length];
+        const priority = profileData.priority_order;
+        
+        html += `
+            <div class="profile-slider-container">
+                <div class="profile-slider-label" style="color: ${colors.bg};">
+                    ${profile.person_name}
+                    <span style="margin-left: 8px; font-size: 10px; color: #666; font-weight: normal;">#${priority}</span>
+                </div>
+                ${buildComparisonProfileSlider(profileData, colors, unifiedBounds, criterionData.id)}
+            </div>
+        `;
+    });
+    
+    // Scale labels
+    const minLabel = formatCompareThreshold(criterionData.id, unifiedBounds.minVal);
+    const maxLabel = formatCompareThreshold(criterionData.id, unifiedBounds.maxVal);
+    html += `
+            <div class="scale-labels">
+                <span class="scale-label min-label">${minLabel}</span>
+                <span class="scale-label max-label">${maxLabel}</span>
+            </div>
+        </div>
+        
+        <div class="criterion-details-panel">
+            <div class="criterion-details-grid">
+                ${buildComparisonThresholdDetails(criterionData, profiles, profileColors)}
+            </div>
+        </div>
+    </div>
+    `;
+    
+    return html;
+}
+
+function calculateComparisonBounds(criterionInfo, profileNames) {
+    let allThresholds = [];
+    let isLowerBetter = criterionInfo.is_lower_better;
+    
+    profileNames.forEach(profileName => {
+        const profileData = criterionInfo.profiles[profileName];
+        if (!profileData) return;
+        
+        if (profileData.ideal != null) allThresholds.push(profileData.ideal);
+        if (profileData.acceptable != null) allThresholds.push(profileData.acceptable);
+        if (profileData.veto != null) allThresholds.push(profileData.veto);
+    });
+    
+    if (allThresholds.length === 0) {
+        return { minVal: 0, maxVal: 10, isLowerBetter };
+    }
+    
+    const minThreshold = Math.min(...allThresholds);
+    const maxThreshold = Math.max(...allThresholds);
+    
+    const range = maxThreshold - minThreshold;
+    const padding = Math.max(3, range * 0.15);
+    
+    return {
+        minVal: Math.max(0, minThreshold - padding),
+        maxVal: maxThreshold + padding,
+        isLowerBetter
+    };
+}
+
+function buildComparisonProfileSlider(profileData, colors, unifiedBounds, criterionId) {
+    const { ideal, acceptable, veto, is_lower_better } = profileData;
+    const { minVal, maxVal } = unifiedBounds;
+    
+    const range = maxVal - minVal;
+    
+    const toPercent = (val) => {
+        if (val == null) return null;
+        return Math.max(0, Math.min(100, ((val - minVal) / range) * 100));
+    };
+    
+    // Calculate zone positions
+    let idealStart, idealEnd, acceptableStart, acceptableEnd, vetoStart, vetoEnd;
+    
+    if (is_lower_better) {
+        const idealVal = ideal != null ? ideal : minVal;
+        const vetoBound = veto != null ? veto : (acceptable != null ? acceptable : idealVal);
+        idealStart = 0;
+        idealEnd = toPercent(idealVal);
+        acceptableStart = idealEnd;
+        acceptableEnd = toPercent(vetoBound);
+        vetoStart = acceptableEnd;
+        vetoEnd = 100;
+    } else {
+        const idealVal = ideal != null ? ideal : maxVal;
+        const vetoBound = veto != null ? veto : (acceptable != null ? acceptable : idealVal);
+        vetoStart = 0;
+        vetoEnd = toPercent(vetoBound);
+        acceptableStart = vetoEnd;
+        acceptableEnd = toPercent(idealVal);
+        idealStart = acceptableEnd;
+        idealEnd = 100;
+    }
+    
+    return `
+        <div class="profile-slider">
+            <!-- Ideal zone -->
+            <div class="slider-zone ideal" style="left: ${idealStart}%; width: ${Math.max(0, idealEnd - idealStart)}%;">
+                ${Math.max(0, idealEnd - idealStart) > 5 ? '<span class="slider-zone-label">Ideal</span>' : ''}
+            </div>
+            <!-- Acceptable zone -->
+            <div class="slider-zone acceptable" style="left: ${acceptableStart}%; width: ${Math.max(0, acceptableEnd - acceptableStart)}%;">
+                ${Math.max(0, acceptableEnd - acceptableStart) > 5 ? '<span class="slider-zone-label">OK</span>' : ''}
+            </div>
+            <!-- Veto zone -->
+            <div class="slider-zone veto" style="left: ${vetoStart}%; width: ${Math.max(0, vetoEnd - vetoStart)}%;">
+                ${Math.max(0, vetoEnd - vetoStart) > 5 ? '<span class="slider-zone-label">Veto</span>' : ''}
+            </div>
+        </div>
+    `;
+}
+
+function buildComparisonThresholdDetails(criterionData, profiles, profileColors) {
+    let html = '';
+    
+    profiles.forEach((profile, index) => {
+        const criterion = criterionData.profiles[profile.person_name];
+        const colors = profileColors[index % Object.keys(profileColors).length];
+        
+        if (criterion) {
+            const ideal = criterion.ideal?.[0]?.value;
+            const acceptable = criterion.acceptable?.[0]?.value;
+            const veto = criterion.veto?.[0]?.value;
+            
+            html += `
+                <div class="criterion-detail-card" style="border-left: 3px solid ${colors.bg};">
+                    <h6 style="color: ${colors.bg};">${profile.person_name}</h6>
+                    <div class="threshold-display">
+                        <div class="threshold-row">
+                            <span class="threshold-tier-label ideal">Ideal</span>
+                            <span class="threshold-value">${formatCompareThreshold(criterionData.id, ideal)}</span>
+                        </div>
+                        <div class="threshold-row">
+                            <span class="threshold-tier-label acceptable">OK</span>
+                            <span class="threshold-value">${formatCompareThreshold(criterionData.id, acceptable)}</span>
+                        </div>
+                        <div class="threshold-row">
+                            <span class="threshold-tier-label veto">Veto</span>
+                            <span class="threshold-value">${formatCompareThreshold(criterionData.id, veto)}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else {
+            html += `
+                <div class="criterion-detail-card" style="border-left: 3px solid #ccc; opacity: 0.6;">
+                    <h6 style="color: #999;">${profile.person_name}</h6>
+                    <div style="color: #999; font-size: 13px; padding: 8px 0;">Not configured</div>
+                </div>
+            `;
+        }
+    });
+    
+    return html;
+}
+
+function formatCompareThreshold(criterionId, value) {
+    if (value == null || value === undefined) return 'N/A';
+    
+    const formats = {
+        'commute': v => `${Math.round(v)} min`,
+        'price': v => `$${Math.round(v).toLocaleString()}`,
+        'gym': v => `${Math.round(v)} min`,
+        'safety': v => `${v}/10`,
+        'wfh_quality': v => `${v}/10`,
+        'parking': v => `${v}/10`,
+        'laundry': v => `${v}/10`,
+        'happening': v => `${v}/10`,
+        'space_luxury': v => `${Math.round(v)} sqft`,
+    };
+    
+    const formatter = formats[criterionId] || (v => v);
+    return formatter(value);
+}
+
 async function saveProfile() {
     if (!currentEditingProfile) return;
     
@@ -1055,107 +1393,648 @@ function updateEvalTableSortIndicators() {
     }
 }
 
+// Store cached threshold data for slider visualization
+let cachedThresholdData = null;
+let cachedApartmentValues = null;
+
 async function showEvalDetail(apartmentId) {
     const eval_ = cachedApartments.find(e => e.apartment_id === apartmentId);
     if (!eval_) return;
     
     document.getElementById('prefDetailTitle').textContent = `Evaluation: ${apartmentId}`;
     
-    let html = `
-        <div class="eval-detail-tabs">
-            <button class="eval-detail-tab active" onclick="switchEvalDetailTab('evaluation')">📊 Preference Evaluation</button>
-            <button class="eval-detail-tab" onclick="switchEvalDetailTab('analysis')">🏠 Apartment Analysis</button>
+    // Show loading state
+    document.getElementById('prefDetailContent').innerHTML = '<div class="loading-spinner">Loading evaluation details...</div>';
+    document.getElementById('prefDetailModal').classList.remove('hidden');
+    
+    // Get selected profile names
+    const checkboxes = document.querySelectorAll('#evalProfileCheckboxes input[type="checkbox"]:checked');
+    const profileNames = Array.from(checkboxes).map(cb => cb.value);
+    
+    // Load apartment data from analysis endpoint for the Analysis tab display (not for backend)
+    let analysisApartment = null;
+    try {
+        const response = await fetch('/get_analysis_data');
+        const data = await response.json();
+        
+        if (data.success) {
+            analysisApartment = data.comparison.find(apt => apt.address === apartmentId) || null;
+        }
+    } catch (error) {
+        console.error('Error loading apartment analysis:', error);
+    }
+    
+    // We intentionally pass an empty payload so the backend loads the full row from Sheets,
+    // ensuring commute/gym and other fields are present.
+    const apartmentPayload = {};
+    
+    // Load threshold data from the detail endpoint
+    try {
+        const detailResponse = await fetch(`/preferences/api/apartment/${encodeURIComponent(apartmentId)}/detail`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                profiles: profileNames,
+                apartment: apartmentPayload
+            }),
+        });
+        
+        const detailData = await detailResponse.json();
+        
+        if (detailData.success) {
+            cachedThresholdData = detailData.threshold_data;
+            cachedApartmentValues = detailData.apartment_values;
+        }
+    } catch (error) {
+        console.error('Error loading threshold data:', error);
+    }
+    
+    // Build side-by-side layout
+    let html = `<div class="eval-detail-split-view">`;
+    
+    // LEFT PANEL: Preference Evaluation
+    html += `<div class="eval-detail-panel eval-panel-left">
+        <div class="eval-panel-header">
+            <h4>📊 Preference Evaluation</h4>
         </div>
-    `;
+        <div class="eval-panel-content">`;
     
-    // Evaluation Content (default view)
-    html += '<div id="evalDetailEvaluation" class="eval-detail-content active">';
-    
-    // Per-person breakdown
+    // Summary scores per person at the top
+    html += '<div class="eval-summary-cards" style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">';
     for (const [personName, individual] of Object.entries(eval_.individual_evaluations)) {
+        const scoreColor = individual.veto_count > 0 ? '#dc3545' : '#34c759';
         html += `
-            <div class="detail-section">
-                <h5>${personName}'s Evaluation</h5>
-                <p>Score: ${(individual.tie_break_score * 100).toFixed(1)}%</p>
-                <p>Ideal: ${individual.ideal_count} | Acceptable: ${individual.acceptable_count} | Veto: ${individual.veto_count}</p>
-                
-                <div class="tier-results">
-                    ${Object.entries(individual.tier_results).map(([criterion, tier]) => `
-                        <div class="tier-result">
-                            <span>${criterion}</span>
-                            <span class="tier-badge ${tier}">${tier.toUpperCase()}</span>
-                        </div>
-                    `).join('')}
+            <div class="eval-summary-card" style="flex: 1; min-width: 140px; background: #f8f9fa; border-radius: 10px; padding: 12px; border-left: 4px solid ${scoreColor};">
+                <div style="font-weight: 600; margin-bottom: 6px; font-size: 13px;">${personName}</div>
+                <div style="font-size: 24px; font-weight: 700; color: ${scoreColor};">${(individual.tie_break_score * 100).toFixed(0)}%</div>
+                <div style="font-size: 11px; color: #666; margin-top: 4px;">
+                    <span style="color: #34c759;">✓${individual.ideal_count}</span> | 
+                    <span style="color: #ff9500;">~${individual.acceptable_count}</span> | 
+                    <span style="color: #dc3545;">✗${individual.veto_count}</span>
                 </div>
-                
-                ${individual.first_violation ? `
-                    <p style="margin-top: 12px; color: #dc3545;">
-                        First violation: ${individual.first_violation.criterion_name} (Priority ${individual.first_violation.priority_order})
-                    </p>
-                ` : ''}
             </div>
         `;
     }
+    html += '</div>';
     
-    // Disagreements
+    // Build the criteria sliders visualization
+    html += buildCriteriaSliderVisualization(eval_, cachedThresholdData, cachedApartmentValues);
+    
+    // Disagreements section
     if (eval_.disagreements && eval_.disagreements.length > 0) {
         html += `
-            <div class="detail-section">
-                <h5>Areas of Disagreement</h5>
+            <div class="detail-section" style="margin-top: 16px; background: #fff3cd; padding: 12px; border-radius: 8px;">
+                <h5 style="margin: 0 0 10px 0; font-size: 14px;">⚠️ Areas of Disagreement</h5>
                 ${eval_.disagreements.map(d => `
-                    <p>${d.criterion_id}: ${Object.entries(d.tiers_by_person).map(([p, t]) => `${p}: ${t}`).join(', ')}</p>
+                    <div style="margin-bottom: 6px; font-size: 13px;">
+                        <strong>${d.criterion_id}:</strong> 
+                        ${Object.entries(d.tiers_by_person).map(([p, t]) => `
+                            <span class="tier-result-badge ${t}">${p}: ${t}</span>
+                        `).join(' ')}
+                    </div>
                 `).join('')}
             </div>
         `;
     }
     
-    html += '</div>'; // Close evaluation content
+    html += '</div></div>'; // Close panel content and left panel
     
-    // Analysis Content (will be loaded async)
-    // Note: don't use 'hidden' class as it has !important and will override 'active'
-    html += '<div id="evalDetailAnalysis" class="eval-detail-content"><div class="loading-spinner">Loading apartment details...</div></div>';
+    // RIGHT PANEL: Apartment Analysis
+    html += `<div class="eval-detail-panel eval-panel-right">
+        <div class="eval-panel-header">
+            <h4>🏠 Apartment Analysis</h4>
+        </div>
+        <div class="eval-panel-content">`;
+    
+    if (analysisApartment) {
+        html += buildApartmentAnalysisHTML(analysisApartment);
+    } else {
+        html += '<p style="color: #666; padding: 20px; text-align: center;">Apartment details not found. Run analysis to see detailed scores.</p>';
+    }
+    
+    html += '</div></div>'; // Close panel content and right panel
+    html += '</div>'; // Close split view
     
     document.getElementById('prefDetailContent').innerHTML = html;
-    document.getElementById('prefDetailModal').classList.remove('hidden');
+}
+
+/**
+ * Build the slider visualization for all criteria
+ */
+function buildCriteriaSliderVisualization(eval_, thresholdData, apartmentValues) {
+    if (!thresholdData) {
+        return '<p class="error">Threshold data not available for visualization.</p>';
+    }
     
-    // Load apartment analysis data asynchronously
-    try {
-        const response = await fetch('/get_analysis_data');
-        const data = await response.json();
+    const profileNames = Object.keys(eval_.individual_evaluations);
+    const profileColors = {
+        0: { bg: '#0066cc', light: '#e8f4ff' },
+        1: { bg: '#9c27b0', light: '#f3e5f5' },
+        2: { bg: '#ff9500', light: '#fff8e1' },
+    };
+    
+    let html = '<div class="criteria-sliders-container">';
+    
+    // Sort criteria by display name
+    const sortedCriteria = Object.entries(thresholdData).sort((a, b) => 
+        (a[1].display_name || a[0]).localeCompare(b[1].display_name || b[0])
+    );
+    
+    for (const [criterionId, criterionInfo] of sortedCriteria) {
+        // Get the actual value for this criterion
+        const actualValue = getActualValueForCriterion(criterionId, criterionInfo, apartmentValues);
+        const isLowerBetter = criterionInfo.is_lower_better;
         
-        console.log('[DEBUG] Fetched analysis data:', data);
-        console.log('[DEBUG] Looking for apartment:', apartmentId);
-        
-        if (!data.success) {
-            throw new Error('Failed to load apartment data');
+        // Get tier results from each profile
+        const tierResults = {};
+        for (const [personName, individual] of Object.entries(eval_.individual_evaluations)) {
+            tierResults[personName] = individual.tier_results[criterionId] || 'unknown';
         }
         
-        // Find the apartment by address in the comparison data
-        const apartment = data.comparison.find(apt => apt.address === apartmentId);
+        html += `
+            <div class="criterion-slider-row">
+                <div class="criterion-slider-header">
+                    <div class="criterion-slider-title">
+                        ${getCriterionIcon(criterionId)} ${criterionInfo.display_name || criterionId}
+                    </div>
+                    ${actualValue !== null ? `
+                        <div class="criterion-actual-value">${formatActualValue(criterionId, actualValue)}</div>
+                    ` : ''}
+                </div>
+                
+                <div class="slider-profiles-stack">
+                    ${buildStackedSliders(criterionId, criterionInfo, profileNames, profileColors, actualValue, tierResults)}
+                </div>
+                
+                <div class="criterion-details-panel">
+                    <div class="criterion-details-grid">
+                        ${buildThresholdDetails(criterionId, criterionInfo, profileNames, tierResults, actualValue)}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    html += '</div>';
+    return html;
+}
+
+/**
+ * Build stacked horizontal sliders for all profiles with unified bounds
+ */
+function buildStackedSliders(criterionId, criterionInfo, profileNames, profileColors, actualValue, tierResults) {
+    // For commute criterion, use profile-specific actual values for bounds calculation
+    let adjustedActualValue = actualValue;
+    if (criterionId === 'commute') {
+        // Collect all profile-specific commute values for bounds
+        const commuteValues = [];
+        profileNames.forEach(profileName => {
+            const profileData = criterionInfo.profiles[profileName];
+            if (profileData && profileData.actual_value !== null && profileData.actual_value !== undefined) {
+                commuteValues.push(profileData.actual_value);
+            }
+        });
+        // Use null for unified actualValue since each profile has its own
+        adjustedActualValue = commuteValues.length > 0 ? null : actualValue;
+    }
+    
+    // Calculate unified bounds across all profiles (includes profile-specific actual values)
+    const unifiedBounds = calculateUnifiedBounds(criterionInfo, profileNames, adjustedActualValue);
+    
+    let html = '';
+    
+    // For commute, show each profile's commute time separately
+    if (criterionId === 'commute') {
+        // Build a header showing all profile commute times
+        const commuteInfoParts = [];
+        profileNames.forEach(profileName => {
+            const profileData = criterionInfo.profiles[profileName];
+            if (profileData && profileData.actual_value !== null && profileData.actual_value !== undefined) {
+                const modeIcon = profileData.commute_mode === 'transit' ? '🚇' : '🚗';
+                commuteInfoParts.push(`<span style="margin-right: 12px;">${modeIcon} <strong>${profileName}:</strong> ${profileData.actual_value} min</span>`);
+            }
+        });
+        if (commuteInfoParts.length > 0) {
+            html += `<div class="actual-value-indicator" style="text-align: center; margin-bottom: 8px; font-size: 13px; font-weight: 600; color: #1d1d1f; background: #f0f8ff; padding: 6px; border-radius: 4px; border: 1px solid #d0e0f0;">
+                ${commuteInfoParts.join('')}
+            </div>`;
+        }
+    } else if (actualValue !== null) {
+        html += `<div class="actual-value-indicator" style="text-align: center; margin-bottom: 8px; font-size: 13px; font-weight: 600; color: #1d1d1f; background: #f0f8ff; padding: 6px; border-radius: 4px; border: 1px solid #d0e0f0;">
+            <strong>Actual:</strong> ${formatActualValue(criterionId, actualValue)}
+        </div>`;
+    }
+    
+    profileNames.forEach((profileName, index) => {
+        const profileData = criterionInfo.profiles[profileName];
+        if (!profileData) return;
         
-        console.log('[DEBUG] Found apartment:', apartment);
+        // For commute, use profile-specific actual value
+        const profileActualValue = (criterionId === 'commute' && profileData.actual_value !== undefined)
+            ? profileData.actual_value
+            : actualValue;
         
-        if (apartment) {
-            // Build rich detail HTML similar to the Analysis tab
-            const analysisHtml = buildApartmentAnalysisHTML(apartment);
-            document.getElementById('evalDetailAnalysis').innerHTML = analysisHtml;
-        } else {
-            // Show what apartments are available for debugging
-            const availableAddresses = data.comparison.map(apt => apt.address).join('\n');
-            console.log('[DEBUG] Available addresses:', availableAddresses);
-            document.getElementById('evalDetailAnalysis').innerHTML = `
-                <p>Apartment details not found.</p>
-                <p style="font-size: 12px; color: #666;">Looking for: ${apartmentId}</p>
-                <details style="margin-top: 10px;">
-                    <summary style="cursor: pointer; color: #0066cc;">Show available addresses</summary>
-                    <pre style="font-size: 11px; margin-top: 5px; max-height: 200px; overflow: auto;">${availableAddresses}</pre>
-                </details>
+        const colors = profileColors[index % Object.keys(profileColors).length];
+        // Prefer server tier result; if missing or unknown, compute locally to avoid mismatches
+        const tier = tierResults[profileName] && tierResults[profileName] !== 'unknown'
+            ? tierResults[profileName]
+            : computeTierFromThresholds(profileData, profileActualValue);
+        
+        // Pass unified bounds to the slider builder with profile-specific actual value
+        const sliderHtml = buildSingleProfileSlider(profileData, profileActualValue, colors, tier, profileName, unifiedBounds);
+        
+        html += `
+            <div class="profile-slider-container">
+                <div class="profile-slider-label" style="color: ${colors.bg};">
+                    ${profileName} 
+                    <span class="tier-result-badge ${tier}" style="margin-left: 8px; font-size: 10px;">${tier.toUpperCase()}</span>
+                </div>
+                ${sliderHtml}
+            </div>
+        `;
+    });
+
+    // Min/Max scale labels for the unified bounds
+    const minLabel = formatThresholdValue(criterionId, unifiedBounds.minVal);
+    const maxLabel = formatThresholdValue(criterionId, unifiedBounds.maxVal);
+    html += `
+        <div class="scale-labels">
+            <span class="scale-label min-label">${minLabel}</span>
+            <span class="scale-label max-label">${maxLabel}</span>
+        </div>
+    `;
+    
+    return html;
+}
+
+/**
+ * Calculate unified min/max bounds across all profiles for consistent slider positioning
+ */
+function calculateUnifiedBounds(criterionInfo, profileNames, actualValue) {
+    let allThresholds = [];
+    let isLowerBetter = true;
+    
+    // Collect all threshold values from all profiles
+    profileNames.forEach(profileName => {
+        const profileData = criterionInfo.profiles[profileName];
+        if (!profileData) return;
+        
+        isLowerBetter = profileData.is_lower_better;
+        
+        if (profileData.ideal !== null && profileData.ideal !== undefined) {
+            allThresholds.push(profileData.ideal);
+        }
+        if (profileData.acceptable !== null && profileData.acceptable !== undefined) {
+            allThresholds.push(profileData.acceptable);
+        }
+        if (profileData.veto !== null && profileData.veto !== undefined) {
+            allThresholds.push(profileData.veto);
+        }
+        
+        // Include profile-specific actual value (e.g., for commute)
+        if (profileData.actual_value !== null && profileData.actual_value !== undefined) {
+            allThresholds.push(profileData.actual_value);
+        }
+    });
+    
+    // Include shared actual value in bounds calculation
+    if (actualValue !== null && actualValue !== undefined) {
+        allThresholds.push(actualValue);
+    }
+    
+    if (allThresholds.length === 0) {
+        return { minVal: 0, maxVal: 10, isLowerBetter };
+    }
+    
+    const minThreshold = Math.min(...allThresholds);
+    const maxThreshold = Math.max(...allThresholds);
+    
+    // Add padding (3 units or 10% of range, whichever is larger)
+    const range = maxThreshold - minThreshold;
+    const padding = Math.max(3, range * 0.1);
+    
+    let minVal, maxVal;
+    if (isLowerBetter) {
+        // For lower-is-better: start from 0 or slightly below min, extend past max veto
+        minVal = Math.max(0, minThreshold - padding);
+        maxVal = maxThreshold + padding;
+    } else {
+        // For higher-is-better: start below veto, extend past ideal
+        minVal = Math.max(0, minThreshold - padding);
+        maxVal = maxThreshold + padding;
+    }
+    
+    // Ensure we have a reasonable range
+    if (maxVal <= minVal) {
+        maxVal = minVal + 10;
+    }
+    
+    return { minVal, maxVal, isLowerBetter };
+}
+
+/**
+ * Build a single profile's slider with zones using unified bounds
+ */
+function buildSingleProfileSlider(profileData, actualValue, colors, tier, profileName, unifiedBounds) {
+    const { ideal, acceptable, veto, is_lower_better } = profileData;
+    const { minVal, maxVal } = unifiedBounds;
+    
+    const range = maxVal - minVal;
+    
+    // Helper to convert a value to percentage position
+    const toPercent = (val) => {
+        if (val === null || val === undefined) return null;
+        return Math.max(0, Math.min(100, ((val - minVal) / range) * 100));
+    };
+    
+    // Calculate zone positions as percentages (robust to missing thresholds)
+    let idealStart, idealEnd, acceptableStart, acceptableEnd, vetoStart, vetoEnd;
+    if (is_lower_better) {
+        // Lower is better:
+        // ideal: min -> ideal
+        // acceptable: ideal -> (veto if present else acceptable if present else ideal)
+        // veto: acceptable_end -> max
+        const idealVal = ideal !== null ? ideal : minVal;
+        const vetoBound = (veto !== null ? veto : (acceptable !== null ? acceptable : idealVal));
+        idealStart = 0;
+        idealEnd = toPercent(idealVal);
+        acceptableStart = idealEnd;
+        acceptableEnd = toPercent(vetoBound);
+        vetoStart = acceptableEnd;
+        vetoEnd = 100;
+    } else {
+        // Higher is better:
+        // veto: min -> veto
+        // acceptable: veto -> ideal
+        // ideal: ideal -> max
+        const idealVal = ideal !== null ? ideal : maxVal;
+        const vetoBound = (veto !== null ? veto : (acceptable !== null ? acceptable : idealVal));
+        vetoStart = 0;
+        vetoEnd = toPercent(vetoBound);
+        acceptableStart = vetoEnd;
+        acceptableEnd = toPercent(idealVal);
+        idealStart = acceptableEnd;
+        idealEnd = 100;
+    }
+    
+    // Calculate actual value position using the same unified bounds
+    const actualPosition = actualValue !== null ? toPercent(actualValue) : null;
+    
+    // Check if we should show the actual line
+    const hasActualLine = actualPosition !== null && actualPosition >= 0 && actualPosition <= 100;
+    
+    return `
+        <div class="profile-slider">
+            <!-- Ideal zone -->
+            <div class="slider-zone ideal" style="left: ${idealStart}%; width: ${Math.max(0, idealEnd - idealStart)}%;">
+                ${Math.max(0, idealEnd - idealStart) > 1 ? '<span class="slider-zone-label">Ideal</span>' : ''}
+            </div>
+            <!-- Acceptable zone -->
+            <div class="slider-zone acceptable" style="left: ${acceptableStart}%; width: ${Math.max(0, acceptableEnd - acceptableStart)}%;">
+                ${Math.max(0, acceptableEnd - acceptableStart) > 1 ? '<span class="slider-zone-label">OK</span>' : ''}
+            </div>
+            <!-- Veto zone -->
+            <div class="slider-zone veto" style="left: ${vetoStart}%; width: ${Math.max(0, vetoEnd - vetoStart)}%;">
+                ${Math.max(0, vetoEnd - vetoStart) > 1 ? '<span class="slider-zone-label">Veto</span>' : ''}
+            </div>
+            
+            <!-- Actual value line - rendered on top of zones -->
+            ${hasActualLine ? `
+                <div class="score-line-container" style="left: ${actualPosition}%; position: absolute; top: -4px; bottom: -4px; z-index: 100;">
+                    <div class="score-line" style="width: 4px; height: 100%; background: #000; border-radius: 2px;"></div>
+                    <div class="score-line-marker" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background: #000; border: 3px solid #fff; border-radius: 50%; box-shadow: 0 2px 6px rgba(0,0,0,0.5);"></div>
+                </div>
+            ` : ''}
+        </div>
+    `;
+}
+
+/**
+ * Build threshold details for a criterion
+ */
+function buildThresholdDetails(criterionId, criterionInfo, profileNames, tierResults, actualValue) {
+    let html = '';
+    
+    profileNames.forEach(profileName => {
+        const profileData = criterionInfo.profiles[profileName];
+        if (!profileData) return;
+        
+        const tier = tierResults[profileName];
+        const { ideal, acceptable, veto, is_lower_better } = profileData;
+        
+        // For commute, use profile-specific actual value
+        const profileActualValue = (criterionId === 'commute' && profileData.actual_value !== undefined) 
+            ? profileData.actual_value 
+            : actualValue;
+        
+        // Calculate distance from thresholds
+        let distanceInfo = '';
+        if (profileActualValue !== null && profileActualValue !== undefined) {
+            if (tier === 'ideal') {
+                const margin = is_lower_better ? (ideal - profileActualValue) : (profileActualValue - ideal);
+                distanceInfo = `<span class="distance-indicator positive">+${Math.abs(margin).toFixed(1)} margin</span>`;
+            } else if (tier === 'acceptable') {
+                const toIdeal = is_lower_better ? (profileActualValue - ideal) : (ideal - profileActualValue);
+                distanceInfo = `<span class="distance-indicator negative">${toIdeal.toFixed(1)} from ideal</span>`;
+            } else if (tier === 'veto') {
+                const pastVeto = is_lower_better ? (profileActualValue - veto) : (veto - profileActualValue);
+                distanceInfo = `<span class="distance-indicator negative">${Math.abs(pastVeto).toFixed(1)} past veto</span>`;
+            }
+        }
+        
+        // Calculate percentage in range
+        let percentageBar = '';
+        if (profileActualValue !== null && profileActualValue !== undefined && ideal !== null) {
+            const range = is_lower_better ? ideal : (ideal - (veto || 0));
+            const position = is_lower_better ? profileActualValue : (profileActualValue - (veto || 0));
+            const percentage = Math.max(0, Math.min(100, ((range - position) / range) * 100));
+            
+            percentageBar = `
+                <div class="score-percentage-bar">
+                    <div class="score-percentage-fill ${tier}" style="width: ${percentage}%;"></div>
+                </div>
             `;
         }
-    } catch (error) {
-        console.error('Error loading apartment analysis:', error);
-        document.getElementById('evalDetailAnalysis').innerHTML = `<p>Error loading apartment details: ${error.message}</p>`;
+        
+        // Build commute-specific extra info
+        let commuteExtras = '';
+        if (criterionId === 'commute' && profileData.commute_mode) {
+            const modeIcon = profileData.commute_mode === 'transit' ? '🚇' : '🚗';
+            const modeLabel = profileData.commute_mode === 'transit' ? 'Transit' : 'Driving';
+            
+            commuteExtras = `
+                <div class="commute-extras" style="margin-top: 8px; padding: 8px; background: #f8f9fa; border-radius: 6px; font-size: 12px;">
+                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                        <span>${modeIcon}</span>
+                        <strong>${modeLabel}</strong>
+                        ${profileActualValue !== null ? `<span style="margin-left: auto;">${profileActualValue} min</span>` : ''}
+                    </div>
+            `;
+            
+            // Annoyingness score
+            if (profileData.annoyingness_score !== null && profileData.annoyingness_score !== undefined) {
+                const annoyScore = parseFloat(profileData.annoyingness_score).toFixed(1);
+                const annoyColor = annoyScore >= 7 ? '#34c759' : (annoyScore >= 4 ? '#ff9500' : '#ff3b30');
+                commuteExtras += `
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: #666;">Route Quality:</span>
+                        <span style="color: ${annoyColor}; font-weight: 600;">${annoyScore}/10</span>
+                    </div>
+                `;
+            }
+            
+            // Transit-specific details
+            if (profileData.commute_mode === 'transit') {
+                if (profileData.transit_walking_mins !== null && profileData.transit_walking_mins !== undefined) {
+                    commuteExtras += `
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color: #666;">🚶 Walking:</span>
+                            <span>${profileData.transit_walking_mins} min</span>
+                        </div>
+                    `;
+                }
+                if (profileData.transit_transfers !== null && profileData.transit_transfers !== undefined) {
+                    commuteExtras += `
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color: #666;">🔄 Transfers:</span>
+                            <span>${profileData.transit_transfers}</span>
+                        </div>
+                    `;
+                }
+            }
+            
+            commuteExtras += '</div>';
+        }
+        
+        html += `
+            <div class="criterion-detail-card">
+                <h6>${profileName}</h6>
+                <div class="threshold-display">
+                    <div class="threshold-row">
+                        <span class="threshold-tier-label ideal">Ideal</span>
+                        <span class="threshold-value">${ideal !== null ? formatThresholdValue(criterionId, ideal) : 'N/A'}</span>
+                    </div>
+                    <div class="threshold-row">
+                        <span class="threshold-tier-label acceptable">OK</span>
+                        <span class="threshold-value">${acceptable !== null ? formatThresholdValue(criterionId, acceptable) : 'N/A'}</span>
+                    </div>
+                    <div class="threshold-row">
+                        <span class="threshold-tier-label veto">Veto</span>
+                        <span class="threshold-value">${veto !== null ? formatThresholdValue(criterionId, veto) : 'N/A'}</span>
+                    </div>
+                </div>
+                ${distanceInfo}
+                ${percentageBar}
+                ${commuteExtras}
+            </div>
+        `;
+    });
+    
+    return html;
+}
+
+/**
+ * Get actual value for a criterion from apartment data
+ */
+function getActualValueForCriterion(criterionId, criterionInfo, apartmentValues) {
+    // Map criterion IDs to apartment value keys
+    const fieldMapping = {
+        'commute': 'commute_duration',
+        'price': 'total_monthly_cost',
+        'safety': 'safety_score',
+        'wfh_quality': 'wfh_score',
+        'gym': 'gym_walk_time',
+        'parking': 'parking_score',
+        'laundry': 'laundry_score',
+        'happening': 'happening_score',
+        'space_luxury': 'sqft',
+    };
+    
+    // First: Try to get from apartment values (most reliable)
+    const field = fieldMapping[criterionId] || criterionInfo?.field;
+    if (field && apartmentValues && apartmentValues[field]) {
+        const val = apartmentValues[field];
+        const result = typeof val === 'object' ? val.value : val;
+        if (result !== null && result !== undefined) {
+            return result;
+        }
     }
+    
+    // Second: Try to get actual_value from threshold data profiles
+    if (criterionInfo && criterionInfo.profiles) {
+        for (const profileData of Object.values(criterionInfo.profiles)) {
+            if (profileData && profileData.actual_value !== null && profileData.actual_value !== undefined) {
+                return profileData.actual_value;
+            }
+        }
+    }
+    
+    return null;
+}
+
+/**
+ * Fallback: compute tier locally from thresholds and actual value
+ */
+function computeTierFromThresholds(profileData, actualValue) {
+    if (actualValue === null || actualValue === undefined || !profileData) return 'unknown';
+    const { ideal, acceptable, veto, is_lower_better } = profileData;
+    if (is_lower_better) {
+        if (ideal !== null && actualValue <= ideal) return 'ideal';
+        // If a veto bound exists, acceptable should extend up to veto
+        if (veto !== null && actualValue <= veto) return 'acceptable';
+        if (acceptable !== null && actualValue <= acceptable) return 'acceptable';
+        return 'veto';
+    } else {
+        if (ideal !== null && actualValue >= ideal) return 'ideal';
+        if (veto !== null && actualValue >= veto) return 'acceptable';
+        if (acceptable !== null && actualValue >= acceptable) return 'acceptable';
+        return 'veto';
+    }
+}
+
+/**
+ * Format actual value for display
+ */
+function formatActualValue(criterionId, value) {
+    const formats = {
+        'commute': v => `${v} min`,
+        'price': v => `$${Math.round(v).toLocaleString()}`,
+        'gym': v => `${v} min walk`,
+        'safety': v => `${v}/10`,
+        'wfh_quality': v => `${v}/10`,
+        'parking': v => `${v}/10`,
+        'laundry': v => `${v}/10`,
+        'happening': v => `${v}/10`,
+        'space_luxury': v => `${v} sqft`,
+    };
+    
+    const formatter = formats[criterionId] || (v => v);
+    return formatter(value);
+}
+
+/**
+ * Format threshold value for display
+ */
+function formatThresholdValue(criterionId, value) {
+    return formatActualValue(criterionId, value);
+}
+
+/**
+ * Get icon for a criterion
+ */
+function getCriterionIcon(criterionId) {
+    const icons = {
+        'safety': '🛡️',
+        'commute': '🚗',
+        'wfh_quality': '💻',
+        'parking': '🅿️',
+        'gym': '💪',
+        'space_luxury': '🏠',
+        'laundry': '👕',
+        'happening': '🎉',
+        'price': '💰',
+    };
+    return icons[criterionId] || '📊';
 }
 
 function switchEvalDetailTab(tabName) {
@@ -1173,95 +2052,115 @@ function switchEvalDetailTab(tabName) {
 }
 
 function buildApartmentAnalysisHTML(apartment) {
-    // Build a simplified version of the detail panel for the modal
+    // Build a compact version of the detail panel for the side panel
     return `
-        <div class="apartment-analysis-summary" style="padding: 16px;">
-            <div class="score-overview" style="background: #f5f5f7; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
-                <h4 style="margin: 0 0 12px 0;">Overall Score</h4>
-                <div style="font-size: 32px; font-weight: 600; color: #0066cc;">${apartment.score || 'N/A'}</div>
+        <div class="apartment-analysis-compact">
+            <!-- Overall Score -->
+            <div style="background: linear-gradient(135deg, #0066cc 0%, #004999 100%); padding: 16px; border-radius: 10px; margin-bottom: 16px; color: white; text-align: center;">
+                <div style="font-size: 12px; text-transform: uppercase; opacity: 0.9; margin-bottom: 4px;">Overall Score</div>
+                <div style="font-size: 36px; font-weight: 700;">${apartment.score || 'N/A'}</div>
                 ${apartment.score_min && apartment.score_max ? `
-                    <div style="font-size: 14px; color: #86868b;">Range: ${apartment.score_min} - ${apartment.score_max}</div>
+                    <div style="font-size: 12px; opacity: 0.8;">Range: ${apartment.score_min} - ${apartment.score_max}</div>
                 ` : ''}
             </div>
             
-            <div class="score-breakdown">
-                <h4>Score Breakdown</h4>
-                <div class="component-scores" style="display: grid; gap: 12px;">
+            <!-- Component Scores Grid -->
+            <div style="margin-bottom: 16px;">
+                <h5 style="margin: 0 0 10px 0; font-size: 13px; color: #666; text-transform: uppercase;">Component Scores</h5>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px;">
                     ${apartment.commute_score !== undefined && apartment.commute_score !== null ? `
-                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
+                        <div style="display: flex; justify-content: space-between; padding: 8px 10px; background: #f8f9fa; border-radius: 6px;">
                             <span>🚗 Commute</span>
-                            <strong>${apartment.commute_score}</strong>
+                            <strong>${parseFloat(apartment.commute_score).toFixed(1)}</strong>
                         </div>
                     ` : ''}
                     ${apartment.safety_score !== undefined && apartment.safety_score !== null ? `
-                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
+                        <div style="display: flex; justify-content: space-between; padding: 8px 10px; background: #f8f9fa; border-radius: 6px;">
                             <span>🛡️ Safety</span>
-                            <strong>${apartment.safety_score}</strong>
+                            <strong>${parseFloat(apartment.safety_score).toFixed(1)}</strong>
                         </div>
                     ` : ''}
                     ${apartment.wfh_score !== undefined && apartment.wfh_score !== null ? `
-                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
-                            <span>💻 WFH Quality</span>
-                            <strong>${apartment.wfh_score}</strong>
+                        <div style="display: flex; justify-content: space-between; padding: 8px 10px; background: #f8f9fa; border-radius: 6px;">
+                            <span>💻 WFH</span>
+                            <strong>${parseFloat(apartment.wfh_score).toFixed(1)}</strong>
                         </div>
                     ` : ''}
                     ${apartment.happening_score !== undefined && apartment.happening_score !== null ? `
-                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
+                        <div style="display: flex; justify-content: space-between; padding: 8px 10px; background: #f8f9fa; border-radius: 6px;">
                             <span>🎉 Happening</span>
-                            <strong>${apartment.happening_score}</strong>
+                            <strong>${parseFloat(apartment.happening_score).toFixed(1)}</strong>
                         </div>
                     ` : ''}
                     ${apartment.parking_score !== undefined && apartment.parking_score !== null ? `
-                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
+                        <div style="display: flex; justify-content: space-between; padding: 8px 10px; background: #f8f9fa; border-radius: 6px;">
                             <span>🅿️ Parking</span>
-                            <strong>${apartment.parking_score}</strong>
+                            <strong>${parseFloat(apartment.parking_score).toFixed(1)}</strong>
                         </div>
                     ` : ''}
                     ${apartment.gym_score !== undefined && apartment.gym_score !== null ? `
-                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
+                        <div style="display: flex; justify-content: space-between; padding: 8px 10px; background: #f8f9fa; border-radius: 6px;">
                             <span>🏋️ Gym</span>
-                            <strong>${apartment.gym_score}</strong>
+                            <strong>${parseFloat(apartment.gym_score).toFixed(1)}</strong>
                         </div>
                     ` : ''}
                     ${apartment.laundry_score !== undefined && apartment.laundry_score !== null ? `
-                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
+                        <div style="display: flex; justify-content: space-between; padding: 8px 10px; background: #f8f9fa; border-radius: 6px;">
                             <span>🧺 Laundry</span>
-                            <strong>${apartment.laundry_score}</strong>
+                            <strong>${parseFloat(apartment.laundry_score).toFixed(1)}</strong>
                         </div>
                     ` : ''}
                     ${apartment.space_luxury_score !== undefined && apartment.space_luxury_score !== null ? `
-                        <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
-                            <span>📐 Space & Luxury</span>
-                            <strong>${apartment.space_luxury_score}</strong>
+                        <div style="display: flex; justify-content: space-between; padding: 8px 10px; background: #f8f9fa; border-radius: 6px;">
+                            <span>📐 Space</span>
+                            <strong>${parseFloat(apartment.space_luxury_score).toFixed(1)}</strong>
                         </div>
                     ` : ''}
                 </div>
             </div>
             
-            <div class="key-details" style="margin-top: 20px;">
-                <h4>Key Details</h4>
-                <div style="display: grid; gap: 8px; font-size: 14px;">
+            <!-- Key Details -->
+            <div style="background: #f8f9fa; border-radius: 10px; padding: 12px;">
+                <h5 style="margin: 0 0 10px 0; font-size: 13px; color: #666; text-transform: uppercase;">Key Details</h5>
+                <div style="display: grid; gap: 6px; font-size: 13px;">
                     ${apartment.price !== undefined ? `
-                        <div>
-                            <strong>Total Monthly Cost:</strong> $${apartment.price}
-                            ${apartment.parking_cost > 0 ? `
-                                <div style="margin-left: 20px; font-size: 13px; color: #666;">
-                                    Base Rent: $${apartment.base_price}<br>
-                                    Parking: $${apartment.parking_cost}
-                                </div>
-                            ` : ''}
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color: #666;">💰 Monthly Cost</span>
+                            <strong>$${apartment.price.toLocaleString()}</strong>
                         </div>
+                        ${apartment.parking_cost > 0 ? `
+                            <div style="display: flex; justify-content: space-between; padding-left: 20px; font-size: 12px; color: #888;">
+                                <span>Rent: $${apartment.base_price?.toLocaleString() || apartment.price}</span>
+                                <span>Parking: $${apartment.parking_cost}</span>
+                            </div>
+                        ` : ''}
                     ` : ''}
-                    <div><strong>Bedrooms:</strong> ${apartment.bedrooms || 'N/A'}</div>
-                    <div><strong>Bathrooms:</strong> ${apartment.bathrooms || 'N/A'}</div>
-                    <div><strong>Square Feet:</strong> ${apartment.sqft || 'N/A'}</div>
-                    <div><strong>Commute (You):</strong> ${apartment.commute_you || 'N/A'} min</div>
-                    <div><strong>Commute (Partner):</strong> ${apartment.commute_partner || 'N/A'} min</div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="color: #666;">🛏️ Bedrooms</span>
+                        <strong>${apartment.bedrooms || 'N/A'}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="color: #666;">🚿 Bathrooms</span>
+                        <strong>${apartment.bathrooms || 'N/A'}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="color: #666;">📐 Size</span>
+                        <strong>${apartment.sqft ? apartment.sqft + ' sqft' : 'N/A'}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="color: #666;">🚗 Your Commute</span>
+                        <strong>${apartment.commute_you ? apartment.commute_you + ' min' : 'N/A'}</strong>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="color: #666;">🚇 Partner Commute</span>
+                        <strong>${apartment.commute_partner ? apartment.commute_partner + ' min' : 'N/A'}</strong>
+                    </div>
                 </div>
             </div>
             
-            <div style="margin-top: 16px; text-align: center;">
-                <button class="btn btn-primary" onclick="window.open('/','_blank').focus(); setTimeout(() => {
+            <!-- Action Button -->
+            <div style="margin-top: 16px;">
+                <button class="btn btn-primary" style="width: 100%; padding: 10px; font-size: 14px;" onclick="window.open('/','_blank').focus(); setTimeout(() => {
                     const selector = document.querySelector('#apartment_selector');
                     if (selector) {
                         selector.value = '${apartment.row}';

@@ -16,6 +16,8 @@ from .schemas import (
     JointEvaluation,
     ViolationRecord,
     TierLevel,
+    CommuteConfig,
+    CommuteMode,
     resolve_field,
 )
 
@@ -85,7 +87,8 @@ class PreferenceEvaluator:
         
         for criterion in sorted_criteria:
             # Resolve field aliases in apartment data
-            resolved_data = self._resolve_apartment_data(apartment_data, criterion)
+            # Pass profile for commute-specific field resolution
+            resolved_data = self._resolve_apartment_data(apartment_data, criterion, profile)
             
             # Evaluate tier for this criterion
             tier = criterion.evaluate_tier(resolved_data)
@@ -141,8 +144,9 @@ class PreferenceEvaluator:
             )
         
         # Calculate tie-break score using AHP weights
+        # Pass apartment_data for commute score integration
         evaluation.tie_break_score = self._calculate_tie_break_score(
-            evaluation, profile
+            evaluation, profile, apartment_data
         )
         
         return evaluation
@@ -282,13 +286,18 @@ class PreferenceEvaluator:
         self,
         apartment_data: Dict[str, Any],
         criterion: CriterionPreference,
+        profile: Optional[PreferenceProfile] = None,
     ) -> Dict[str, Any]:
         """
         Resolve field names for a criterion using aliases.
         
+        For commute criteria, uses the profile's commute_config to determine
+        which data field to read from (supporting per-profile commute destinations).
+        
         Args:
             apartment_data: Raw apartment data.
             criterion: Criterion with threshold fields to resolve.
+            profile: Optional profile for commute-specific field resolution.
             
         Returns:
             Dictionary with resolved field values.
@@ -300,9 +309,36 @@ class PreferenceEvaluator:
         for threshold in criterion.ideal + criterion.acceptable + criterion.veto:
             all_fields.add(threshold.field)
         
+        # Check if this is a commute criterion and we have profile-specific config
+        is_commute_criterion = criterion.id == "commute"
+        commute_config = profile.commute_config if profile else None
+        
         # Resolve each field
         for field in all_fields:
-            resolved[field] = resolve_field(apartment_data, field)
+            # Special handling for commute_duration field when profile has commute_config
+            if is_commute_criterion and field == "commute_duration" and commute_config:
+                # Use the profile's configured data field
+                data_field = commute_config.data_field
+                resolved[field] = apartment_data.get(data_field)
+                
+                # If not found directly, try common variations
+                if resolved[field] is None:
+                    # Try sheet column format (e.g., "Commute Time (Partner)")
+                    if data_field == "commute_time_partner":
+                        resolved[field] = apartment_data.get("Commute Time (Partner)")
+                    elif data_field == "commute_time_you":
+                        resolved[field] = apartment_data.get("Commute Time (You)")
+            else:
+                resolved[field] = resolve_field(apartment_data, field)
+        
+        # For commute criterion, also resolve annoyingness based on mode
+        if is_commute_criterion and commute_config:
+            if commute_config.mode == CommuteMode.TRANSIT:
+                # Use transit annoyingness if available
+                transit_annoyingness = apartment_data.get("transit_annoyingness")
+                if transit_annoyingness is not None:
+                    resolved["route_annoyingness"] = transit_annoyingness
+            # For driving mode, route_annoyingness is already the correct field
         
         return resolved
     
@@ -353,6 +389,7 @@ class PreferenceEvaluator:
         self,
         evaluation: ApartmentEvaluation,
         profile: PreferenceProfile,
+        apartment_data: Optional[Dict[str, Any]] = None,
     ) -> float:
         """
         Calculate tie-break score using AHP weights.
@@ -362,11 +399,15 @@ class PreferenceEvaluator:
         - Acceptable tier: 0.7
         - Veto tier: 0.0
         
+        For commute criterion with include_commute_score enabled, the tier score
+        is blended with the normalized commute_score (0-10 scale -> 0-1 scale).
+        
         Weighted by AHP weights if available, otherwise equal weights.
         
         Args:
             evaluation: Individual apartment evaluation.
             profile: Preference profile with AHP weights.
+            apartment_data: Optional apartment data for commute score integration.
             
         Returns:
             Weighted satisfaction score (0-1 scale).
@@ -387,6 +428,15 @@ class PreferenceEvaluator:
                 TierLevel.VETO: 0.0,
             }.get(tier, 0.0)
             
+            # Special handling for commute criterion with commute_score integration
+            if criterion.id == "commute" and profile.commute_config.include_commute_score:
+                commute_score = self._get_profile_commute_score(profile, apartment_data)
+                if commute_score is not None:
+                    # Normalize commute_score from 0-10 to 0-1
+                    normalized_score = commute_score / 10.0
+                    # Blend tier score with commute score (70% tier, 30% commute quality)
+                    tier_score = (tier_score * 0.7) + (normalized_score * 0.3)
+            
             # Get weight (AHP or equal)
             weight = profile.ahp_weights.get(criterion.id, 1.0 / len(profile.criteria))
             
@@ -397,6 +447,57 @@ class PreferenceEvaluator:
             return 0.0
         
         return total_weighted / total_weight
+    
+    def _get_profile_commute_score(
+        self,
+        profile: PreferenceProfile,
+        apartment_data: Optional[Dict[str, Any]],
+    ) -> Optional[float]:
+        """
+        Get the appropriate commute score for a profile based on their commute mode.
+        
+        For transit users, uses transit_annoyingness if available.
+        For drivers, uses route_annoyingness.
+        
+        Args:
+            profile: Preference profile with commute config.
+            apartment_data: Apartment data dictionary.
+            
+        Returns:
+            Commute score (0-10 scale) or None if not available.
+        """
+        if not apartment_data:
+            return None
+        
+        commute_config = profile.commute_config
+        
+        if commute_config.mode == CommuteMode.TRANSIT:
+            # Try transit-specific annoyingness first
+            transit_score = apartment_data.get("transit_annoyingness")
+            if transit_score is not None:
+                return float(transit_score)
+            # Fall back to computed transit annoyingness from details
+            transit_details = apartment_data.get("partner_transit_details", {})
+            if transit_details:
+                # Calculate on the fly if we have transit details
+                walking_mins = transit_details.get("walking_minutes", 0)
+                transfers = transit_details.get("num_transfers", 0)
+                weights = commute_config.annoyingness_weights
+                walk_penalty = min(3.0, walking_mins * weights.walk_time_weight)
+                transfer_penalty = min(3.0, transfers * weights.transfer_weight)
+                return max(0.0, 10.0 - walk_penalty - transfer_penalty)
+        else:
+            # For driving, use route_annoyingness
+            route_score = apartment_data.get("route_annoyingness")
+            if route_score is not None:
+                return float(route_score)
+        
+        # Fall back to commute_score if available
+        commute_score = apartment_data.get("commute_score")
+        if commute_score is not None:
+            return float(commute_score)
+        
+        return None
     
     def _sort_lexicographic(
         self,

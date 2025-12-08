@@ -391,8 +391,8 @@ def api_evaluate_apartments():
         ranked = evaluator.rank_apartments(evaluations, sort_by="veto_first")
         shortlist = evaluator.get_shortlist(ranked, max_vetoes=max_vetoes, top_n=top_n)
         
-        # Generate summary
-        summary = generate_preference_summary(ranked, profiles)
+        # Generate summary (respect max vetoes in passing counts)
+        summary = generate_preference_summary(ranked, profiles, max_vetoes=max_vetoes)
         
         # Serialize evaluations
         eval_results = [e.to_dict() for e in ranked]
@@ -537,22 +537,42 @@ def api_compare_apartments():
 def api_apartment_detail(apartment_id: str):
     """Get detailed preference evaluation for a single apartment."""
     try:
+        # Import here to avoid circular imports
+        from utils.google_sheets import GoogleSheetsClient
+        import config
+        
         data = request.get_json()
         
         profile_names = data.get("profiles", [])
-        apartment_data = data.get("apartment")
+        apartment_data = data.get("apartment", {})
         
         if not profile_names:
             return jsonify({"success": False, "error": "At least one profile is required"}), 400
-        
-        if not apartment_data:
-            return jsonify({"success": False, "error": "Apartment data is required"}), 400
         
         # Load profiles
         profiles = load_profiles_by_names(profile_names)
         
         if not profiles:
             return jsonify({"success": False, "error": "No valid profiles found"}), 400
+        
+        # If apartment data is empty or minimal, try to load from sheet
+        if not apartment_data or len(apartment_data) < 3:
+            try:
+                sheets_client = GoogleSheetsClient()
+                sheet_rows = sheets_client.read_main_sheet()
+                
+                # Find the apartment by address
+                address_col = config.SHEET_COLUMNS.get('address', 'Address')
+                for row in sheet_rows:
+                    row_address = row.get(address_col, '')
+                    if row_address == apartment_id:
+                        apartment_data = row
+                        break
+            except Exception as e:
+                print(f"Warning: Could not load apartment from sheet: {e}")
+        
+        if not apartment_data:
+            return jsonify({"success": False, "error": "Apartment data not found"}), 400
         
         # Normalize and evaluate
         normalized = normalize_apartment_data(apartment_data)
@@ -563,15 +583,204 @@ def api_apartment_detail(apartment_id: str):
         reporter = EvaluationReporter(profiles, [evaluation])
         detail_text = reporter.generate_apartment_detail(evaluation, normalized)
         
+        # Build threshold data for slider visualization
+        threshold_data = _build_threshold_data(profiles, normalized)
+        
         return jsonify({
             "success": True,
             "evaluation": evaluation.to_dict(),
             "detail_report": detail_text,
+            "threshold_data": threshold_data,
+            "apartment_values": _extract_apartment_values(normalized, profiles),
         })
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _build_threshold_data(profiles: Dict[str, PreferenceProfile], apartment_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build threshold data structure for slider visualization.
+    
+    Returns a dictionary mapping criterion_id to threshold info for all profiles.
+    For commute criterion, uses profile-specific commute data fields.
+    """
+    from .schemas import resolve_field, CommuteMode
+    
+    threshold_data = {}
+    
+    # Collect all criteria across profiles
+    all_criteria = {}
+    for profile_name, profile in profiles.items():
+        for criterion in profile.criteria:
+            if criterion.id not in all_criteria:
+                all_criteria[criterion.id] = {
+                    "id": criterion.id,
+                    "display_name": criterion.display_name,
+                    "profiles": {},
+                }
+            
+            # Get the field used for this criterion's thresholds
+            # Assuming first threshold in each tier uses the main field
+            field = None
+            is_lower_better = True  # Default assumption
+            
+            if criterion.ideal:
+                field = criterion.ideal[0].field
+                # Check operator to determine if lower is better
+                op = criterion.ideal[0].operator.value
+                is_lower_better = op in ("lte", "lt")
+            elif criterion.acceptable:
+                field = criterion.acceptable[0].field
+                op = criterion.acceptable[0].operator.value
+                is_lower_better = op in ("lte", "lt")
+            elif criterion.veto:
+                field = criterion.veto[0].field
+                op = criterion.veto[0].operator.value
+                is_lower_better = op in ("lte", "lt")
+            
+            # Get threshold values
+            ideal_val = criterion.ideal[0].value if criterion.ideal else None
+            acceptable_val = criterion.acceptable[0].value if criterion.acceptable else None
+            veto_val = criterion.veto[0].value if criterion.veto else None
+            
+            # Get actual value for this field
+            # Special handling for commute: use profile's commute_config.data_field
+            actual_val = None
+            commute_extra = {}
+            
+            if criterion.id == "commute" and profile.commute_config:
+                # Use profile-specific commute data field
+                data_field = profile.commute_config.data_field
+                actual_val = apartment_data.get(data_field)
+                
+                # Try alternative column names if not found
+                if actual_val is None:
+                    if data_field == "commute_time_partner":
+                        actual_val = apartment_data.get("Commute Time (Partner)")
+                    elif data_field == "commute_time_you":
+                        actual_val = apartment_data.get("Commute Time (You)")
+                        if actual_val is None:
+                            actual_val = resolve_field(apartment_data, "commute_duration")
+                
+                # Add commute-specific extra data
+                commute_mode = profile.commute_config.mode
+                commute_extra = {
+                    "commute_mode": commute_mode.value,
+                    "data_field": data_field,
+                }
+                
+                # Add annoyingness score based on mode
+                if commute_mode == CommuteMode.TRANSIT:
+                    transit_annoy = apartment_data.get("transit_annoyingness")
+                    commute_extra["annoyingness_score"] = transit_annoy
+                    commute_extra["transit_walking_mins"] = apartment_data.get("transit_walking_minutes")
+                    commute_extra["transit_transfers"] = apartment_data.get("transit_transfers")
+                else:
+                    route_annoy = apartment_data.get("route_annoyingness")
+                    commute_extra["annoyingness_score"] = route_annoy
+                
+                # Add commute score (overall quality)
+                commute_extra["commute_score"] = apartment_data.get("commute_score")
+            else:
+                actual_val = resolve_field(apartment_data, field) if field else None
+            
+            profile_data = {
+                "field": field,
+                "ideal": ideal_val,
+                "acceptable": acceptable_val,
+                "veto": veto_val,
+                "is_lower_better": is_lower_better,
+                "actual_value": actual_val,
+            }
+            
+            # Add commute-specific data if present
+            if commute_extra:
+                profile_data.update(commute_extra)
+            
+            all_criteria[criterion.id]["profiles"][profile_name] = profile_data
+            
+            # Store field info at criterion level for reference
+            if "field" not in all_criteria[criterion.id]:
+                all_criteria[criterion.id]["field"] = field
+                all_criteria[criterion.id]["is_lower_better"] = is_lower_better
+    
+    return all_criteria
+
+
+def _extract_apartment_values(apartment_data: Dict[str, Any], profiles: Dict[str, PreferenceProfile]) -> Dict[str, Any]:
+    """
+    Extract relevant apartment values for display in the modal.
+    Includes profile-specific commute data.
+    """
+    from .schemas import resolve_field, CommuteMode
+    
+    values = {}
+    
+    # Common fields to extract
+    common_fields = {
+        "price": ("price", "$"),
+        "total_monthly_cost": ("total_monthly_cost", "$"),
+        "base_rent": ("base_rent", "$"),
+        "parking_cost": ("parking_cost", "$"),
+        "commute_duration": ("commute_duration", " min"),
+        "safety_score": ("safety_score", "/10"),
+        "wfh_score": ("wfh_score", "/10"),
+        "gym_walk_time": ("gym_walk_time", " min"),
+        "parking_score": ("parking_score", "/10"),
+        "laundry_score": ("laundry_score", "/10"),
+        "happening_score": ("happening_score", "/10"),
+        "sqft": ("sqft", " sqft"),
+        "commute_score": ("commute_score", "/10"),
+        "route_annoyingness": ("route_annoyingness", "/10"),
+        "transit_annoyingness": ("transit_annoyingness", "/10"),
+        "transit_walking_minutes": ("transit_walking_minutes", " min"),
+        "transit_transfers": ("transit_transfers", " transfers"),
+    }
+    
+    for key, (field, unit) in common_fields.items():
+        val = resolve_field(apartment_data, field)
+        if val is not None:
+            values[key] = {
+                "value": val,
+                "unit": unit,
+                "display": f"{unit.strip('/')}{val}" if unit.startswith("$") else f"{val}{unit}"
+            }
+    
+    # Add profile-specific commute data
+    values["commute_by_profile"] = {}
+    for profile_name, profile in profiles.items():
+        commute_config = profile.commute_config
+        data_field = commute_config.data_field
+        
+        # Get commute duration for this profile
+        commute_val = apartment_data.get(data_field)
+        if commute_val is None:
+            if data_field == "commute_time_partner":
+                commute_val = apartment_data.get("Commute Time (Partner)")
+            elif data_field == "commute_time_you":
+                commute_val = apartment_data.get("Commute Time (You)")
+                if commute_val is None:
+                    commute_val = resolve_field(apartment_data, "commute_duration")
+        
+        profile_commute = {
+            "duration": commute_val,
+            "mode": commute_config.mode.value,
+            "data_field": data_field,
+        }
+        
+        # Add mode-specific annoyingness
+        if commute_config.mode == CommuteMode.TRANSIT:
+            profile_commute["annoyingness"] = apartment_data.get("transit_annoyingness")
+            profile_commute["walking_mins"] = apartment_data.get("transit_walking_minutes")
+            profile_commute["transfers"] = apartment_data.get("transit_transfers")
+        else:
+            profile_commute["annoyingness"] = apartment_data.get("route_annoyingness")
+        
+        values["commute_by_profile"][profile_name] = profile_commute
+    
+    return values
 
 
 def register_preference_routes(app):

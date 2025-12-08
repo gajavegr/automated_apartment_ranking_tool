@@ -73,6 +73,16 @@ class ApartmentAnalyzer:
         recalc_gym = recalc_all or 'gym' in components_to_recalc
         recalc_wfh = recalc_all or 'wfh' in components_to_recalc
         recalc_space_luxury = recalc_all or 'space_luxury' in components_to_recalc
+        recalc_sheet_only = 'sheet_only' in (components_to_recalc or [])
+        
+        # Sheet-only: recompute scores from the latest sheet data without any external API calls
+        if recalc_sheet_only:
+            recalc_commute = False
+            recalc_safety = False
+            recalc_happening = False
+            recalc_gym = False
+            recalc_wfh = False
+            recalc_space_luxury = True  # Safe to recompute based on sheet values
         
         # Note: space_luxury doesn't need special handling - it's always calculated from existing data
         
@@ -85,6 +95,7 @@ class ApartmentAnalyzer:
         print(f"    recalc_gym: {recalc_gym}")
         print(f"    recalc_wfh: {recalc_wfh}")
         print(f"    recalc_space_luxury: {recalc_space_luxury}")
+        print(f"    recalc_sheet_only: {recalc_sheet_only}")
         
         if components_to_recalc:
             print(f"\n{'='*80}")
@@ -143,75 +154,107 @@ class ApartmentAnalyzer:
                 result['street_parking_ease'] = row_data.get(config.SHEET_COLUMNS.get("street_parking_ease"))
             
             # Analyze location
-            print(f"\n[3/3] Analyzing location...")
-            if result['address']:
-                # Only run full location analysis if we need commute or safety data
-                if recalc_commute or recalc_safety:
-                    location_data = self.location_analyzer.analyze_location(
-                        result['address'],
-                        analyze_commute=recalc_commute,
-                        analyze_safety=recalc_safety,
-                        analyze_amenities=False  # We handle amenities separately in the happening block
-                    )
-                    
-                    if recalc_commute:
-                        result['commute_duration'] = location_data.get('commute_duration', 999)
-                        result['commute_route'] = location_data.get('commute_route', '')
-                        result['commute_duration_partner'] = location_data.get('commute_duration_partner', 999)
-                        result['route_annoyingness'] = location_data.get('route_annoyingness', 10.0)
-                        commute_details = location_data.get('commute_details', {})
-                        result['commute_details'] = commute_details
-                        result['commute_details_json'] = json.dumps(commute_details) if commute_details else ""
+            if recalc_sheet_only:
+                print(f"\n[3/3] Skipping external API calls (sheet-only recalc)")
+                result['latitude'] = row_data.get(config.SHEET_COLUMNS.get("latitude"))
+                result['longitude'] = row_data.get(config.SHEET_COLUMNS.get("longitude"))
+                result['apartment_elevation'] = row_data.get(config.SHEET_COLUMNS.get("apartment_elevation"))
+                result['commute_duration'] = row_data.get(config.SHEET_COLUMNS.get("commute_time_you"))
+                result['commute_route'] = row_data.get(config.SHEET_COLUMNS.get("commute_route"))
+                result['commute_duration_partner'] = row_data.get(config.SHEET_COLUMNS.get("commute_time_partner"))
+                result['commute_details'] = row_data.get(config.SHEET_COLUMNS.get("commute_details"))
+                result['commute_details_json'] = row_data.get(config.SHEET_COLUMNS.get("commute_details_json"))
+                result['safety_score_opendata'] = row_data.get(config.SHEET_COLUMNS.get("safety_score_opendata"))
+                result['incident_count'] = row_data.get(config.SHEET_COLUMNS.get("incident_count"))
+                result['avg_severity'] = row_data.get(config.SHEET_COLUMNS.get("avg_severity"))
+                result['count_score'] = row_data.get(config.SHEET_COLUMNS.get("count_score"))
+                result['severity_score'] = row_data.get(config.SHEET_COLUMNS.get("severity_score"))
+                result['crime_details'] = row_data.get(config.SHEET_COLUMNS.get("crime_details"))
+                result['restaurants_nearby'] = row_data.get(config.SHEET_COLUMNS.get("restaurants_nearby"))
+                result['cafes_nearby'] = row_data.get(config.SHEET_COLUMNS.get("cafes_nearby"))
+                result['parks_nearby'] = row_data.get(config.SHEET_COLUMNS.get("parks_nearby"))
+                result['restaurants_list'] = row_data.get(config.SHEET_COLUMNS.get("restaurants_list"), "[]")
+                result['cafes_list'] = row_data.get(config.SHEET_COLUMNS.get("cafes_list"), "[]")
+                result['parks_list'] = row_data.get(config.SHEET_COLUMNS.get("parks_list"), "[]")
+                result['avg_walk_to_poi_mins'] = row_data.get(config.SHEET_COLUMNS.get("avg_walk_to_poi_mins"))
+                result['nearest_poi_count'] = row_data.get(config.SHEET_COLUMNS.get("nearest_poi_count"))
+                result['pois_within_1_mile'] = row_data.get(config.SHEET_COLUMNS.get("pois_within_1_mile"))
+                result['pois_list'] = row_data.get(config.SHEET_COLUMNS.get("pois_list"))
+                result['gym_within_10min'] = row_data.get(config.SHEET_COLUMNS.get("gym_within_10min"))
+                result['gym_quality'] = row_data.get(config.SHEET_COLUMNS.get("gym_quality"))
+                result['nearest_gym_name'] = row_data.get(config.SHEET_COLUMNS.get("nearest_gym_name"))
+                result['nearest_gym_distance'] = row_data.get(config.SHEET_COLUMNS.get("nearest_gym_distance"))
+                result['elevation_to_gym'] = row_data.get(config.SHEET_COLUMNS.get("elevation_to_gym"))
+            else:
+                print(f"\n[3/3] Analyzing location...")
+                if result['address']:
+                    # Only run full location analysis if we need commute or safety data
+                    if recalc_commute or recalc_safety:
+                        location_data = self.location_analyzer.analyze_location(
+                            result['address'],
+                            analyze_commute=recalc_commute,
+                            analyze_safety=recalc_safety,
+                            analyze_amenities=False  # We handle amenities separately in the happening block
+                        )
+                        
+                        if recalc_commute:
+                            result['commute_duration'] = location_data.get('commute_duration', 999)
+                            result['commute_route'] = location_data.get('commute_route', '')
+                            result['commute_duration_partner'] = location_data.get('commute_duration_partner', 999)
+                            result['route_annoyingness'] = location_data.get('route_annoyingness', 10.0)
+                            commute_details = location_data.get('commute_details', {})
+                            result['commute_details'] = commute_details
+                            result['commute_details_json'] = json.dumps(commute_details) if commute_details else ""
+                        else:
+                            # Preserve existing commute data
+                            result['commute_duration'] = row_data.get(config.SHEET_COLUMNS["commute_time_you"])
+                            result['commute_route'] = row_data.get(config.SHEET_COLUMNS["commute_route"], '')
+                            result['commute_duration_partner'] = row_data.get(config.SHEET_COLUMNS["commute_time_partner"])
+                            result['commute_details'] = row_data.get(config.SHEET_COLUMNS.get("commute_details"))
+                            result['commute_details_json'] = row_data.get(config.SHEET_COLUMNS.get("commute_details_json"), "")
+                        
+                        if recalc_safety:
+                            result['safety_score_opendata'] = location_data.get('safety_score_opendata', 5.0)
+                            result['incident_count'] = location_data.get('incident_count', 0)
+                            result['avg_severity'] = location_data.get('avg_severity')
+                            result['count_score'] = location_data.get('count_score')
+                            result['severity_score'] = location_data.get('severity_score')
+                            crime_details = location_data.get('crime_details')
+                            if crime_details:
+                                result['crime_details'] = crime_details
+                        else:
+                            # Preserve existing safety data
+                            result['safety_score_opendata'] = row_data.get(config.SHEET_COLUMNS["safety_score_opendata"])
+                            result['incident_count'] = row_data.get(config.SHEET_COLUMNS.get("incident_count"))
+                            result['avg_severity'] = row_data.get(config.SHEET_COLUMNS.get("avg_severity"))
+                            result['count_score'] = row_data.get(config.SHEET_COLUMNS.get("count_score"))
+                            result['severity_score'] = row_data.get(config.SHEET_COLUMNS.get("severity_score"))
+                            result['crime_details'] = row_data.get(config.SHEET_COLUMNS.get("crime_details"))
+                        
+                        # Get latitude/longitude for other calculations
+                        result['latitude'] = location_data.get('latitude')
+                        result['longitude'] = location_data.get('longitude')
+                        result['apartment_elevation'] = location_data.get('apartment_elevation')
                     else:
-                        # Preserve existing commute data
+                        # Just get coordinates without full analysis
+                        coords = self.location_analyzer.geocode_address(result['address'])
+                        if coords:
+                            result['latitude'] = coords[0]
+                            result['longitude'] = coords[1]
+                            result['apartment_elevation'] = self.location_analyzer.get_elevation(coords[0], coords[1])
+                        
+                        # Preserve existing data
                         result['commute_duration'] = row_data.get(config.SHEET_COLUMNS["commute_time_you"])
                         result['commute_route'] = row_data.get(config.SHEET_COLUMNS["commute_route"], '')
                         result['commute_duration_partner'] = row_data.get(config.SHEET_COLUMNS["commute_time_partner"])
                         result['commute_details'] = row_data.get(config.SHEET_COLUMNS.get("commute_details"))
-                        result['commute_details_json'] = row_data.get(config.SHEET_COLUMNS.get("commute_details_json"), "")
-                    
-                    if recalc_safety:
-                        result['safety_score_opendata'] = location_data.get('safety_score_opendata', 5.0)
-                        result['incident_count'] = location_data.get('incident_count', 0)
-                        result['avg_severity'] = location_data.get('avg_severity')
-                        result['count_score'] = location_data.get('count_score')
-                        result['severity_score'] = location_data.get('severity_score')
-                        crime_details = location_data.get('crime_details')
-                        if crime_details:
-                            result['crime_details'] = crime_details
-                    else:
-                        # Preserve existing safety data
+                        result['commute_details_json'] = row_data.get(config.SHEET_COLUMNS.get("commute_details_json"))
                         result['safety_score_opendata'] = row_data.get(config.SHEET_COLUMNS["safety_score_opendata"])
                         result['incident_count'] = row_data.get(config.SHEET_COLUMNS.get("incident_count"))
                         result['avg_severity'] = row_data.get(config.SHEET_COLUMNS.get("avg_severity"))
                         result['count_score'] = row_data.get(config.SHEET_COLUMNS.get("count_score"))
                         result['severity_score'] = row_data.get(config.SHEET_COLUMNS.get("severity_score"))
                         result['crime_details'] = row_data.get(config.SHEET_COLUMNS.get("crime_details"))
-                    
-                    # Get latitude/longitude for other calculations
-                    result['latitude'] = location_data.get('latitude')
-                    result['longitude'] = location_data.get('longitude')
-                    result['apartment_elevation'] = location_data.get('apartment_elevation')
-                else:
-                    # Just get coordinates without full analysis
-                    coords = self.location_analyzer.geocode_address(result['address'])
-                    if coords:
-                        result['latitude'] = coords[0]
-                        result['longitude'] = coords[1]
-                        result['apartment_elevation'] = self.location_analyzer.get_elevation(coords[0], coords[1])
-                    
-                    # Preserve existing data
-                    result['commute_duration'] = row_data.get(config.SHEET_COLUMNS["commute_time_you"])
-                    result['commute_route'] = row_data.get(config.SHEET_COLUMNS["commute_route"], '')
-                    result['commute_duration_partner'] = row_data.get(config.SHEET_COLUMNS["commute_time_partner"])
-                    result['commute_details'] = row_data.get(config.SHEET_COLUMNS.get("commute_details"))
-                    result['commute_details_json'] = row_data.get(config.SHEET_COLUMNS.get("commute_details_json"), "")
-                    result['safety_score_opendata'] = row_data.get(config.SHEET_COLUMNS["safety_score_opendata"])
-                    result['incident_count'] = row_data.get(config.SHEET_COLUMNS.get("incident_count"))
-                    result['avg_severity'] = row_data.get(config.SHEET_COLUMNS.get("avg_severity"))
-                    result['count_score'] = row_data.get(config.SHEET_COLUMNS.get("count_score"))
-                    result['severity_score'] = row_data.get(config.SHEET_COLUMNS.get("severity_score"))
-                    result['crime_details'] = row_data.get(config.SHEET_COLUMNS.get("crime_details"))
                 
                 # Happening score - restaurants, cafes, parks
                 if recalc_happening:
@@ -470,8 +513,8 @@ class ApartmentAnalyzer:
                     print(f"  Safety score: {result['safety_score_opendata']:.1f}/10")
                 if recalc_happening:
                     print(f"  Amenities: {result['restaurants_nearby']} restaurants, {result['cafes_nearby']} cafes")
-            else:
-                print("⚠ No address available, skipping location analysis")
+                else:
+                    print("⚠ No address available, skipping location analysis")
             
             # Add manual safety rating
             result['manual_safety_rating'] = manual_safety

@@ -33,6 +33,112 @@ class ComparisonOperator(Enum):
     NOT_IN = "not_in"  # value not in list
 
 
+class CommuteMode(Enum):
+    """Travel mode for commute calculations."""
+    DRIVING = "driving"
+    TRANSIT = "transit"
+    WALKING = "walking"
+    BICYCLING = "bicycling"
+
+
+@dataclass
+class AnnoyingnessWeights:
+    """
+    Configurable weights for calculating commute annoyingness.
+    
+    For transit users:
+        - walk_time_weight: Penalty per minute of walking
+        - transfer_weight: Penalty per transit transfer
+        - duration_weight: Penalty per minute over ideal duration
+        
+    For drivers:
+        - left_turn_weight: Penalty per left turn before highway
+        - congestion_weight: Multiplier for congestion ratio
+        - low_speed_weight: Penalty per low-speed segment
+        - lane_split_weight: Penalty for non-highway portions
+    """
+    # Transit-specific weights
+    walk_time_weight: float = 0.15  # Penalty per minute of walking
+    transfer_weight: float = 0.8    # Penalty per transit transfer
+    duration_weight: float = 0.1    # Penalty per minute over ideal
+    
+    # Driving-specific weights
+    left_turn_weight: float = 0.6   # Penalty per left turn before highway
+    congestion_weight: float = 10.0 # Multiplier for congestion ratio  
+    low_speed_weight: float = 0.7   # Penalty per low-speed segment
+    lane_split_weight: float = 2.5  # Multiplier for non-highway ratio
+    
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            "walk_time_weight": self.walk_time_weight,
+            "transfer_weight": self.transfer_weight,
+            "duration_weight": self.duration_weight,
+            "left_turn_weight": self.left_turn_weight,
+            "congestion_weight": self.congestion_weight,
+            "low_speed_weight": self.low_speed_weight,
+            "lane_split_weight": self.lane_split_weight,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> "AnnoyingnessWeights":
+        """Deserialize from dictionary."""
+        return cls(
+            walk_time_weight=data.get("walk_time_weight", 0.15),
+            transfer_weight=data.get("transfer_weight", 0.8),
+            duration_weight=data.get("duration_weight", 0.1),
+            left_turn_weight=data.get("left_turn_weight", 0.6),
+            congestion_weight=data.get("congestion_weight", 10.0),
+            low_speed_weight=data.get("low_speed_weight", 0.7),
+            lane_split_weight=data.get("lane_split_weight", 2.5),
+        )
+
+
+@dataclass
+class CommuteConfig:
+    """
+    Per-profile commute configuration.
+    
+    Allows each profile to specify:
+    - Which data field to read commute duration from
+    - The commute mode (for annoyingness calculation)
+    - Whether to include commute_score in evaluation
+    - Custom annoyingness weights
+    """
+    data_field: str = "commute_time_you"  # Column to read commute duration from
+    mode: CommuteMode = CommuteMode.DRIVING
+    include_commute_score: bool = True
+    annoyingness_weights: AnnoyingnessWeights = field(default_factory=AnnoyingnessWeights)
+    
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            "data_field": self.data_field,
+            "mode": self.mode.value,
+            "include_commute_score": self.include_commute_score,
+            "annoyingness_weights": self.annoyingness_weights.to_dict(),
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> "CommuteConfig":
+        """Deserialize from dictionary."""
+        mode_str = data.get("mode", "driving")
+        try:
+            mode = CommuteMode(mode_str)
+        except ValueError:
+            mode = CommuteMode.DRIVING
+            
+        weights_data = data.get("annoyingness_weights", {})
+        weights = AnnoyingnessWeights.from_dict(weights_data) if weights_data else AnnoyingnessWeights()
+        
+        return cls(
+            data_field=data.get("data_field", "commute_time_you"),
+            mode=mode,
+            include_commute_score=data.get("include_commute_score", True),
+            annoyingness_weights=weights,
+        )
+
+
 @dataclass
 class Threshold:
     """
@@ -176,8 +282,9 @@ class CriterionPreference:
         if acceptable_met and self.acceptable:
             return TierLevel.ACCEPTABLE
         
-        # Falls below acceptable → veto
-        return TierLevel.VETO
+        # Falls below acceptable but passed veto → still acceptable (just below threshold)
+        # Only return VETO if we failed a veto check above
+        return TierLevel.ACCEPTABLE
     
     def get_violated_thresholds(
         self, apartment_data: Dict[str, Any], tier: TierLevel
@@ -240,7 +347,7 @@ class PreferenceProfile:
     Complete preference profile for one person.
     
     Contains all criteria preferences, AHP-derived weights for tie-breaking,
-    and metadata about how the profile was generated.
+    commute configuration, and metadata about how the profile was generated.
     """
     person_name: str
     version: int = 1
@@ -251,6 +358,7 @@ class PreferenceProfile:
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     notes: str = ""
     quiz_responses: Dict[str, Any] = field(default_factory=dict)
+    commute_config: CommuteConfig = field(default_factory=CommuteConfig)
     
     def get_criterion(self, criterion_id: str) -> Optional[CriterionPreference]:
         """Get a criterion by ID."""
@@ -291,11 +399,15 @@ class PreferenceProfile:
             "updated_at": self.updated_at,
             "notes": self.notes,
             "quiz_responses": self.quiz_responses,
+            "commute_config": self.commute_config.to_dict(),
         }
     
     @classmethod
     def from_dict(cls, data: dict) -> "PreferenceProfile":
         """Deserialize from dictionary."""
+        commute_config_data = data.get("commute_config", {})
+        commute_config = CommuteConfig.from_dict(commute_config_data) if commute_config_data else CommuteConfig()
+        
         return cls(
             person_name=data["person_name"],
             version=data.get("version", 1),
@@ -306,6 +418,7 @@ class PreferenceProfile:
             updated_at=data.get("updated_at", datetime.now().isoformat()),
             notes=data.get("notes", ""),
             quiz_responses=data.get("quiz_responses", {}),
+            commute_config=commute_config,
         )
 
 
@@ -486,11 +599,17 @@ class JointEvaluation:
 
 # Field mapping from existing scoring system to preference evaluation
 FIELD_ALIASES = {
-    # Commute
+    # Commute (main driver commute)
     "commute_duration": "commute_time_you",
     "commute_duration_partner": "commute_time_partner",
     "commute_route": "commute_route",
     "route_annoyingness": "route_annoyingness",
+    "commute_score": "commute_score",
+    
+    # Transit-specific fields (extracted from commute_details JSON)
+    "transit_walking_minutes": "transit_walking_minutes",
+    "transit_transfers": "transit_transfers",
+    "transit_annoyingness": "transit_annoyingness",
     
     # Safety
     "safety_score": "combined_safety",
@@ -525,9 +644,12 @@ FIELD_ALIASES = {
     "restaurants_nearby": "restaurants_nearby",
     "cafes_nearby": "cafes_nearby",
     
-    # Price
+    # Price (maps to total_monthly_cost which includes parking)
     "price": "price",
     "monthly_cost": "price",
+    "total_monthly_cost": "total_monthly_cost",
+    "base_rent": "base_rent",
+    "parking_cost": "parking_cost",
 }
 
 

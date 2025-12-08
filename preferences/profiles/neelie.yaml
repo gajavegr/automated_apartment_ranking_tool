@@ -235,3 +235,15 @@ quiz_responses:
   - laundry
   - space_luxury
   - price
+commute_config:
+  data_field: commute_time_partner
+  mode: transit
+  include_commute_score: true
+  annoyingness_weights:
+    walk_time_weight: 0.2
+    transfer_weight: 1.0
+    duration_weight: 0.15
+    left_turn_weight: 0.6
+    congestion_weight: 10.0
+    low_speed_weight: 0.7
+    lane_split_weight: 2.5

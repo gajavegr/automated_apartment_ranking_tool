@@ -235,3 +235,15 @@ quiz_responses:
   - laundry
   - safety
   - happening
+commute_config:
+  data_field: commute_time_you
+  mode: driving
+  include_commute_score: true
+  annoyingness_weights:
+    walk_time_weight: 0.15
+    transfer_weight: 0.8
+    duration_weight: 0.1
+    left_turn_weight: 0.6
+    congestion_weight: 10.0
+    low_speed_weight: 0.7
+    lane_split_weight: 2.5
