@@ -37,3 +37,6 @@ diskcache==5.6.3
 python-dateutil==2.8.2
 pytz==2023.3
 
+# Production web server
+gunicorn==21.2.0
+

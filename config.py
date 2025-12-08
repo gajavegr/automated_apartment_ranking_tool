@@ -6,13 +6,38 @@ Adjust these values to match your priorities.
 """
 
 import os
+import json
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
+# Google Sheets Credentials
+# Support both file-based credentials (local) and environment variable (Railway/production)
+GOOGLE_SHEETS_CREDENTIALS_JSON = os.getenv("GOOGLE_SHEETS_CREDENTIALS_JSON")
+if GOOGLE_SHEETS_CREDENTIALS_JSON:
+    # Credentials provided as JSON string in environment variable (for Railway deployment)
+    # Save to temporary file for gspread to use
+    GOOGLE_SHEETS_CREDENTIALS_PATH = "/tmp/google_sheets_credentials.json"
+    try:
+        with open(GOOGLE_SHEETS_CREDENTIALS_PATH, 'w') as f:
+            f.write(GOOGLE_SHEETS_CREDENTIALS_JSON)
+        print(f"✓ Google Sheets credentials loaded from environment variable")
+    except Exception as e:
+        print(f"⚠️ Warning: Failed to write credentials to temp file: {e}")
+        # Fall back to path-based credentials
+        GOOGLE_SHEETS_CREDENTIALS_PATH = os.getenv(
+            "GOOGLE_SHEETS_CREDENTIALS_PATH", 
+            "credentials/google_sheets_credentials.json"
+        )
+else:
+    # Use file path from environment or default (for local development)
+    GOOGLE_SHEETS_CREDENTIALS_PATH = os.getenv(
+        "GOOGLE_SHEETS_CREDENTIALS_PATH", 
+        "credentials/google_sheets_credentials.json"
+    )
+
 # API Configuration
-GOOGLE_SHEETS_CREDENTIALS_PATH = os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH", "credentials/google_sheets_credentials.json")
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
