@@ -1,0 +1,51 @@
+# Don't upload these to Railway (reduces build time and size)
+
+# Virtual environment
+venv/
+env/
+ENV/
+.venv
+
+# Cache (will be on persistent volume instead)
+.cache/
+*.cache
+
+# Photos cache (will be on persistent volume if needed)
+photos_cache/
+
+# Development files
+*.backup
+temp/
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Documentation that's not needed in production
+*.md
+!README.md
+
+# Test and debug files
+test_*.py
+debug_*.py
+debug_*.sh
+reset_*.sh
+
+# Logs
+*.log
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+

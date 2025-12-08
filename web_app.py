@@ -47,7 +47,7 @@ try:
 except ImportError as e:
     print(f"  ⚠️  Preference routes not available: {e}")
 
-# Initialize clients
+# Initialize clients at module level (so gunicorn can use them)
 sheets_client = None
 location_analyzer = None
 
@@ -69,6 +69,17 @@ def init_clients():
         import traceback
         traceback.print_exc()
         return False
+
+# Initialize clients immediately when module is imported
+# This ensures they're available when gunicorn starts the app
+print("="*80)
+print("INITIALIZING APARTMENT ANALYZER")
+print("="*80)
+if not init_clients():
+    print("✗ Failed to initialize clients. Check credentials and environment variables.")
+    # Don't exit in production - let health check report the issue
+else:
+    print("✓ Clients initialized successfully")
 
 
 def col_index_to_letter(col_idx):
@@ -253,6 +264,32 @@ def index():
     return render_template('entry_form.html', 
                          google_maps_api_key=config.GOOGLE_MAPS_API_KEY,
                          sf_neighborhoods=config.SF_NEIGHBORHOODS)
+
+
+@app.route('/health')
+def health_check():
+    """Health check endpoint for Railway and monitoring"""
+    try:
+        # Check if critical components are initialized
+        status = {
+            'status': 'healthy',
+            'sheets_client': sheets_client is not None,
+            'location_analyzer': location_analyzer is not None,
+            'cache_dir': os.path.exists(config.CACHE_DIR),
+            'cache_dir_path': config.CACHE_DIR
+        }
+        
+        # If any critical component is missing, return unhealthy
+        if not (sheets_client and location_analyzer):
+            status['status'] = 'unhealthy'
+            return jsonify(status), 503
+        
+        return jsonify(status), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e)
+        }), 503
 
 
 @app.route('/get_apartments', methods=['GET'])
@@ -2556,20 +2593,32 @@ if __name__ == '__main__':
     print("="*80)
     print("APARTMENT ENTRY WEB INTERFACE")
     print("="*80)
-    print("\nInitializing...")
     
-    if not init_clients():
+    # Clients are already initialized at module level
+    # Just verify they're ready
+    if sheets_client is None or location_analyzer is None:
         print("✗ Failed to initialize. Check your credentials and .env file.")
         exit(1)
     
-    print("✓ Clients initialized")
+    print("✓ Clients ready")
     print("\nStarting web server...")
-    print("URL: http://127.0.0.1:5001")
-    print("\nPress Ctrl+C to stop the server\n")
     
-    # Open browser after 1 second
-    Timer(1, open_browser).start()
+    # Check if running on Railway (or other production environments)
+    port = int(os.getenv('PORT', 5001))
+    host = os.getenv('HOST', '127.0.0.1')
+    debug = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
     
-    # Run Flask app on 127.0.0.1 explicitly (using port 5001 to avoid conflicts with Cursor IDE)
-    app.run(debug=True, use_reloader=False, host='127.0.0.1', port=5001)
+    if host == '127.0.0.1':
+        # Local development - open browser
+        print(f"URL: http://127.0.0.1:{port}")
+        print("\nPress Ctrl+C to stop the server\n")
+        Timer(1, open_browser).start()
+    else:
+        # Production - don't open browser
+        print(f"Running in production mode on {host}:{port}")
+    
+    # Run Flask app
+    # Note: In production, gunicorn will be used instead (see Procfile)
+    app.run(debug=debug, use_reloader=False, host=host, port=port)
+
 

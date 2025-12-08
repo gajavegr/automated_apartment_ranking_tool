@@ -1,0 +1,20 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+# Reference the Procfile at root (Railway standard location)
+startCommand = "gunicorn web_app:app --bind 0.0.0.0:$PORT --timeout 300 --workers 2 --threads 2 --access-logfile - --error-logfile -"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+# Health check configuration
+# Railway will call this endpoint to verify the app is healthy
+healthcheckPath = "/health"
+healthcheckTimeout = 100
+
+# Documentation:
+# All Railway deployment docs are in railway/docs/
+# - railway/docs/DEPLOYMENT.md - Full deployment guide
+# - railway/docs/QUICK_START.md - Quick reference
+# - railway/docs/VARIABLES_FAQ.md - Environment variables explained
+# - railway/docs/READY_TO_DEPLOY.md - Pre-deployment checklist

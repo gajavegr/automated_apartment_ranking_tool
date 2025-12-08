@@ -2103,11 +2103,19 @@
 
         // Gym selection functionality
         let currentGymSearchRadius = null; // null means default, otherwise in miles
+        let gymFetchController = null; // AbortController for cancelling in-flight requests
         
         async function fetchNearbyGyms(radiusMiles = null, clearCache = false) {
             const address = document.getElementById('address').value.trim();
             if (!address) return;
             
+            // Cancel any in-flight gym fetch requests
+            if (gymFetchController) {
+                gymFetchController.abort();
+            }
+            
+            // Create new AbortController for this request
+            gymFetchController = new AbortController();
             const isExpansion = (radiusMiles !== null && currentGymSearchRadius !== null);
             
             try {
@@ -2122,7 +2130,8 @@
                 const response = await fetch('/get_gyms', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(requestBody)
+                    body: JSON.stringify(requestBody),
+                    signal: gymFetchController.signal
                 });
                 
                 const data = await response.json();
@@ -2162,8 +2171,19 @@
                     alert('No gyms found in the search area. Try extending the radius or check "Office gym only".');
                 }
             } catch (error) {
+                // Check if this was an intentional cancellation (user navigated away)
+                if (error.name === 'AbortError') {
+                    console.log('Gym fetch cancelled (user navigated away)');
+                    // Don't show error to user - this is expected behavior
+                    return;
+                }
+                
+                // This is a real error (network issue, server error, etc.)
                 console.error('Error fetching gyms:', error);
                 alert('Error fetching gyms: ' + error.message);
+            } finally {
+                // Clear the controller reference
+                gymFetchController = null;
             }
         }
         

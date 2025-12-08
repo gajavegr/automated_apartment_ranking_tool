@@ -441,6 +441,21 @@ Costs are cached, so re-running analysis on same apartments is free (unless you 
 
 This tool was built for personal use. Feel free to fork and adapt for your needs!
 
+## Documentation
+
+### 📚 Comprehensive Guides
+
+All feature guides, bug fix documentation, and improvement summaries are organized in the [`docs/`](docs/) directory:
+
+- **[Documentation Index](docs/README.md)** - Complete list of all docs
+- **[Feature Guides](docs/feature_guides/)** - How to use features
+- **[Bug Fixes](docs/bug_fixes/)** - What's been fixed
+- **[Improvements Summary](docs/IMPROVEMENTS_SUMMARY.md)** - All changes
+
+### 🚀 Railway Deployment
+
+Want to deploy this as a remote web app? See [`RAILWAY.md`](RAILWAY.md) or check the complete deployment docs in [`railway/docs/`](railway/docs/).
+
 ## License
 
 MIT License - see LICENSE file for details
