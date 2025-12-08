@@ -130,6 +130,21 @@
             </div>
         </div>
 
+        <!-- Profile View Modal (shared between tabs) -->
+        <div id="profileViewModal" class="modal hidden">
+            <div class="modal-content profile-modal">
+                <div class="modal-header">
+                    <h3 id="profileViewTitle">Profile Details</h3>
+                    <button class="close-btn" onclick="closeProfileViewModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="profileViewContent">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Evaluate Section -->
         <div id="prefEvaluateSection" class="pref-section hidden">
             <div class="section-header">
@@ -945,6 +960,101 @@
 .hidden {
     display: none !important;
 }
+
+/* Profile View Styles */
+.profile-view-section {
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.profile-view-section:last-child {
+    border-bottom: none;
+}
+
+.profile-view-section h4 {
+    margin: 0 0 12px 0;
+    color: #1d1d1f;
+}
+
+.weights-list {
+    display: grid;
+    gap: 8px;
+}
+
+.weight-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #f5f5f7;
+    padding: 10px 12px;
+    border-radius: 6px;
+}
+
+.weight-bar {
+    flex: 1;
+    height: 8px;
+    background: linear-gradient(90deg, #0066cc 0%, #0066cc var(--width, 0%), #e0e0e0 var(--width, 0%));
+    border-radius: 4px;
+    margin: 0 12px;
+}
+
+.criteria-list-view {
+    display: grid;
+    gap: 12px;
+}
+
+.criterion-detail {
+    background: #f5f5f7;
+    padding: 12px 16px;
+    border-radius: 8px;
+}
+
+.criterion-header-view {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.priority-badge {
+    background: #0066cc;
+    color: white;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.threshold-values {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-size: 13px;
+}
+
+.tier-ideal {
+    color: #28a745;
+    font-weight: 500;
+}
+
+.tier-acceptable {
+    color: #ffc107;
+    font-weight: 500;
+}
+
+.tier-veto {
+    color: #dc3545;
+    font-weight: 500;
+}
+
+.veto-reason {
+    display: block;
+    margin-top: 8px;
+    color: #666;
+    font-style: italic;
+}
+
 </style>
 
 

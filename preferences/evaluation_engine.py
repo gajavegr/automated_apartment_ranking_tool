@@ -130,8 +130,9 @@ class PreferenceEvaluator:
                     )
                     evaluation.all_violations.append(record)
                     
-                    # Track first violation (by priority)
-                    if evaluation.first_violation is None:
+                    # Track first violation (by priority) - only for VETO tier
+                    # ACCEPTABLE tier means it passed minimum requirements, just not ideal
+                    if evaluation.first_violation is None and tier == TierLevel.VETO:
                         evaluation.first_violation = record
             
             # Build explanation

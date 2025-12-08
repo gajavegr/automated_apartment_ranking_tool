@@ -369,8 +369,8 @@ async function viewProfile(name) {
             `;
         }).join('');
         
-        document.getElementById('prefDetailTitle').textContent = `Profile: ${profile.person_name}`;
-        document.getElementById('prefDetailContent').innerHTML = `
+        document.getElementById('profileViewTitle').textContent = `Profile: ${profile.person_name}`;
+        document.getElementById('profileViewContent').innerHTML = `
             <div class="profile-view-section">
                 <h4>📊 Priority Weights (AHP)</h4>
                 <p style="font-size: 0.9em; color: #666;">Consistency: ${(profile.ahp_consistency_ratio * 100).toFixed(1)}%</p>
@@ -394,12 +394,16 @@ async function viewProfile(name) {
             ` : ''}
         `;
         
-        document.getElementById('prefDetailModal').classList.remove('hidden');
+        document.getElementById('profileViewModal').classList.remove('hidden');
         
     } catch (error) {
         console.error('Error viewing profile:', error);
         alert('Error viewing profile: ' + error.message);
     }
+}
+
+function closeProfileViewModal() {
+    document.getElementById('profileViewModal').classList.add('hidden');
 }
 
 async function deleteProfile(name) {

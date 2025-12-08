@@ -373,10 +373,22 @@ class LocationAnalyzer:
                             # Only have PM data, duplicate it for AM
                             combined_alternatives[route_key] = self._combine_am_pm_routes(pm_route, pm_route)
                     
+                    # Find the route with the fastest AM time to use as the "primary" route
+                    # This ensures the "Fastest AM" label is accurate
+                    fastest_am_route = combined_primary.copy()
+                    fastest_am_time = combined_primary.get('duration_am_mins', 999)
+                    
+                    for route_key, route_data in combined_alternatives.items():
+                        am_time = route_data.get('duration_am_mins', 999)
+                        if am_time < fastest_am_time:
+                            fastest_am_time = am_time
+                            fastest_am_route = route_data.copy()
+                            fastest_am_route['route'] = route_key
+                    
                     result = {
                         'success': True,
                         'mode_used': current_mode,
-                        **combined_primary,
+                        **fastest_am_route,
                         'alternatives': combined_alternatives,
                     }
                 else:
@@ -2205,15 +2217,17 @@ Do not include any explanation, just the year or "UNKNOWN"."""
             print(f"Error finding laundromats: {e}")
             return []
     
-    def _get_walking_times(self, origin_lat: float, origin_lng: float, 
-                          destinations: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
+    def _get_travel_times(self, origin_lat: float, origin_lng: float, 
+                          destinations: List[Tuple[float, float]], 
+                          mode: str = 'walking') -> List[Dict[str, Any]]:
         """
-        Get walking times from origin to multiple destinations using Distance Matrix API
+        Get travel times from origin to multiple destinations using Distance Matrix API
         
         Args:
             origin_lat: Origin latitude
             origin_lng: Origin longitude
             destinations: List of (lat, lng) tuples for destinations
+            mode: Travel mode - 'walking' or 'bicycling'
             
         Returns:
             List of dictionaries with duration_mins and distance_miles
@@ -2234,7 +2248,7 @@ Do not include any explanation, just the year or "UNKNOWN"."""
             params = {
                 'origins': origin,
                 'destinations': dest_str,
-                'mode': 'walking',
+                'mode': mode,
                 'key': self.api_key,
             }
             
@@ -2266,8 +2280,38 @@ Do not include any explanation, just the year or "UNKNOWN"."""
             return results
         
         except Exception as e:
-            print(f"Error getting walking times: {e}")
+            print(f"Error getting {mode} times: {e}")
             return [{'duration_mins': None, 'distance_miles': None} for _ in destinations]
+    
+    def _get_walking_times(self, origin_lat: float, origin_lng: float, 
+                          destinations: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
+        """
+        Get walking times from origin to multiple destinations using Distance Matrix API
+        
+        Args:
+            origin_lat: Origin latitude
+            origin_lng: Origin longitude
+            destinations: List of (lat, lng) tuples for destinations
+            
+        Returns:
+            List of dictionaries with duration_mins and distance_miles
+        """
+        return self._get_travel_times(origin_lat, origin_lng, destinations, mode='walking')
+    
+    def _get_biking_times(self, origin_lat: float, origin_lng: float, 
+                         destinations: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
+        """
+        Get biking times from origin to multiple destinations using Distance Matrix API
+        
+        Args:
+            origin_lat: Origin latitude
+            origin_lng: Origin longitude
+            destinations: List of (lat, lng) tuples for destinations
+            
+        Returns:
+            List of dictionaries with duration_mins and distance_miles
+        """
+        return self._get_travel_times(origin_lat, origin_lng, destinations, mode='bicycling')
     
     def _calculate_distance(self, lat1: float, lng1: float, lat2: float, lng2: float) -> float:
         """Calculate distance between two points in miles using Haversine formula"""

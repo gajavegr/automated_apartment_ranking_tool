@@ -544,11 +544,34 @@
             <!-- Right side: Maps -->
             <div class="map-container">
                 <div class="map-section">
-                    <h3>Street View</h3>
-                    <div id="streetView" class="street-view">
-                        <div class="placeholder">
-                            <p>📍 Enter an address to see Street View</p>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                        <h3 style="margin: 0;">Street View & Navigation</h3>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="openStreetViewModal()" style="display: none;" id="expandStreetViewBtn">
+                            🔍 Expand View
+                        </button>
+                    </div>
+                    <div class="street-view-container">
+                        <div id="streetView" class="street-view">
+                            <div class="placeholder">
+                                <p>📍 Enter an address to see Street View</p>
+                            </div>
                         </div>
+                        <div id="streetViewMiniMap" class="street-view-mini-map">
+                            <div class="placeholder">
+                                <p>🗺️ Mini map</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="street-view-controls" style="margin-top: 10px; display: none;" id="streetViewControls">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="resetToStreetLevel()">
+                            🏠 Exit to Street Level
+                        </button>
+                        <span style="margin-left: 10px; font-size: 13px; color: #666;">
+                            Click on the mini map to jump to that location
+                        </span>
+                    </div>
+                    <div class="street-view-help">
+                        <p>💡 <strong>Tip:</strong> Use the mini map to see your location. The blue cone shows your viewing direction.</p>
                     </div>
                 </div>
 
@@ -566,6 +589,95 @@
                     <p id="coords"></p>
                 </div>
             </div>
+            </div>
+
+            <!-- Street View Modal -->
+            <div id="streetViewModal" class="modal" style="display: none;">
+                <div class="modal-content" style="width: 95%; max-width: 1400px; height: 90vh;">
+                    <div class="modal-header">
+                        <h3>Street View - <span id="modalAddressTitle"></span></h3>
+                        <button class="close-btn" onclick="closeStreetViewModal()">&times;</button>
+                    </div>
+                    <div class="modal-body" style="padding: 0; height: calc(100% - 60px);">
+                        <div class="street-view-modal-container">
+                            <div id="streetViewModalPano" class="street-view-modal-pano"></div>
+                            <div id="streetViewModalMap" class="street-view-modal-map"></div>
+                        </div>
+                        <div style="padding: 15px; background: #f8f9fa; border-top: 1px solid #ddd;">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="resetModalToStreetLevel()">
+                                🏠 Exit to Street Level
+                            </button>
+                            <span style="margin-left: 15px; font-size: 14px; color: #666;">
+                                💡 Click on the map to jump to that location. Use arrow keys to navigate.
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Commute Settings Modal -->
+            <div id="commuteSettingsModal" class="modal" style="display: none;">
+                <div class="modal-content" style="max-width: 600px;">
+                    <div class="modal-header">
+                        <h3>Edit Commute Settings</h3>
+                        <button class="close-btn" onclick="closeCommuteSettingsModal()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="modal-description">
+                            Customize your commute parameters to get more accurate travel time calculations.
+                        </p>
+                        
+                        <div style="margin-bottom: 20px;">
+                            <h4 style="margin: 0 0 10px 0; color: #1d1d1f; font-size: 16px;">Your Commute Times</h4>
+                            
+                            <div class="field-row" style="margin-bottom: 12px;">
+                                <label style="display: block; margin-bottom: 5px; font-weight: 500;">AM Departure Time:</label>
+                                <input type="time" id="amDepartureTime" class="form-input" value="08:30" style="width: 150px;">
+                                <span style="margin-left: 10px; font-size: 14px; color: #666;">
+                                    (Leaving home in the morning)
+                                </span>
+                            </div>
+                            
+                            <div class="field-row" style="margin-bottom: 12px;">
+                                <label style="display: block; margin-bottom: 5px; font-weight: 500;">PM Departure Time:</label>
+                                <input type="time" id="pmDepartureTime" class="form-input" value="18:00" style="width: 150px;">
+                                <span style="margin-left: 10px; font-size: 14px; color: #666;">
+                                    (Leaving work in the evening)
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div style="border-top: 1px solid #e0e0e0; padding-top: 20px; margin-top: 20px;">
+                            <h4 style="margin: 0 0 10px 0; color: #1d1d1f; font-size: 16px;">Partner Commute</h4>
+                            
+                            <div class="field-row" style="margin-bottom: 12px;">
+                                <label style="display: block; margin-bottom: 5px; font-weight: 500;">Partner's Work Address:</label>
+                                <input type="text" id="partnerWorkAddress" class="form-input" placeholder="Enter address or leave blank" style="width: 100%;">
+                                <span style="display: block; margin-top: 5px; font-size: 13px; color: #666;">
+                                    💡 Leave blank if partner doesn't commute
+                                </span>
+                            </div>
+                            
+                            <div class="field-row" style="margin-bottom: 12px;">
+                                <label style="display: block; margin-bottom: 5px; font-weight: 500;">Partner's Transport Mode:</label>
+                                <select id="partnerTransportMode" class="form-input" style="width: 200px;">
+                                    <option value="driving">🚗 Driving</option>
+                                    <option value="transit">🚇 Public Transit</option>
+                                    <option value="bicycling">🚴 Bicycling</option>
+                                    <option value="walking">🚶 Walking</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button onclick="closeCommuteSettingsModal()" class="btn btn-secondary">
+                            Cancel
+                        </button>
+                        <button onclick="saveCommuteSettings()" class="btn btn-primary">
+                            Save Settings
+                        </button>
+                    </div>
+                </div>
             </div>
 
             <!-- Analysis Tab -->
@@ -643,15 +755,16 @@
                                     <div class="component-header">
                                         <strong>Commute</strong>
                                         <span id="commuteScore" class="component-score">--</span>
+                                        <button type="button" class="btn-icon" onclick="openCommuteSettingsModal()" title="Edit commute settings" style="margin-left: 8px;">⚙️</button>
                                     </div>
                                     <div class="component-meta" id="commuteMeta"></div>
                                     <div class="component-details">
                                         <div class="field-row">
-                                            <label>Your Commute (AM):</label>
+                                            <label>Your Commute (AM @ 8:30 AM):</label>
                                             <span id="commuteYouAM" class="field-value">--</span>
                                         </div>
                                         <div class="field-row">
-                                            <label>Your Commute (PM):</label>
+                                            <label>Your Commute (PM @ 6:00 PM):</label>
                                             <span id="commuteYouPM" class="field-value">--</span>
                                         </div>
                                         <div class="field-row" style="font-weight: 600; border-top: 1px solid #e0e0e0; padding-top: 4px; margin-top: 4px;">
@@ -980,19 +1093,43 @@
                                     <div class="component-meta" id="gymMeta"></div>
                                     <div class="component-details">
                                         <div class="field-row">
+                                            <label>Selected gyms:</label>
+                                            <span id="gymSelected" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row">
                                             <label>Walking time:</label>
                                             <span id="gymWalkTime" class="field-value">--</span>
                                         </div>
+                                        <div class="field-row" id="gymBikeTimeRow" style="display: none;">
+                                            <label>Biking time:</label>
+                                            <span id="gymBikeTime" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row" id="gymTransportModeRow" style="display: none;">
+                                            <label>Transport mode for scoring:</label>
+                                            <div style="display: flex; align-items: center; gap: 10px;">
+                                                <select id="gymTransportMode" class="form-control" style="width: auto; display: inline-block;" onchange="updateGymTransportMode()">
+                                                    <option value="walk">🚶 Walking</option>
+                                                    <option value="bike">🚴 Biking</option>
+                                                </select>
+                                                <span id="gymEffectiveTime" class="field-value" style="color: #0066cc; font-weight: bold;">--</span>
+                                            </div>
+                                        </div>
                                         <div class="field-row">
-                                            <label>Within 20 min walk:</label>
+                                            <label>Within 20 min:</label>
                                             <span id="gymWithin10" class="field-value">--</span>
+                                        </div>
+                                        <div class="field-row" id="gymScoreBreakdown" style="display: none; margin-top: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px;">
+                                            <div style="font-size: 0.9em; color: #555;">
+                                                <strong>Score Calculation:</strong>
+                                                <div id="gymScoreDetails" style="margin-top: 4px; font-family: monospace; font-size: 0.85em;"></div>
+                                            </div>
                                         </div>
                                         <div id="gymFormulaText" style="margin-top: 10px; color: #555; font-size: 0.85em;">
                                             <strong>How it's calculated:</strong> 
-                                            Score scales linearly with walking time to nearest selected gym: 
+                                            Score scales linearly with travel time to nearest selected gym: 
                                             <strong>0 min = 10 points</strong>, <strong>20 min = 0 points</strong>.
-                                            Example: 5 min walk = 7.5 pts, 10 min = 5.0 pts, 15 min = 2.5 pts.
-                                            Elevation gain penalties make uphill gyms "feel farther" by adding virtual minutes.
+                                            Example: 5 min = 7.5 pts, 10 min = 5.0 pts, 15 min = 2.5 pts.
+                                            For gyms >15 min walk, biking time is also calculated and you can choose your preferred transport mode.
                                             Office gym only = -5 points (inconvenient, limited hours).
                                         </div>
                                     </div>
@@ -1174,11 +1311,52 @@
                     <!-- Future Admin Features -->
                     <div class="admin-section">
                         <h3>🔧 Data Recalculation</h3>
-                        <p>Force recalculation of apartment scores and computed fields.</p>
+                        <p>Force recalculation of specific score components for all apartments.</p>
+                        
+                        <div style="margin-bottom: 20px;">
+                            <h4 style="margin-bottom: 10px;">Select Components to Recalculate:</h4>
+                            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; max-width: 500px;">
+                                <label style="display: flex; align-items: center; gap: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px; cursor: pointer;">
+                                    <input type="checkbox" id="recalc_all" value="all" onchange="toggleRecalcComponents(this)">
+                                    <span style="font-weight: bold;">🔄 All (Full Recalc)</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px; cursor: pointer;">
+                                    <input type="checkbox" class="recalc-component" value="gym">
+                                    <span>🏋️ Gym (Walk/Bike)</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px; cursor: pointer;">
+                                    <input type="checkbox" class="recalc-component" value="laundry">
+                                    <span>🧺 Laundry</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px; cursor: pointer;">
+                                    <input type="checkbox" class="recalc-component" value="parking">
+                                    <span>🚗 Parking</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px; cursor: pointer;">
+                                    <input type="checkbox" class="recalc-component" value="happening">
+                                    <span>🎉 Happening</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px; cursor: pointer;">
+                                    <input type="checkbox" class="recalc-component" value="safety">
+                                    <span>🛡️ Safety</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px; cursor: pointer;">
+                                    <input type="checkbox" class="recalc-component" value="commute">
+                                    <span>🚗 Commute</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px; cursor: pointer;">
+                                    <input type="checkbox" class="recalc-component" value="wfh">
+                                    <span>💻 WFH Quality</span>
+                                </label>
+                            </div>
+                        </div>
                         
                         <div class="admin-actions">
-                            <button id="forceRecalcBtn" class="btn btn-warning" onclick="forceFullRecalculation()">
-                                🔄 Force Full Recalculation
+                            <button id="forceRecalcBtn" class="btn btn-warning" onclick="forceSelectedRecalculation()">
+                                🔄 Clear Selected & Recalculate
+                            </button>
+                            <button id="stopRecalcBtn" class="btn btn-danger" onclick="requestShutdown()" style="display: none; margin-left: 10px;">
+                                ⏹️ Stop Analysis
                             </button>
                         </div>
                         
@@ -1187,14 +1365,18 @@
                         </div>
                         
                         <div class="admin-note">
-                            <strong>⚠️ Warning:</strong> This will clear ALL computed fields (scores, commute data, location data) 
-                            for all apartments and force a complete re-analysis. Use this when:
-                            <ul>
-                                <li>Scoring methodology has changed (e.g., gym scoring algorithm)</li>
-                                <li>You suspect cached data is outdated or incorrect</li>
-                                <li>You want to ensure everything is recalculated from scratch</li>
+                            <strong>💡 Component Guide:</strong>
+                            <ul style="font-size: 0.9em;">
+                                <li><strong>Gym:</strong> Walk/bike times, gym scores (use when adding bike feature or new gyms)</li>
+                                <li><strong>Laundry:</strong> Laundry scores only</li>
+                                <li><strong>Parking:</strong> Parking scores only</li>
+                                <li><strong>Happening:</strong> Restaurant/cafe/park data (use after excluding places)</li>
+                                <li><strong>Safety:</strong> Crime scores and safety ratings</li>
+                                <li><strong>Commute:</strong> Commute times and routes</li>
+                                <li><strong>WFH:</strong> Work from home quality scores</li>
+                                <li><strong>All:</strong> Complete recalculation (use when scoring methodology changes)</li>
                             </ul>
-                            <strong>Note:</strong> Manual entries (WFH ratings, parking types, etc.) will NOT be cleared.
+                            <strong>⚠️ Note:</strong> Manual entries (ratings, types, etc.) will NOT be cleared.
                         </div>
                     </div>
                     
@@ -1220,6 +1402,9 @@
     <script>
         let map;
         let streetView;
+        let streetViewMiniMap;
+        let streetViewMarker;
+        let streetViewCone;
         let marker;
         let autocomplete;
         let scatterChart = null;
@@ -1230,6 +1415,13 @@
         let currentApartmentZillowUrl = '';
         let currentApartmentAddress = '';
         let currentApartmentRowNumber = null;
+        
+        // Modal street view variables
+        let modalStreetView;
+        let modalMiniMap;
+        let modalMarker;
+        let modalCone;
+        let modalOriginalPosition;
 
         function initMaps() {
             // Initialize map (centered on SF)
@@ -1250,6 +1442,48 @@
                 }
             );
 
+            // Initialize Street View Mini Map (synchronized with street view)
+            streetViewMiniMap = new google.maps.Map(
+                document.getElementById('streetViewMiniMap'),
+                {
+                    center: { lat: 37.7749, lng: -122.4194 },
+                    zoom: 17,
+                    mapTypeControl: false,
+                    streetViewControl: false,
+                    fullscreenControl: false,
+                    zoomControl: true,
+                    mapTypeId: 'roadmap'
+                }
+            );
+
+            // Add marker for street view position on mini map
+            streetViewMarker = new google.maps.Marker({
+                map: streetViewMiniMap,
+                position: { lat: 37.7749, lng: -122.4194 },
+                icon: {
+                    path: google.maps.SymbolPath.CIRCLE,
+                    scale: 6,
+                    fillColor: '#4285F4',
+                    fillOpacity: 1,
+                    strokeColor: '#FFFFFF',
+                    strokeWeight: 2
+                },
+                visible: false
+            });
+
+            // Add viewing direction cone
+            streetViewCone = new google.maps.Polyline({
+                map: streetViewMiniMap,
+                strokeColor: '#4285F4',
+                strokeOpacity: 0.6,
+                strokeWeight: 3,
+                visible: false
+            });
+
+            // Sync mini map with street view position and POV changes
+            streetView.addListener('position_changed', updateStreetViewMiniMap);
+            streetView.addListener('pov_changed', updateStreetViewMiniMap);
+
             // Setup autocomplete
             const input = document.getElementById('address');
             autocomplete = new google.maps.places.Autocomplete(input, {
@@ -1264,6 +1498,53 @@
             
             // Initialize button visibility (default to "Add" mode for new apartments)
             updateButtonVisibility(false);
+        }
+
+        // Update the mini map to show street view position and direction
+        function updateStreetViewMiniMap() {
+            const position = streetView.getPosition();
+            const pov = streetView.getPov();
+            
+            if (!position) return;
+            
+            const lat = position.lat();
+            const lng = position.lng();
+            
+            // Update marker position
+            streetViewMarker.setPosition(position);
+            streetViewMarker.setVisible(true);
+            
+            // Update mini map center
+            streetViewMiniMap.setCenter(position);
+            
+            // Create viewing cone (triangle showing direction)
+            const heading = pov.heading;
+            const fov = 90; // Field of view angle
+            const distance = 0.0005; // Distance in degrees (roughly 50m)
+            
+            // Calculate cone points
+            const leftAngle = heading - fov / 2;
+            const rightAngle = heading + fov / 2;
+            
+            const leftPoint = google.maps.geometry.spherical.computeOffset(
+                position,
+                50, // 50 meters
+                leftAngle
+            );
+            const rightPoint = google.maps.geometry.spherical.computeOffset(
+                position,
+                50, // 50 meters
+                rightAngle
+            );
+            
+            // Update cone polyline
+            streetViewCone.setPath([
+                position,
+                leftPoint,
+                rightPoint,
+                position
+            ]);
+            streetViewCone.setVisible(true);
         }
 
         // Load apartments list for dropdown
@@ -1344,6 +1625,18 @@
             }
         }
 
+        // Helper function to parse boolean values from Google Sheets
+        function _parseBool(value) {
+            if (value === true || value === false) {
+                return value;
+            }
+            if (typeof value === 'string') {
+                const normalized = value.trim().toLowerCase();
+                return normalized === 'true' || normalized === 'yes' || normalized === '1';
+            }
+            return false;
+        }
+
         // Populate form with apartment data
         function populateForm(data) {
             // Set row number
@@ -1368,31 +1661,31 @@
             const doubleVanityCheckbox = document.querySelector('input[name="has_double_vanity"]');
             if (doubleVanityCheckbox) {
                 const doubleVanityValue = data['Has Double Vanity'];
-                doubleVanityCheckbox.checked = doubleVanityValue === true || doubleVanityValue === 'TRUE' || doubleVanityValue === 'True';
+                doubleVanityCheckbox.checked = _parseBool(doubleVanityValue);
             }
             
             const highEndAppliancesCheckbox = document.querySelector('input[name="high_end_appliances"]');
             if (highEndAppliancesCheckbox) {
                 const highEndAppliancesValue = data['High-End Appliances'];
-                highEndAppliancesCheckbox.checked = highEndAppliancesValue === true || highEndAppliancesValue === 'TRUE' || highEndAppliancesValue === 'True';
+                highEndAppliancesCheckbox.checked = _parseBool(highEndAppliancesValue);
             }
             
             const walkInClosetCheckbox = document.querySelector('input[name="walk_in_closet"]');
             if (walkInClosetCheckbox) {
                 const walkInClosetValue = data['Walk-In Closet'];
-                walkInClosetCheckbox.checked = walkInClosetValue === true || walkInClosetValue === 'TRUE' || walkInClosetValue === 'True';
+                walkInClosetCheckbox.checked = _parseBool(walkInClosetValue);
             }
             
             const balconyPatioCheckbox = document.querySelector('input[name="has_balcony_patio"]');
             if (balconyPatioCheckbox) {
                 const balconyPatioValue = data['Has Balcony/Patio'];
-                balconyPatioCheckbox.checked = balconyPatioValue === true || balconyPatioValue === 'TRUE' || balconyPatioValue === 'True';
+                balconyPatioCheckbox.checked = _parseBool(balconyPatioValue);
             }
             
             const fireplaceCheckbox = document.querySelector('input[name="has_fireplace"]');
             if (fireplaceCheckbox) {
                 const fireplaceValue = data['Has Fireplace'];
-                fireplaceCheckbox.checked = fireplaceValue === true || fireplaceValue === 'TRUE' || fireplaceValue === 'True';
+                fireplaceCheckbox.checked = _parseBool(fireplaceValue);
             }
             
             // Parking - handle multi-select
@@ -1630,14 +1923,22 @@
             streetView.setPosition(location);
             streetView.setVisible(true);
             
+            // Update Street View Mini Map
+            streetViewMiniMap.setCenter(location);
+            streetViewMiniMap.setZoom(17);
+            
             // Hide placeholders if they exist
             const streetViewPlaceholder = document.querySelector('.street-view .placeholder');
             const mapViewPlaceholder = document.querySelector('.map-view .placeholder');
+            const miniMapPlaceholder = document.querySelector('.street-view-mini-map .placeholder');
             if (streetViewPlaceholder) {
                 streetViewPlaceholder.style.display = 'none';
             }
             if (mapViewPlaceholder) {
                 mapViewPlaceholder.style.display = 'none';
+            }
+            if (miniMapPlaceholder) {
+                miniMapPlaceholder.style.display = 'none';
             }
 
             // Show coordinates
@@ -3250,6 +3551,85 @@
             }
         }
 
+        // Commute Settings Modal Functions
+        async function openCommuteSettingsModal() {
+            try {
+                // Fetch current settings from backend
+                const response = await fetch('/get_commute_settings');
+                const data = await response.json();
+                
+                if (data.success && data.settings) {
+                    const settings = data.settings;
+                    document.getElementById('amDepartureTime').value = settings.am_departure || '08:30';
+                    document.getElementById('pmDepartureTime').value = settings.pm_departure || '18:00';
+                    document.getElementById('partnerWorkAddress').value = settings.partner_address || '';
+                    document.getElementById('partnerTransportMode').value = settings.partner_mode || 'driving';
+                } else {
+                    // Use defaults if fetch fails
+                    document.getElementById('amDepartureTime').value = '08:30';
+                    document.getElementById('pmDepartureTime').value = '18:00';
+                    document.getElementById('partnerWorkAddress').value = '';
+                    document.getElementById('partnerTransportMode').value = 'driving';
+                }
+            } catch (error) {
+                console.error('Error fetching commute settings:', error);
+                // Use defaults if fetch fails
+                document.getElementById('amDepartureTime').value = '08:30';
+                document.getElementById('pmDepartureTime').value = '18:00';
+                document.getElementById('partnerWorkAddress').value = '';
+                document.getElementById('partnerTransportMode').value = 'driving';
+            }
+            
+            // Show modal
+            document.getElementById('commuteSettingsModal').style.display = 'flex';
+        }
+        
+        function closeCommuteSettingsModal() {
+            document.getElementById('commuteSettingsModal').style.display = 'none';
+        }
+        
+        async function saveCommuteSettings() {
+            const amTime = document.getElementById('amDepartureTime').value;
+            const pmTime = document.getElementById('pmDepartureTime').value;
+            const partnerAddress = document.getElementById('partnerWorkAddress').value;
+            const partnerMode = document.getElementById('partnerTransportMode').value;
+            
+            if (!amTime || !pmTime) {
+                alert('Please set both AM and PM departure times.');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/save_commute_settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        am_departure: amTime,
+                        pm_departure: pmTime,
+                        partner_address: partnerAddress,
+                        partner_mode: partnerMode
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('✅ Commute settings saved! The commute times will be recalculated with the new settings.');
+                    closeCommuteSettingsModal();
+                    
+                    // If we're viewing a detail panel, refresh it to show updated commute times
+                    if (currentApartmentRow) {
+                        showDetailPanel(currentApartmentRow);
+                    }
+                } else {
+                    alert('Error saving commute settings: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error saving commute settings:', error);
+                alert('Error saving commute settings: ' + error.message);
+            }
+        }
+
         // Detail Panel Functions
         let currentApartmentRow = null;
         let originalApartmentData = null;
@@ -3476,15 +3856,69 @@
             
             updateComponentScoreDisplay('gymScore', components['gym_nearby']);
             updateComponentMeta('gymMeta', components['gym_nearby']);
+            
+            // Selected gyms
+            const selectedGyms = data['Selected Gyms'];
+            if (selectedGyms) {
+                document.getElementById('gymSelected').textContent = selectedGyms;
+            } else {
+                document.getElementById('gymSelected').textContent = 'None';
+            }
+            
             // Gym walk time
-            const gymWalkTime = data['Time to Nearest Gym (min)'];
+            const gymWalkTime = data['Gym Walk Time (min)'];
             if (gymWalkTime !== null && gymWalkTime !== undefined && gymWalkTime !== '') {
                 document.getElementById('gymWalkTime').textContent = `${parseFloat(gymWalkTime).toFixed(1)} min`;
             } else {
                 document.getElementById('gymWalkTime').textContent = 'N/A';
             }
             
-            document.getElementById('gymWithin10').textContent = data['Gym Within 10min'] ? 'Yes' : 'No';
+            // Gym bike time (if available)
+            const gymBikeTime = data['Gym Bike Time (min)'];
+            const gymBikeTimeRow = document.getElementById('gymBikeTimeRow');
+            const gymTransportModeRow = document.getElementById('gymTransportModeRow');
+            const gymScoreBreakdown = document.getElementById('gymScoreBreakdown');
+            
+            if (gymBikeTime !== null && gymBikeTime !== undefined && gymBikeTime !== '') {
+                // Show bike time and transport mode selector
+                document.getElementById('gymBikeTime').textContent = `${parseFloat(gymBikeTime).toFixed(1)} min`;
+                gymBikeTimeRow.style.display = 'flex';
+                gymTransportModeRow.style.display = 'flex';
+                
+                // Set current transport mode
+                const gymTransportMode = data['Gym Transport Mode'] || 'walk';
+                document.getElementById('gymTransportMode').value = gymTransportMode;
+                
+                // Update effective time display
+                const effectiveTime = gymTransportMode === 'bike' ? gymBikeTime : gymWalkTime;
+                document.getElementById('gymEffectiveTime').textContent = `(using ${parseFloat(effectiveTime).toFixed(1)} min for score)`;
+                
+                // Show score breakdown
+                gymScoreBreakdown.style.display = 'block';
+                const gymScore = components['gym_nearby']?.score || 0;
+                const maxTime = 20.0;
+                const scoreFormula = `Time: ${parseFloat(effectiveTime).toFixed(1)} min (${gymTransportMode})
+Score = 10 × (1 - ${parseFloat(effectiveTime).toFixed(1)} / ${maxTime}) = ${gymScore.toFixed(1)} points`;
+                document.getElementById('gymScoreDetails').textContent = scoreFormula;
+            } else {
+                // Hide bike time and transport mode selector
+                gymBikeTimeRow.style.display = 'none';
+                gymTransportModeRow.style.display = 'none';
+                
+                // Still show score breakdown for walking-only
+                if (gymWalkTime !== null && gymWalkTime !== undefined && gymWalkTime !== '') {
+                    gymScoreBreakdown.style.display = 'block';
+                    const gymScore = components['gym_nearby']?.score || 0;
+                    const maxTime = 20.0;
+                    const scoreFormula = `Time: ${parseFloat(gymWalkTime).toFixed(1)} min (walk)
+Score = 10 × (1 - ${parseFloat(gymWalkTime).toFixed(1)} / ${maxTime}) = ${gymScore.toFixed(1)} points`;
+                    document.getElementById('gymScoreDetails').textContent = scoreFormula;
+                } else {
+                    gymScoreBreakdown.style.display = 'none';
+                }
+            }
+            
+            document.getElementById('gymWithin10').textContent = data['Gym Within 20min'] ? 'Yes' : 'No';
             
             updateComponentScoreDisplay('laundryScore', components['laundry']);
             updateComponentMeta('laundryMeta', components['laundry']);
@@ -4334,6 +4768,43 @@
             breakdownEl.innerHTML = html;
         }
 
+        async function updateGymTransportMode() {
+            if (!currentApartmentRow) return;
+            
+            const transportMode = document.getElementById('gymTransportMode').value;
+            const gymWalkTime = parseFloat(document.getElementById('gymWalkTime').textContent);
+            const gymBikeTime = parseFloat(document.getElementById('gymBikeTime').textContent);
+            
+            // Update effective time display
+            const effectiveTime = transportMode === 'bike' ? gymBikeTime : gymWalkTime;
+            document.getElementById('gymEffectiveTime').textContent = `(using ${effectiveTime.toFixed(1)} min for score)`;
+            
+            // Save to Google Sheets
+            try {
+                const response = await fetch(`/update_gym_transport_mode/${currentApartmentRow}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        transport_mode: transportMode,
+                        effective_time: effectiveTime
+                    })
+                });
+                
+                if (response.ok) {
+                    // Reload data to update score
+                    await loadApartmentData(currentApartmentRow);
+                    console.log('✓ Gym transport mode updated');
+                } else {
+                    const error = await response.text();
+                    console.error('Failed to update gym transport mode:', error);
+                    alert('Failed to update gym transport mode');
+                }
+            } catch (error) {
+                console.error('Error updating gym transport mode:', error);
+                alert('Error updating gym transport mode');
+            }
+        }
+
         function enableEditing() {
             // Hide view mode, show edit mode
             document.querySelectorAll('.field-value').forEach(el => el.style.display = 'none');
@@ -4732,7 +5203,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        component: 'all',
+                        components: ['all'],
                         addresses: 'all'
                     })
                 });
@@ -4744,50 +5215,171 @@
                     return;
                 }
                 
-                detailsDiv.innerHTML = `
-                    <div class="schema-success">
-                        <p>✅ Cleared computed fields for ${clearData.cleared_count} apartments</p>
-                        <p>📋 Columns cleared: ${clearData.columns.join(', ')}</p>
-                        <p>⏳ Starting analysis...</p>
-                    </div>
-                `;
-                
-                btn.textContent = '🔄 Running analysis...';
+                detailsDiv.innerHTML = `<p>✅ Cleared ${clearData.cleared_count} apartment(s)</p>` +
+                    `<p>⏳ Running analysis (this may take several minutes)...</p>`;
                 
                 // Step 2: Run analysis
-                const analysisResponse = await fetch('/run_analysis', { method: 'POST' });
+                btn.textContent = '🔄 Running analysis...';
+                const analysisResponse = await fetch('/run_analysis', {
+                    method: 'POST'
+                });
+                
                 const analysisData = await analysisResponse.json();
                 
                 if (analysisData.success) {
-                    detailsDiv.innerHTML = `
-                        <div class="schema-success">
-                            <h5>✅ Full Recalculation Complete!</h5>
-                            <p><strong>Cleared:</strong> ${clearData.cleared_count} apartments</p>
-                            <p><strong>Analyzed:</strong> ${analysisData.analyzed} apartments</p>
-                            ${analysisData.failed_count > 0 ? `<p class="error"><strong>Failed:</strong> ${analysisData.failed_count} apartments</p>` : ''}
-                            <p><strong>Message:</strong> ${analysisData.message}</p>
-                            <p>💡 Click the 🔄 Refresh button in the Analysis tab to see updated scores.</p>
-                        </div>
-                    `;
+                    detailsDiv.innerHTML = 
+                        `<p>✅ Cleared ${clearData.cleared_count} apartment(s)</p>` +
+                        `<p>✅ Successfully analyzed ${analysisData.analyzed} apartment(s)</p>` +
+                        `<p><strong>Done!</strong> All data has been recalculated. Refresh the page to see updates.</p>`;
                 } else {
-                    detailsDiv.innerHTML = `
-                        <div class="schema-issue">
-                            <p class="error">⚠️ Cleared data but analysis had issues:</p>
-                            <p>${analysisData.error || analysisData.message}</p>
-                            <p>💡 Try running "Run Analysis" manually from the Analysis tab.</p>
-                        </div>
-                    `;
+                    detailsDiv.innerHTML += `<p class="error">❌ Analysis error: ${analysisData.error}</p>`;
                 }
                 
             } catch (error) {
-                console.error('Error during force recalculation:', error);
-                detailsDiv.innerHTML = `
-                    <p class="error">❌ Error: ${error.message}</p>
-                    <p>Please try running "Run Analysis" manually from the Analysis tab.</p>
-                `;
+                console.error('Error in force recalculation:', error);
+                detailsDiv.innerHTML = `<p class="error">❌ Error: ${error.message}</p>`;
             } finally {
                 btn.disabled = false;
                 btn.textContent = '🔄 Force Full Recalculation';
+            }
+        }
+
+        function toggleRecalcComponents(allCheckbox) {
+            const componentCheckboxes = document.querySelectorAll('.recalc-component');
+            if (allCheckbox.checked) {
+                // Uncheck and disable all other checkboxes when "All" is selected
+                componentCheckboxes.forEach(cb => {
+                    cb.checked = false;
+                    cb.disabled = true;
+                });
+            } else {
+                // Enable all checkboxes when "All" is unchecked
+                componentCheckboxes.forEach(cb => {
+                    cb.disabled = false;
+                });
+            }
+        }
+
+        async function forceSelectedRecalculation() {
+            // Get selected components
+            const allCheckbox = document.getElementById('recalc_all');
+            const componentCheckboxes = document.querySelectorAll('.recalc-component:checked');
+            
+            let components = [];
+            if (allCheckbox.checked) {
+                components = ['all'];
+            } else {
+                components = Array.from(componentCheckboxes).map(cb => cb.value);
+            }
+            
+            if (components.length === 0) {
+                alert('Please select at least one component to recalculate.');
+                return;
+            }
+            
+            // Build confirmation message
+            let componentNames = components.map(c => {
+                const labels = {
+                    'all': 'ALL components (full recalculation)',
+                    'gym': 'Gym (walk/bike times)',
+                    'laundry': 'Laundry',
+                    'parking': 'Parking',
+                    'happening': 'Happening (restaurants/cafes/parks)',
+                    'safety': 'Safety',
+                    'commute': 'Commute',
+                    'wfh': 'WFH Quality'
+                };
+                return labels[c] || c;
+            }).join(', ');
+            
+            const confirmed = confirm(
+                `⚠️ This will clear and recalculate: ${componentNames}\n\n` +
+                'For ALL apartments in your sheet.\n\n' +
+                'Manual entries will be preserved.\n\n' +
+                'Are you sure you want to continue?'
+            );
+            
+            if (!confirmed) return;
+            
+            const btn = document.getElementById('forceRecalcBtn');
+            const statusDiv = document.getElementById('recalcStatus');
+            const detailsDiv = document.getElementById('recalcDetails');
+            
+            btn.disabled = true;
+            btn.textContent = '🔄 Clearing data...';
+            statusDiv.style.display = 'block';
+            detailsDiv.innerHTML = '<p>⏳ Clearing selected components...</p>';
+            
+            // Show stop button
+            const stopBtn = document.getElementById('stopRecalcBtn');
+            stopBtn.style.display = 'inline-block';
+            
+            try {
+                // Step 1: Clear selected components (also runs partial recalc if < 6 components)
+                const clearResponse = await fetch('/admin/force_recalculate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        components: components,
+                        addresses: 'all'
+                    })
+                });
+                
+                const clearData = await clearResponse.json();
+                
+                if (!clearData.success) {
+                    detailsDiv.innerHTML = `<p class="error">❌ Error: ${clearData.error}</p>`;
+                    return;
+                }
+                
+                // Check if it was a partial recalc (completed inline) or needs full analysis
+                if (clearData.message.includes('Recalculated')) {
+                    // Partial recalc completed
+                    detailsDiv.innerHTML = `<p>✅ ${clearData.message}</p>` +
+                        `<p><strong>Done!</strong> Selected components have been recalculated. Refresh the page to see updates.</p>`;
+                } else {
+                    // Full recalc needed - prompt user to run analysis
+                    detailsDiv.innerHTML = `<p>✅ ${clearData.message}</p>` +
+                        `<p>⚠️ Click "Run Analysis" below to complete the full recalculation.</p>`;
+                }
+                
+            } catch (error) {
+                console.error('Error in selective recalculation:', error);
+                detailsDiv.innerHTML = `<p class="error">❌ Error: ${error.message}</p>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔄 Clear Selected & Recalculate';
+                stopBtn.style.display = 'none';
+            }
+        }
+        
+        async function requestShutdown() {
+            const confirmed = confirm(
+                '⚠️ Stop the current analysis?\n\n' +
+                'The current apartment will finish processing, then analysis will stop.\n\n' +
+                'Already processed apartments have been saved.'
+            );
+            
+            if (!confirmed) return;
+            
+            try {
+                const response = await fetch('/admin/request_shutdown', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    const detailsDiv = document.getElementById('recalcDetails');
+                    detailsDiv.innerHTML += `<p>⚠️ ${data.message}</p>`;
+                    
+                    const stopBtn = document.getElementById('stopRecalcBtn');
+                    stopBtn.disabled = true;
+                    stopBtn.textContent = '⏹️ Stopping...';
+                }
+            } catch (error) {
+                console.error('Error requesting shutdown:', error);
+                alert(`Error: ${error.message}`);
             }
         }
         

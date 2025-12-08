@@ -45,13 +45,16 @@ class ApartmentAnalyzer:
             print("3. All dependencies are installed")
             raise
     
-    def analyze_apartment(self, row_data: Dict[str, Any], force_refresh: bool = False) -> Dict[str, Any]:
+    def analyze_apartment(self, row_data: Dict[str, Any], force_refresh: bool = False, 
+                         components_to_recalc: List[str] = None) -> Dict[str, Any]:
         """
         Analyze a single apartment
         
         Args:
             row_data: Row data from Google Sheets (must include basic info)
             force_refresh: Force re-analysis even if cached
+            components_to_recalc: List of components to recalculate (None = all)
+                                 Options: 'gym', 'commute', 'safety', 'happening', 'wfh'
             
         Returns:
             Dictionary with all analysis results
@@ -62,9 +65,23 @@ class ApartmentAnalyzer:
         if not address:
             return {'error': 'No address provided'}
         
-        print(f"\n{'='*80}")
-        print(f"Analyzing: {address}")
-        print(f"{'='*80}")
+        # Determine what to analyze
+        recalc_all = components_to_recalc is None
+        recalc_commute = recalc_all or 'commute' in components_to_recalc
+        recalc_safety = recalc_all or 'safety' in components_to_recalc
+        recalc_happening = recalc_all or 'happening' in components_to_recalc
+        recalc_gym = recalc_all or 'gym' in components_to_recalc
+        recalc_wfh = recalc_all or 'wfh' in components_to_recalc
+        
+        if components_to_recalc:
+            print(f"\n{'='*80}")
+            print(f"Analyzing: {address}")
+            print(f"Components to recalculate: {', '.join(components_to_recalc)}")
+            print(f"{'='*80}")
+        else:
+            print(f"\n{'='*80}")
+            print(f"Analyzing: {address}")
+            print(f"{'='*80}")
         
         result = {}
         
@@ -115,196 +132,315 @@ class ApartmentAnalyzer:
             # Analyze location
             print(f"\n[3/3] Analyzing location...")
             if result['address']:
-                location_data = self.location_analyzer.analyze_location(result['address'])
+                # Only run full location analysis if we need commute or safety data
+                if recalc_commute or recalc_safety:
+                    location_data = self.location_analyzer.analyze_location(result['address'])
+                    
+                    if recalc_commute:
+                        result['commute_duration'] = location_data.get('commute_duration', 999)
+                        result['commute_route'] = location_data.get('commute_route', '')
+                        result['commute_duration_partner'] = location_data.get('commute_duration_partner', 999)
+                        result['route_annoyingness'] = location_data.get('route_annoyingness', 10.0)
+                        commute_details = location_data.get('commute_details', {})
+                        result['commute_details'] = commute_details
+                        result['commute_details_json'] = json.dumps(commute_details) if commute_details else ""
+                    else:
+                        # Preserve existing commute data
+                        result['commute_duration'] = row_data.get(config.SHEET_COLUMNS["commute_time_you"])
+                        result['commute_route'] = row_data.get(config.SHEET_COLUMNS["commute_route"], '')
+                        result['commute_duration_partner'] = row_data.get(config.SHEET_COLUMNS["commute_time_partner"])
+                        result['commute_details'] = row_data.get(config.SHEET_COLUMNS.get("commute_details"))
+                        result['commute_details_json'] = row_data.get(config.SHEET_COLUMNS.get("commute_details_json"), "")
+                    
+                    if recalc_safety:
+                        result['safety_score_opendata'] = location_data.get('safety_score_opendata', 5.0)
+                        result['incident_count'] = location_data.get('incident_count', 0)
+                        result['avg_severity'] = location_data.get('avg_severity')
+                        result['count_score'] = location_data.get('count_score')
+                        result['severity_score'] = location_data.get('severity_score')
+                        crime_details = location_data.get('crime_details')
+                        if crime_details:
+                            result['crime_details'] = crime_details
+                    else:
+                        # Preserve existing safety data
+                        result['safety_score_opendata'] = row_data.get(config.SHEET_COLUMNS["safety_score_opendata"])
+                        result['incident_count'] = row_data.get(config.SHEET_COLUMNS.get("incident_count"))
+                        result['avg_severity'] = row_data.get(config.SHEET_COLUMNS.get("avg_severity"))
+                        result['count_score'] = row_data.get(config.SHEET_COLUMNS.get("count_score"))
+                        result['severity_score'] = row_data.get(config.SHEET_COLUMNS.get("severity_score"))
+                        result['crime_details'] = row_data.get(config.SHEET_COLUMNS.get("crime_details"))
+                    
+                    # Get latitude/longitude for other calculations
+                    result['latitude'] = location_data.get('latitude')
+                    result['longitude'] = location_data.get('longitude')
+                    result['apartment_elevation'] = location_data.get('apartment_elevation')
+                else:
+                    # Just get coordinates without full analysis
+                    coords = self.location_analyzer.geocode_address(result['address'])
+                    if coords:
+                        result['latitude'] = coords[0]
+                        result['longitude'] = coords[1]
+                        result['apartment_elevation'] = self.location_analyzer.get_elevation(coords[0], coords[1])
+                    
+                    # Preserve existing data
+                    result['commute_duration'] = row_data.get(config.SHEET_COLUMNS["commute_time_you"])
+                    result['commute_route'] = row_data.get(config.SHEET_COLUMNS["commute_route"], '')
+                    result['commute_duration_partner'] = row_data.get(config.SHEET_COLUMNS["commute_time_partner"])
+                    result['commute_details'] = row_data.get(config.SHEET_COLUMNS.get("commute_details"))
+                    result['commute_details_json'] = row_data.get(config.SHEET_COLUMNS.get("commute_details_json"), "")
+                    result['safety_score_opendata'] = row_data.get(config.SHEET_COLUMNS["safety_score_opendata"])
+                    result['incident_count'] = row_data.get(config.SHEET_COLUMNS.get("incident_count"))
+                    result['avg_severity'] = row_data.get(config.SHEET_COLUMNS.get("avg_severity"))
+                    result['count_score'] = row_data.get(config.SHEET_COLUMNS.get("count_score"))
+                    result['severity_score'] = row_data.get(config.SHEET_COLUMNS.get("severity_score"))
+                    result['crime_details'] = row_data.get(config.SHEET_COLUMNS.get("crime_details"))
                 
-                result['commute_duration'] = location_data.get('commute_duration', 999)
-                result['commute_route'] = location_data.get('commute_route', '')
-                result['commute_duration_partner'] = location_data.get('commute_duration_partner', 999)
-                result['route_annoyingness'] = location_data.get('route_annoyingness', 10.0)
-                commute_details = location_data.get('commute_details', {})
-                result['commute_details'] = commute_details
-                result['commute_details_json'] = json.dumps(commute_details) if commute_details else ""
-                result['safety_score_opendata'] = location_data.get('safety_score_opendata', 5.0)
-                result['incident_count'] = location_data.get('incident_count', 0)
-                result['avg_severity'] = location_data.get('avg_severity')
-                result['count_score'] = location_data.get('count_score')
-                result['severity_score'] = location_data.get('severity_score')
-                crime_details = location_data.get('crime_details')
-                if crime_details:
-                    result['crime_details'] = crime_details
-                
-                # Get Places of Interest first (to pass names to amenities search)
-                print("📍 Calculating distance to personal places of interest...")
-                places_of_interest = self.sheets_client.get_places_of_interest()
-                poi_names = [place.get('Name', '') for place in places_of_interest] if places_of_interest else []
-                
-                # Get detailed amenity lists (for UI display and exclusion)
-                # Pass POI names to skip Claude verification for places already in your curated list
-                amenities_detailed = self.location_analyzer.get_nearby_amenities(
-                    location_data['latitude'], 
-                    location_data['longitude'],
-                    return_details=True,
-                    poi_names=poi_names
-                )
-                
-                result['restaurants_nearby'] = len(amenities_detailed.get('restaurants', []))
-                result['cafes_nearby'] = len(amenities_detailed.get('cafes', []))
-                result['parks_nearby'] = len(amenities_detailed.get('parks', []))
-                
-                # Store detailed lists as JSON
-                result['restaurants_list'] = json.dumps(amenities_detailed.get('restaurants', []))
-                result['cafes_list'] = json.dumps(amenities_detailed.get('cafes', []))
-                result['parks_list'] = json.dumps(amenities_detailed.get('parks', []))
+                # Happening score - restaurants, cafes, parks
+                if recalc_happening:
+                    # Get Places of Interest first (to pass names to amenities search)
+                    print("📍 Calculating distance to personal places of interest...")
+                    places_of_interest = self.sheets_client.get_places_of_interest()
+                    poi_names = [place.get('Name', '') for place in places_of_interest] if places_of_interest else []
+                    
+                    # Get detailed amenity lists (for UI display and exclusion)
+                    # Pass POI names to skip Claude verification for places already in your curated list
+                    amenities_detailed = self.location_analyzer.get_nearby_amenities(
+                        result['latitude'], 
+                        result['longitude'],
+                        return_details=True,
+                        poi_names=poi_names
+                    )
+                    
+                    result['restaurants_nearby'] = len(amenities_detailed.get('restaurants', []))
+                    result['cafes_nearby'] = len(amenities_detailed.get('cafes', []))
+                    result['parks_nearby'] = len(amenities_detailed.get('parks', []))
+                    
+                    # Store detailed lists as JSON
+                    result['restaurants_list'] = json.dumps(amenities_detailed.get('restaurants', []))
+                    result['cafes_list'] = json.dumps(amenities_detailed.get('cafes', []))
+                    result['parks_list'] = json.dumps(amenities_detailed.get('parks', []))
+                else:
+                    # Preserve existing happening data
+                    result['restaurants_nearby'] = row_data.get(config.SHEET_COLUMNS.get("restaurants_nearby"))
+                    result['cafes_nearby'] = row_data.get(config.SHEET_COLUMNS.get("cafes_nearby"))
+                    result['parks_nearby'] = row_data.get(config.SHEET_COLUMNS.get("parks_nearby"))
+                    result['restaurants_list'] = row_data.get(config.SHEET_COLUMNS.get("restaurants_list"), "[]")
+                    result['cafes_list'] = row_data.get(config.SHEET_COLUMNS.get("cafes_list"), "[]")
+                    result['parks_list'] = row_data.get(config.SHEET_COLUMNS.get("parks_list"), "[]")
                 
                 # Calculate average walking time to places of interest
-                if places_of_interest:
-                    apartment_coords = self.location_analyzer.geocode_address(result.get('address'))
-                    if apartment_coords:
-                        poi_data = self.location_analyzer.get_avg_walk_time_to_places_of_interest(
-                            apartment_coords[0], apartment_coords[1], places_of_interest
-                        )
-                        result['avg_walk_to_poi_mins'] = poi_data['avg_walk_time_mins']
-                        result['nearest_poi_count'] = poi_data['count']
-                        
-                        # Count POIs within 1 mile
-                        pois_within_mile = 0
-                        for place in places_of_interest:
-                            try:
-                                place_lat = float(place.get('Latitude'))
-                                place_lng = float(place.get('Longitude'))
-                                distance_miles = self.location_analyzer._calculate_distance(
-                                    apartment_coords[0], apartment_coords[1],
-                                    place_lat, place_lng
-                                )
-                                if distance_miles <= 1.0:
-                                    pois_within_mile += 1
-                            except (ValueError, TypeError):
-                                continue
-                        result['pois_within_1_mile'] = pois_within_mile
-                        
-                        # Store POI list as JSON for UI display
-                        result['pois_list'] = json.dumps(poi_data['nearest_places'])
-                        
-                        if poi_data['nearest_places']:
-                            print(f"  ✓ Top {poi_data['count']} nearest places (avg: {poi_data['avg_walk_time_mins']:.1f} min):")
-                            for place in poi_data['nearest_places']:
-                                print(f"    • {place['name']}: {place['walk_time_mins']:.1f} min")
-                            print(f"  ✓ POIs within 1 mile: {pois_within_mile}")
+                # (Only if recalculating happening score)
+                if recalc_happening:
+                    places_of_interest = self.sheets_client.get_places_of_interest()
+                    if places_of_interest:
+                        apartment_coords = self.location_analyzer.geocode_address(result.get('address'))
+                        if apartment_coords:
+                            poi_data = self.location_analyzer.get_avg_walk_time_to_places_of_interest(
+                                apartment_coords[0], apartment_coords[1], places_of_interest
+                            )
+                            result['avg_walk_to_poi_mins'] = poi_data['avg_walk_time_mins']
+                            result['nearest_poi_count'] = poi_data['count']
+                            
+                            # Count POIs within 1 mile
+                            pois_within_mile = 0
+                            for place in places_of_interest:
+                                try:
+                                    place_lat = float(place.get('Latitude'))
+                                    place_lng = float(place.get('Longitude'))
+                                    distance_miles = self.location_analyzer._calculate_distance(
+                                        apartment_coords[0], apartment_coords[1],
+                                        place_lat, place_lng
+                                    )
+                                    if distance_miles <= 1.0:
+                                        pois_within_mile += 1
+                                except (ValueError, TypeError):
+                                    continue
+                            result['pois_within_1_mile'] = pois_within_mile
+                            
+                            # Store POI list as JSON for UI display
+                            result['pois_list'] = json.dumps(poi_data['nearest_places'])
+                            
+                            if poi_data['nearest_places']:
+                                print(f"  ✓ Top {poi_data['count']} nearest places (avg: {poi_data['avg_walk_time_mins']:.1f} min):")
+                                for place in poi_data['nearest_places']:
+                                    print(f"    • {place['name']}: {place['walk_time_mins']:.1f} min")
+                                print(f"  ✓ POIs within 1 mile: {pois_within_mile}")
+                            else:
+                                print(f"  ⚠️  No walking times calculated for places of interest")
                         else:
-                            print(f"  ⚠️  No walking times calculated for places of interest")
+                            print(f"  ⚠️  Could not geocode apartment for POI calculation")
+                            result['avg_walk_to_poi_mins'] = None
+                            result['nearest_poi_count'] = 0
+                            result['pois_within_1_mile'] = 0
+                            result['pois_list'] = json.dumps([])
                     else:
-                        print(f"  ⚠️  Could not geocode apartment for POI calculation")
+                        print(f"  ℹ️  No places of interest configured")
                         result['avg_walk_to_poi_mins'] = None
                         result['nearest_poi_count'] = 0
                         result['pois_within_1_mile'] = 0
                         result['pois_list'] = json.dumps([])
                 else:
-                    print(f"  ℹ️  No places of interest configured")
-                    result['avg_walk_to_poi_mins'] = None
-                    result['nearest_poi_count'] = 0
-                    result['pois_within_1_mile'] = 0
-                    result['pois_list'] = json.dumps([])
+                    # Preserve existing POI data
+                    result['avg_walk_to_poi_mins'] = row_data.get(config.SHEET_COLUMNS.get("avg_walk_to_poi_mins"))
+                    result['nearest_poi_count'] = row_data.get(config.SHEET_COLUMNS.get("nearest_poi_count"))
+                    result['pois_within_1_mile'] = row_data.get(config.SHEET_COLUMNS.get("pois_within_1_mile"))
+                    result['pois_list'] = row_data.get(config.SHEET_COLUMNS.get("pois_list"), "[]")
                 
-                # Check if user has pre-selected gyms
-                selected_gyms_str = result.get('selected_gyms', '').strip()
-                print(f"  Selected gyms from sheet: '{selected_gyms_str}'")
-                
-                if selected_gyms_str:
-                    # User has pre-selected gyms - calculate score based on nearest one
-                    print(f"  → Processing {len(selected_gyms_str.split(','))} selected gym(s)")
-                    selected_gym_names = [name.strip() for name in selected_gyms_str.split(',')]
+                # Gym calculation - only if recalculating gym score
+                if recalc_gym:
+                    # Check if user has pre-selected gyms
+                    selected_gyms_str = result.get('selected_gyms', '').strip()
+                    print(f"  Selected gyms from sheet: '{selected_gyms_str}'")
                     
-                    # Get approved gyms sheet to find coordinates
-                    approved_gyms = self.sheets_client.get_approved_gyms()
-                    print(f"  Found {len(approved_gyms)} approved gyms in sheet")
-                    
-                    # Get apartment coordinates
-                    apartment_address = result.get('address')
-                    apartment_coords = self.location_analyzer.geocode_address(apartment_address)
-                    
-                    if not apartment_coords:
-                        print(f"  ⚠️  Could not geocode apartment address: {apartment_address}")
-                        result['gym_within_10min'] = False
-                        result['gym_walk_time_mins'] = None
-                    else:
-                        apartment_lat, apartment_lng = apartment_coords
+                    if selected_gyms_str:
+                        # User has pre-selected gyms - calculate score based on nearest one
+                        print(f"  → Processing {len(selected_gyms_str.split(','))} selected gym(s)")
+                        selected_gym_names = [name.strip() for name in selected_gyms_str.split(',')]
                         
-                        # Build list of selected gyms with their coordinates
-                        selected_gyms_data = []
-                        for gym in approved_gyms:
-                            gym_name = gym.get('Gym Name', '').strip()
-                            if gym_name in selected_gym_names:
-                                # Try to get coords from sheet (Latitude/Longitude columns)
-                                gym_lat = gym.get('Latitude')
-                                gym_lng = gym.get('Longitude')
-                                
-                                # If not in sheet, geocode the address
-                                if not gym_lat or not gym_lng:
-                                    gym_address = gym.get('Address')
-                                    if gym_address:
-                                        gym_coords = self.location_analyzer.geocode_address(gym_address)
-                                        if gym_coords:
-                                            gym_lat, gym_lng = gym_coords
-                                
-                                if gym_lat and gym_lng:
-                                    try:
-                                        # Convert to float if stored as string
-                                        gym_lat = float(gym_lat)
-                                        gym_lng = float(gym_lng)
-                                        selected_gyms_data.append({
-                                            'name': gym_name,
-                                            'lat': gym_lat,
-                                            'lng': gym_lng,
-                                            'rating': gym.get('Rating', 'N/A')
-                                        })
-                                    except (ValueError, TypeError):
-                                        print(f"    ⚠️  Invalid coordinates for {gym_name}: lat={gym_lat}, lng={gym_lng}")
-                                else:
-                                    print(f"    ⚠️  No coordinates found for {gym_name}")
+                        # Get approved gyms sheet to find coordinates
+                        approved_gyms = self.sheets_client.get_approved_gyms()
+                        print(f"  Found {len(approved_gyms)} approved gyms in sheet")
                         
-                        if not selected_gyms_data:
-                            print(f"  ⚠️  Could not find coordinates for any selected gyms")
+                        # Get apartment coordinates
+                        apartment_address = result.get('address')
+                        apartment_coords = self.location_analyzer.geocode_address(apartment_address)
+                        
+                        if not apartment_coords:
+                            print(f"  ⚠️  Could not geocode apartment address: {apartment_address}")
                             result['gym_within_10min'] = False
                             result['gym_walk_time_mins'] = None
+                            result['gym_bike_time_mins'] = None
+                            result['gym_transport_mode'] = None
+                            result['gym_effective_time_mins'] = None
                         else:
-                            # Calculate walking times to all selected gyms
-                            gym_coords_list = [(gym['lat'], gym['lng']) for gym in selected_gyms_data]
-                            walking_times = self.location_analyzer._get_walking_times(
-                                apartment_lat, 
-                                apartment_lng, 
-                                gym_coords_list
-                            )
+                            apartment_lat, apartment_lng = apartment_coords
                             
-                            # Find nearest gym
-                            min_walk_time = float('inf')
-                            nearest_gym = None
+                            # Build list of selected gyms with their coordinates
+                            selected_gyms_data = []
+                            for gym in approved_gyms:
+                                gym_name = gym.get('Gym Name', '').strip()
+                                if gym_name in selected_gym_names:
+                                    # Try to get coords from sheet (Latitude/Longitude columns)
+                                    gym_lat = gym.get('Latitude')
+                                    gym_lng = gym.get('Longitude')
+                                    
+                                    # If not in sheet, geocode the address
+                                    if not gym_lat or not gym_lng:
+                                        gym_address = gym.get('Address')
+                                        if gym_address:
+                                            gym_coords = self.location_analyzer.geocode_address(gym_address)
+                                            if gym_coords:
+                                                gym_lat, gym_lng = gym_coords
+                                    
+                                    if gym_lat and gym_lng:
+                                        try:
+                                            # Convert to float if stored as string
+                                            gym_lat = float(gym_lat)
+                                            gym_lng = float(gym_lng)
+                                            selected_gyms_data.append({
+                                                'name': gym_name,
+                                                'lat': gym_lat,
+                                                'lng': gym_lng,
+                                                'rating': gym.get('Rating', 'N/A')
+                                            })
+                                        except (ValueError, TypeError):
+                                            print(f"    ⚠️  Invalid coordinates for {gym_name}: lat={gym_lat}, lng={gym_lng}")
+                                    else:
+                                        print(f"    ⚠️  No coordinates found for {gym_name}")
                             
-                            for i, gym_data in enumerate(selected_gyms_data):
-                                walk_time_data = walking_times[i]
-                                walk_time = walk_time_data.get('duration_mins')
-                                
-                                if walk_time is not None:
-                                    print(f"    {gym_data['name']}: {walk_time} min walk")
-                                    if walk_time < min_walk_time:
-                                        min_walk_time = walk_time
-                                        nearest_gym = gym_data
-                                else:
-                                    print(f"    ⚠️  {gym_data['name']}: Could not calculate walk time")
-                            
-                            if nearest_gym and min_walk_time != float('inf'):
-                                result['gym_within_10min'] = min_walk_time <= 20  # 20 min walk
-                                result['gym_walk_time_mins'] = min_walk_time  # Store actual walk time for scoring
-                                print(f"  ✓ Nearest selected gym: {nearest_gym['name']} ({min_walk_time:.1f} min walk, rating: {nearest_gym['rating']}, within 20min: {result['gym_within_10min']})")
-                            else:
-                                print(f"  ⚠️  Could not calculate walk times to any selected gyms")
+                            if not selected_gyms_data:
+                                print(f"  ⚠️  Could not find coordinates for any selected gyms")
                                 result['gym_within_10min'] = False
                                 result['gym_walk_time_mins'] = None
+                                result['gym_bike_time_mins'] = None
+                                result['gym_transport_mode'] = None
+                                result['gym_effective_time_mins'] = None
+                            else:
+                                # Calculate walking times to all selected gyms
+                                gym_coords_list = [(gym['lat'], gym['lng']) for gym in selected_gyms_data]
+                                walking_times = self.location_analyzer._get_walking_times(
+                                    apartment_lat, 
+                                    apartment_lng, 
+                                    gym_coords_list
+                                )
+                                
+                                # Find nearest gym by walk time
+                                min_walk_time = float('inf')
+                                nearest_gym = None
+                                nearest_gym_idx = None
+                                
+                                for i, gym_data in enumerate(selected_gyms_data):
+                                    walk_time_data = walking_times[i]
+                                    walk_time = walk_time_data.get('duration_mins')
+                                    
+                                    if walk_time is not None:
+                                        print(f"    {gym_data['name']}: {walk_time} min walk")
+                                        if walk_time < min_walk_time:
+                                            min_walk_time = walk_time
+                                            nearest_gym = gym_data
+                                            nearest_gym_idx = i
+                                    else:
+                                        print(f"    ⚠️  {gym_data['name']}: Could not calculate walk time")
+                                
+                                if nearest_gym and min_walk_time != float('inf'):
+                                    # Check if walking time is >15 min - if so, also calculate biking time
+                                    bike_time = None
+                                    transport_mode = 'walk'
+                                    effective_time = min_walk_time
+                                    
+                                    if min_walk_time > 15.0:
+                                        print(f"  → Gym is >{config.GYM_BIKE_THRESHOLD_MINS} min walk, calculating biking time...")
+                                        biking_times = self.location_analyzer._get_biking_times(
+                                            apartment_lat,
+                                            apartment_lng,
+                                            [gym_coords_list[nearest_gym_idx]]
+                                        )
+                                        
+                                        if biking_times and biking_times[0].get('duration_mins') is not None:
+                                            bike_time = biking_times[0]['duration_mins']
+                                            print(f"    {nearest_gym['name']}: {bike_time} min bike")
+                                            
+                                            # Use biking time for scoring if it's better
+                                            if bike_time < min_walk_time:
+                                                effective_time = bike_time
+                                                transport_mode = 'bike'
+                                                print(f"  → Using biking time for scoring ({bike_time:.1f} min)")
+                                            else:
+                                                print(f"  → Walking is still faster, using walk time ({min_walk_time:.1f} min)")
+                                    
+                                    result['gym_within_10min'] = effective_time <= 20  # 20 min threshold
+                                    result['gym_walk_time_mins'] = min_walk_time  # Always store walk time
+                                    result['gym_bike_time_mins'] = bike_time  # Store bike time if calculated
+                                    result['gym_transport_mode'] = transport_mode  # Store which mode is used for scoring
+                                    result['gym_effective_time_mins'] = effective_time  # Store the time used for scoring
+                                    
+                                    if transport_mode == 'bike':
+                                        print(f"  ✓ Nearest selected gym: {nearest_gym['name']} ({min_walk_time:.1f} min walk, {bike_time:.1f} min bike, using bike for scoring)")
+                                    else:
+                                        print(f"  ✓ Nearest selected gym: {nearest_gym['name']} ({min_walk_time:.1f} min walk, within 20min: {result['gym_within_10min']})")
+                                else:
+                                    print(f"  ⚠️  Could not calculate walk times to any selected gyms")
+                                    result['gym_within_10min'] = False
+                                    result['gym_walk_time_mins'] = None
+                                    result['gym_bike_time_mins'] = None
+                                    result['gym_transport_mode'] = None
+                                    result['gym_effective_time_mins'] = None
+                    else:
+                        # No gyms selected - cannot calculate walk time
+                        print(f"  ⚠️  No gyms selected for this apartment")
+                        print(f"     Please select gyms in the entry form to enable distance-based scoring")
+                        result['gym_within_10min'] = False
+                        result['gym_walk_time_mins'] = None
+                        result['gym_bike_time_mins'] = None
+                        result['gym_transport_mode'] = None
+                        result['gym_effective_time_mins'] = None
                 else:
-                    # No gyms selected - cannot calculate walk time
-                    print(f"  ⚠️  No gyms selected for this apartment")
-                    print(f"     Please select gyms in the entry form to enable distance-based scoring")
-                    result['gym_within_10min'] = False
-                    result['gym_walk_time_mins'] = None
+                    # Not recalculating gym - preserve existing data
+                    result['gym_within_10min'] = row_data.get(config.SHEET_COLUMNS.get("gym_within_10min"))
+                    result['gym_walk_time_mins'] = row_data.get(config.SHEET_COLUMNS.get("gym_walk_time_mins"))
+                    result['gym_bike_time_mins'] = row_data.get(config.SHEET_COLUMNS.get("gym_bike_time_mins"))
+                    result['gym_transport_mode'] = row_data.get(config.SHEET_COLUMNS.get("gym_transport_mode"))
+                    result['gym_effective_time_mins'] = row_data.get(config.SHEET_COLUMNS.get("gym_effective_time_mins"))
                 
                 print(f"✓ Location analysis complete")
                 print(f"  Your commute: {result['commute_duration']} min via {result['commute_route']}")
