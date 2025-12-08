@@ -47,7 +47,7 @@ try:
 except ImportError as e:
     print(f"  ⚠️  Preference routes not available: {e}")
 
-# Initialize clients
+# Initialize clients at module level (so gunicorn can use them)
 sheets_client = None
 location_analyzer = None
 
@@ -69,6 +69,17 @@ def init_clients():
         import traceback
         traceback.print_exc()
         return False
+
+# Initialize clients immediately when module is imported
+# This ensures they're available when gunicorn starts the app
+print("="*80)
+print("INITIALIZING APARTMENT ANALYZER")
+print("="*80)
+if not init_clients():
+    print("✗ Failed to initialize clients. Check credentials and environment variables.")
+    # Don't exit in production - let health check report the issue
+else:
+    print("✓ Clients initialized successfully")
 
 
 def col_index_to_letter(col_idx):
@@ -2582,13 +2593,14 @@ if __name__ == '__main__':
     print("="*80)
     print("APARTMENT ENTRY WEB INTERFACE")
     print("="*80)
-    print("\nInitializing...")
     
-    if not init_clients():
+    # Clients are already initialized at module level
+    # Just verify they're ready
+    if sheets_client is None or location_analyzer is None:
         print("✗ Failed to initialize. Check your credentials and .env file.")
         exit(1)
     
-    print("✓ Clients initialized")
+    print("✓ Clients ready")
     print("\nStarting web server...")
     
     # Check if running on Railway (or other production environments)
