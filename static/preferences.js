@@ -1112,29 +1112,49 @@ async function showEvalDetail(apartmentId) {
     html += '</div>'; // Close evaluation content
     
     // Analysis Content (will be loaded async)
-    html += '<div id="evalDetailAnalysis" class="eval-detail-content hidden"><div class="loading-spinner">Loading apartment details...</div></div>';
+    // Note: don't use 'hidden' class as it has !important and will override 'active'
+    html += '<div id="evalDetailAnalysis" class="eval-detail-content"><div class="loading-spinner">Loading apartment details...</div></div>';
     
     document.getElementById('prefDetailContent').innerHTML = html;
     document.getElementById('prefDetailModal').classList.remove('hidden');
     
     // Load apartment analysis data asynchronously
     try {
-        const response = await fetch('/get_apartment_list');
-        const apartments = await response.json();
+        const response = await fetch('/get_analysis_data');
+        const data = await response.json();
         
-        // Find the apartment by address
-        const apartment = apartments.find(apt => apt.address === apartmentId);
+        console.log('[DEBUG] Fetched analysis data:', data);
+        console.log('[DEBUG] Looking for apartment:', apartmentId);
+        
+        if (!data.success) {
+            throw new Error('Failed to load apartment data');
+        }
+        
+        // Find the apartment by address in the comparison data
+        const apartment = data.comparison.find(apt => apt.address === apartmentId);
+        
+        console.log('[DEBUG] Found apartment:', apartment);
         
         if (apartment) {
             // Build rich detail HTML similar to the Analysis tab
             const analysisHtml = buildApartmentAnalysisHTML(apartment);
             document.getElementById('evalDetailAnalysis').innerHTML = analysisHtml;
         } else {
-            document.getElementById('evalDetailAnalysis').innerHTML = '<p>Apartment details not found.</p>';
+            // Show what apartments are available for debugging
+            const availableAddresses = data.comparison.map(apt => apt.address).join('\n');
+            console.log('[DEBUG] Available addresses:', availableAddresses);
+            document.getElementById('evalDetailAnalysis').innerHTML = `
+                <p>Apartment details not found.</p>
+                <p style="font-size: 12px; color: #666;">Looking for: ${apartmentId}</p>
+                <details style="margin-top: 10px;">
+                    <summary style="cursor: pointer; color: #0066cc;">Show available addresses</summary>
+                    <pre style="font-size: 11px; margin-top: 5px; max-height: 200px; overflow: auto;">${availableAddresses}</pre>
+                </details>
+            `;
         }
     } catch (error) {
         console.error('Error loading apartment analysis:', error);
-        document.getElementById('evalDetailAnalysis').innerHTML = '<p>Error loading apartment details.</p>';
+        document.getElementById('evalDetailAnalysis').innerHTML = `<p>Error loading apartment details: ${error.message}</p>`;
     }
 }
 
@@ -1145,11 +1165,11 @@ function switchEvalDetailTab(tabName) {
     });
     event.target.classList.add('active');
     
-    // Update content
+    // Update content - use 'active' class not 'hidden'
     document.querySelectorAll('.eval-detail-content').forEach(content => {
-        content.classList.add('hidden');
+        content.classList.remove('active');
     });
-    document.getElementById(`evalDetail${tabName.charAt(0).toUpperCase() + tabName.slice(1)}`).classList.remove('hidden');
+    document.getElementById(`evalDetail${tabName.charAt(0).toUpperCase() + tabName.slice(1)}`).classList.add('active');
 }
 
 function buildApartmentAnalysisHTML(apartment) {
@@ -1167,49 +1187,49 @@ function buildApartmentAnalysisHTML(apartment) {
             <div class="score-breakdown">
                 <h4>Score Breakdown</h4>
                 <div class="component-scores" style="display: grid; gap: 12px;">
-                    ${apartment.commute_score !== undefined ? `
+                    ${apartment.commute_score !== undefined && apartment.commute_score !== null ? `
                         <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
                             <span>🚗 Commute</span>
                             <strong>${apartment.commute_score}</strong>
                         </div>
                     ` : ''}
-                    ${apartment.safety_score !== undefined ? `
+                    ${apartment.safety_score !== undefined && apartment.safety_score !== null ? `
                         <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
                             <span>🛡️ Safety</span>
                             <strong>${apartment.safety_score}</strong>
                         </div>
                     ` : ''}
-                    ${apartment.wfh_score !== undefined ? `
+                    ${apartment.wfh_score !== undefined && apartment.wfh_score !== null ? `
                         <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
                             <span>💻 WFH Quality</span>
                             <strong>${apartment.wfh_score}</strong>
                         </div>
                     ` : ''}
-                    ${apartment.happening_score !== undefined ? `
+                    ${apartment.happening_score !== undefined && apartment.happening_score !== null ? `
                         <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
                             <span>🎉 Happening</span>
                             <strong>${apartment.happening_score}</strong>
                         </div>
                     ` : ''}
-                    ${apartment.parking_score !== undefined ? `
+                    ${apartment.parking_score !== undefined && apartment.parking_score !== null ? `
                         <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
                             <span>🅿️ Parking</span>
                             <strong>${apartment.parking_score}</strong>
                         </div>
                     ` : ''}
-                    ${apartment.gym_score !== undefined ? `
+                    ${apartment.gym_score !== undefined && apartment.gym_score !== null ? `
                         <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
                             <span>🏋️ Gym</span>
                             <strong>${apartment.gym_score}</strong>
                         </div>
                     ` : ''}
-                    ${apartment.laundry_score !== undefined ? `
+                    ${apartment.laundry_score !== undefined && apartment.laundry_score !== null ? `
                         <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
                             <span>🧺 Laundry</span>
                             <strong>${apartment.laundry_score}</strong>
                         </div>
                     ` : ''}
-                    ${apartment.space_luxury_score !== undefined ? `
+                    ${apartment.space_luxury_score !== undefined && apartment.space_luxury_score !== null ? `
                         <div style="display: flex; justify-content: space-between; padding: 8px; background: #f5f5f7; border-radius: 6px;">
                             <span>📐 Space & Luxury</span>
                             <strong>${apartment.space_luxury_score}</strong>
@@ -1221,7 +1241,17 @@ function buildApartmentAnalysisHTML(apartment) {
             <div class="key-details" style="margin-top: 20px;">
                 <h4>Key Details</h4>
                 <div style="display: grid; gap: 8px; font-size: 14px;">
-                    <div><strong>Price:</strong> $${apartment.price || 'N/A'}</div>
+                    ${apartment.price !== undefined ? `
+                        <div>
+                            <strong>Total Monthly Cost:</strong> $${apartment.price}
+                            ${apartment.parking_cost > 0 ? `
+                                <div style="margin-left: 20px; font-size: 13px; color: #666;">
+                                    Base Rent: $${apartment.base_price}<br>
+                                    Parking: $${apartment.parking_cost}
+                                </div>
+                            ` : ''}
+                        </div>
+                    ` : ''}
                     <div><strong>Bedrooms:</strong> ${apartment.bedrooms || 'N/A'}</div>
                     <div><strong>Bathrooms:</strong> ${apartment.bathrooms || 'N/A'}</div>
                     <div><strong>Square Feet:</strong> ${apartment.sqft || 'N/A'}</div>

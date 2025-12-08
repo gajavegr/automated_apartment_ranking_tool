@@ -54,6 +54,7 @@ SHEET_COLUMNS = {
     "commute_time_partner": "Commute Time (Partner)",
     "route_annoyingness": "Route Annoyingness (0-10)",
     "commute_details": "Commute Details (JSON)",
+    "commute_score": "Commute Score",
     
     # Safety
     "safety_score_opendata": "Safety Score (OpenData)",

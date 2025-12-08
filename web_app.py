@@ -1349,7 +1349,30 @@ def run_analysis():
                     row_number = apartment.get('_row_number')
                     if row_number:
                         print(f"Writing analysis results to row {row_number}")
-                        sheets_client.write_apartment_data(row_number, result)
+                        
+                        # Rate limiting: Sleep between writes to avoid hitting API limits
+                        import time
+                        time.sleep(1.2)
+                        
+                        # Retry logic with exponential backoff
+                        max_retries = 3
+                        retry_delay = 5
+                        for attempt in range(max_retries):
+                            try:
+                                sheets_client.write_apartment_data(row_number, result)
+                                break  # Success
+                            except Exception as write_error:
+                                error_str = str(write_error)
+                                if 'RATE_LIMIT_EXCEEDED' in error_str or '429' in error_str:
+                                    if attempt < max_retries - 1:
+                                        wait_time = retry_delay * (2 ** attempt)
+                                        print(f"  ⏳ Rate limit hit, waiting {wait_time}s before retry {attempt + 1}/{max_retries}...")
+                                        time.sleep(wait_time)
+                                    else:
+                                        print(f"  ❌ Failed to write after {max_retries} attempts")
+                                        raise
+                                else:
+                                    raise
                     else:
                         print(f"⚠️  Warning: No row number found for apartment: {apartment.get('address')}")
                     results.append(result)
@@ -1413,6 +1436,14 @@ def reanalyze_apartment(row_number):
         
         apartment = all_records[row_number - 2]  # -2 for header and 1-indexing
         apartment['_row_number'] = row_number
+        
+        # Skip apartments that are no longer available
+        availability_status = apartment.get(config.SHEET_COLUMNS.get("availability_status", ""), "").lower()
+        if availability_status in ['rented', 'removed', 'unavailable', 'off market', 'off-market']:
+            return jsonify({
+                'error': f'This apartment is no longer available (Status: {availability_status})',
+                'success': False
+            }), 400
         
         address = apartment.get(config.SHEET_COLUMNS['address'], 'Unknown')
         print(f"Analyzing: {address}")
@@ -1606,9 +1637,16 @@ def get_analysis_data():
                     # Determine data quality
                     is_complete = len(missing_fields) == 0
                     
+                    # Calculate effective price (rent + parking cost)
+                    base_price = float(r.get(config.SHEET_COLUMNS['price'], 0) or 0)
+                    parking_cost = float(r.get(config.SHEET_COLUMNS['parking_cost'], 0) or 0)
+                    effective_price = base_price + parking_cost
+                    
                     scatter_data.append({
                         'address': address,
-                        'price': float(r.get(config.SHEET_COLUMNS['price'], 0) or 0),
+                        'price': effective_price,  # Use effective price for plotting
+                        'base_price': base_price,  # Keep base price for reference
+                        'parking_cost': parking_cost,
                         'score': float(weighted_score),
                         'score_min': float(r.get(config.SHEET_COLUMNS['score_min'], weighted_score) or weighted_score),
                         'score_max': float(r.get(config.SHEET_COLUMNS['score_max'], weighted_score) or weighted_score),
@@ -1623,9 +1661,16 @@ def get_analysis_data():
                     continue
             else:
                 # Apartment has no score - needs analysis
+                # Calculate effective price (rent + parking cost)
+                base_price = float(r.get(config.SHEET_COLUMNS['price'], 0) or 0)
+                parking_cost = float(r.get(config.SHEET_COLUMNS['parking_cost'], 0) or 0)
+                effective_price = base_price + parking_cost
+                
                 unanalyzed_data.append({
                     'address': address,
-                    'price': float(r.get(config.SHEET_COLUMNS['price'], 0) or 0),
+                    'price': effective_price,  # Use effective price for plotting
+                    'base_price': base_price,  # Keep base price for reference
+                    'parking_cost': parking_cost,
                     'score': None,
                     'score_min': None,
                     'score_max': None,
@@ -1654,11 +1699,13 @@ def get_analysis_data():
                 comparison_data.append({
                     'address': apt_data['address'],
                     'row': apt_data['row'],
-                    'price': apt_data['price'],
+                    'price': apt_data['price'],  # This is effective price (rent + parking)
+                    'base_price': apt_data.get('base_price', apt_data['price']),  # Base rent without parking
+                    'parking_cost': apt_data.get('parking_cost', 0),
                     'score': apt_data['score'],
                     'score_min': apt_data['score_min'],
                     'score_max': apt_data['score_max'],
-                    'value_ratio': round(apt_data['score'] / (apt_data['price'] / 1000), 2) if apt_data.get('score') and apt_data['price'] > 0 else 0,  # Score per $1000
+                    'value_ratio': round(apt_data['score'] / (apt_data['price'] / 1000), 2) if apt_data.get('score') and apt_data['price'] > 0 else 0,  # Score per $1000 of effective price
                     'is_complete': apt_data['is_complete'],
                     
                     # Component scores
@@ -2090,6 +2137,7 @@ def admin_force_recalculate():
         is_partial_recalc = 'all' not in components and len(components) < 6
         if is_partial_recalc:
             print(f"\n🔄 Starting partial recalculation for: {', '.join(components)}")
+            print(f"⏱️  Rate limiting enabled: 1.2s delay between writes to avoid API quota (50 writes/min)")
             import sys
             from main import ApartmentAnalyzer
             sys.stdout.flush()
@@ -2110,6 +2158,12 @@ def admin_force_recalculate():
                 if not address:
                     continue
                 
+                # Skip apartments that are no longer available
+                availability_status = record.get(config.SHEET_COLUMNS.get("availability_status", ""), "").lower()
+                if availability_status in ['rented', 'removed', 'unavailable', 'off market', 'off-market']:
+                    print(f"  ⏭️  Skipping {address[:50]} (Status: {availability_status})")
+                    continue
+                
                 # Find row number
                 row_num = None
                 for i, row_address in enumerate(address_col[1:], start=2):
@@ -2118,7 +2172,7 @@ def admin_force_recalculate():
                         break
                 
                 if row_num:
-                    print(f"\n📍 Re-analyzing row {row_num}: {address[:50]}")
+                    print(f"\n📍 Re-analyzing row {row_num}: {address[:50]} ({analyzed_count + 1}/{len(records)})")
                     try:
                         # Reload fresh data after clearing
                         fresh_records = sheets_client.read_main_sheet()
@@ -2129,9 +2183,33 @@ def admin_force_recalculate():
                                                            components_to_recalc=components)
                         
                         if result and 'error' not in result:
-                            sheets_client.write_apartment_data(row_num, result)
-                            analyzed_count += 1
-                            print(f"  ✓ Updated row {row_num}")
+                            # Rate limiting: Google Sheets API allows 60 write requests per minute
+                            # Sleep for 1.2 seconds between writes to stay safely under the limit (50 writes/min)
+                            import time
+                            time.sleep(1.2)
+                            
+                            # Retry logic with exponential backoff for rate limit errors
+                            max_retries = 3
+                            retry_delay = 5
+                            for attempt in range(max_retries):
+                                try:
+                                    sheets_client.write_apartment_data(row_num, result)
+                                    analyzed_count += 1
+                                    print(f"  ✓ Updated row {row_num}")
+                                    break  # Success, exit retry loop
+                                except Exception as write_error:
+                                    error_str = str(write_error)
+                                    if 'RATE_LIMIT_EXCEEDED' in error_str or '429' in error_str:
+                                        if attempt < max_retries - 1:
+                                            wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                                            print(f"  ⏳ Rate limit hit, waiting {wait_time}s before retry {attempt + 1}/{max_retries}...")
+                                            time.sleep(wait_time)
+                                        else:
+                                            print(f"  ❌ Failed to write after {max_retries} attempts due to rate limiting")
+                                            raise
+                                    else:
+                                        # Non-rate-limit error, don't retry
+                                        raise
                         else:
                             print(f"  ⚠️  Analysis failed for row {row_num}: {result.get('error', 'Unknown error')}")
                     except Exception as e:

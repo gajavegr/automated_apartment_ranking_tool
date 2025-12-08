@@ -75,12 +75,15 @@ class LocationAnalyzer:
         response = requests.get(url, params=params, timeout=timeout)
         return response.json()
     
-    def analyze_location(self, address: str) -> Dict[str, Any]:
+    def analyze_location(self, address: str, analyze_commute: bool = True, analyze_safety: bool = True, analyze_amenities: bool = True) -> Dict[str, Any]:
         """
         Complete location analysis for an apartment
         
         Args:
             address: Apartment address
+            analyze_commute: Whether to analyze commute times (default: True)
+            analyze_safety: Whether to analyze safety/crime data (default: True)
+            analyze_amenities: Whether to analyze nearby amenities/restaurants (default: True)
             
         Returns:
             Dictionary with all location analysis results
@@ -100,77 +103,80 @@ class LocationAnalyzer:
             return result
         
         # Commute analysis
-        print(f"\n📍 Analyzing commutes from: {address}")
-        print(f"  Your work: {config.YOUR_WORK_ADDRESS}")
-        print(f"  Partner work: {config.PARTNER_WORK_ADDRESS}")
-        
-        commute_details = {}
-        
-        if not config.YOUR_WORK_ADDRESS or config.YOUR_WORK_ADDRESS == "":
-            print("  ⚠️  YOUR_WORK_ADDRESS not configured in .env file")
-            result['commute_duration'] = 999
-            result['commute_route'] = 'not_configured'
-        else:
-            commute_your_work = self.get_commute(
-                address,
-                config.YOUR_WORK_ADDRESS,
-                mode=config.GOOGLE_MAPS_TRAVEL_MODE,
-                allow_alternatives=True
-            )
-            result['commute_duration'] = commute_your_work.get('duration_mins', 999)
-            result['commute_route'] = commute_your_work.get('route', '')
-            result['route_annoyingness'] = commute_your_work.get('annoyingness', {}).get('score', None)
-            commute_details['driver'] = commute_your_work
-            if 'error' in commute_your_work:
-                result['commute_error'] = commute_your_work['error']
-        
-        if not config.PARTNER_WORK_ADDRESS or config.PARTNER_WORK_ADDRESS == "":
-            print("  ⚠️  PARTNER_WORK_ADDRESS not configured in .env file")
-            result['commute_duration_partner'] = 999
-        else:
-            commute_partner_work = self.get_commute(
-                address,
-                config.PARTNER_WORK_ADDRESS,
-                mode=config.PARTNER_COMMUTE_MODE,
-                allow_alternatives=False,
-                fallback_modes=[config.PARTNER_COMMUTE_FALLBACK_MODE] if config.PARTNER_COMMUTE_FALLBACK_MODE else None
-            )
-            result['commute_duration_partner'] = commute_partner_work.get('duration_mins', 999)
-            commute_details['partner'] = commute_partner_work
-            if 'error' in commute_partner_work:
-                result['commute_partner_error'] = commute_partner_work['error']
-        
-        result['commute_details'] = commute_details
-        
-        # Calculate elevation gain to work (for hill access penalty)
-        work_coords = self.geocode_address(config.YOUR_WORK_ADDRESS)
-        if work_coords and result.get('apartment_elevation') is not None:
-            work_elev_data = self.calculate_elevation_gain(coords, work_coords)
-            result['elevation_to_work'] = work_elev_data['elevation_gain']
-            result['on_steep_hill_from_work'] = work_elev_data['is_steep_hill']
+        if analyze_commute:
+            print(f"\n📍 Analyzing commutes from: {address}")
+            print(f"  Your work: {config.YOUR_WORK_ADDRESS}")
+            print(f"  Partner work: {config.PARTNER_WORK_ADDRESS}")
+            
+            commute_details = {}
+            
+            if not config.YOUR_WORK_ADDRESS or config.YOUR_WORK_ADDRESS == "":
+                print("  ⚠️  YOUR_WORK_ADDRESS not configured in .env file")
+                result['commute_duration'] = 999
+                result['commute_route'] = 'not_configured'
+            else:
+                commute_your_work = self.get_commute(
+                    address,
+                    config.YOUR_WORK_ADDRESS,
+                    mode=config.GOOGLE_MAPS_TRAVEL_MODE,
+                    allow_alternatives=True
+                )
+                result['commute_duration'] = commute_your_work.get('duration_mins', 999)
+                result['commute_route'] = commute_your_work.get('route', '')
+                result['route_annoyingness'] = commute_your_work.get('annoyingness', {}).get('score', None)
+                commute_details['driver'] = commute_your_work
+                if 'error' in commute_your_work:
+                    result['commute_error'] = commute_your_work['error']
+            
+            if not config.PARTNER_WORK_ADDRESS or config.PARTNER_WORK_ADDRESS == "":
+                print("  ⚠️  PARTNER_WORK_ADDRESS not configured in .env file")
+                result['commute_duration_partner'] = 999
+            else:
+                commute_partner_work = self.get_commute(
+                    address,
+                    config.PARTNER_WORK_ADDRESS,
+                    mode=config.PARTNER_COMMUTE_MODE,
+                    allow_alternatives=False,
+                    fallback_modes=[config.PARTNER_COMMUTE_FALLBACK_MODE] if config.PARTNER_COMMUTE_FALLBACK_MODE else None
+                )
+                result['commute_duration_partner'] = commute_partner_work.get('duration_mins', 999)
+                commute_details['partner'] = commute_partner_work
+                if 'error' in commute_partner_work:
+                    result['commute_partner_error'] = commute_partner_work['error']
+            
+            result['commute_details'] = commute_details
+            
+            # Calculate elevation gain to work (for hill access penalty)
+            work_coords = self.geocode_address(config.YOUR_WORK_ADDRESS)
+            if work_coords and result.get('apartment_elevation') is not None:
+                work_elev_data = self.calculate_elevation_gain(coords, work_coords)
+                result['elevation_to_work'] = work_elev_data['elevation_gain']
+                result['on_steep_hill_from_work'] = work_elev_data['is_steep_hill']
         
         # Safety analysis
-        safety_data = self.get_safety_score(coords[0], coords[1])
-        result['safety_score_opendata'] = safety_data.get('safety_score', 5.0)
-        result['crime_incidents'] = safety_data.get('incident_count', 0)
-        
-        # Store detailed crime data as JSON for the sheet
-        crime_details = {
-            'incident_count': safety_data.get('incident_count', 0),
-            'avg_severity': safety_data.get('avg_severity', 0),
-            'count_score': safety_data.get('count_score'),
-            'severity_score': safety_data.get('severity_score'),
-            'incident_categories': safety_data.get('incident_categories', {}),
-            'search_radius_miles': 0.25,
-            'baseline_incidents': 500
-        }
-        result['crime_details'] = crime_details
+        if analyze_safety:
+            safety_data = self.get_safety_score(coords[0], coords[1])
+            result['safety_score_opendata'] = safety_data.get('safety_score', 5.0)
+            result['crime_incidents'] = safety_data.get('incident_count', 0)
+            
+            # Store detailed crime data as JSON for the sheet
+            crime_details = {
+                'incident_count': safety_data.get('incident_count', 0),
+                'avg_severity': safety_data.get('avg_severity', 0),
+                'count_score': safety_data.get('count_score'),
+                'severity_score': safety_data.get('severity_score'),
+                'incident_categories': safety_data.get('incident_categories', {}),
+                'search_radius_miles': 0.25,
+                'baseline_incidents': 500
+            }
+            result['crime_details'] = crime_details
         
         # Nearby amenities
-        amenities = self.get_nearby_amenities(coords[0], coords[1])
-        result['restaurants_nearby'] = amenities.get('restaurants', 0)
-        result['cafes_nearby'] = amenities.get('cafes', 0)
-        result['parks_nearby'] = amenities.get('parks', 0)
+        if analyze_amenities:
+            amenities = self.get_nearby_amenities(coords[0], coords[1])
+            result['restaurants_nearby'] = amenities.get('restaurants', 0)
+            result['cafes_nearby'] = amenities.get('cafes', 0)
+            result['parks_nearby'] = amenities.get('parks', 0)
         
         # Gym analysis
         gym_data = self.find_nearby_gyms(coords[0], coords[1])

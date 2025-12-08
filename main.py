@@ -66,12 +66,25 @@ class ApartmentAnalyzer:
             return {'error': 'No address provided'}
         
         # Determine what to analyze
-        recalc_all = components_to_recalc is None
+        recalc_all = components_to_recalc is None or 'all' in (components_to_recalc or [])
         recalc_commute = recalc_all or 'commute' in components_to_recalc
         recalc_safety = recalc_all or 'safety' in components_to_recalc
         recalc_happening = recalc_all or 'happening' in components_to_recalc
         recalc_gym = recalc_all or 'gym' in components_to_recalc
         recalc_wfh = recalc_all or 'wfh' in components_to_recalc
+        recalc_space_luxury = recalc_all or 'space_luxury' in components_to_recalc
+        
+        # Note: space_luxury doesn't need special handling - it's always calculated from existing data
+        
+        # Debug logging
+        print(f"\n  Recalc flags:")
+        print(f"    recalc_all: {recalc_all}")
+        print(f"    recalc_commute: {recalc_commute}")
+        print(f"    recalc_safety: {recalc_safety}")
+        print(f"    recalc_happening: {recalc_happening}")
+        print(f"    recalc_gym: {recalc_gym}")
+        print(f"    recalc_wfh: {recalc_wfh}")
+        print(f"    recalc_space_luxury: {recalc_space_luxury}")
         
         if components_to_recalc:
             print(f"\n{'='*80}")
@@ -134,7 +147,12 @@ class ApartmentAnalyzer:
             if result['address']:
                 # Only run full location analysis if we need commute or safety data
                 if recalc_commute or recalc_safety:
-                    location_data = self.location_analyzer.analyze_location(result['address'])
+                    location_data = self.location_analyzer.analyze_location(
+                        result['address'],
+                        analyze_commute=recalc_commute,
+                        analyze_safety=recalc_safety,
+                        analyze_amenities=False  # We handle amenities separately in the happening block
+                    )
                     
                     if recalc_commute:
                         result['commute_duration'] = location_data.get('commute_duration', 999)
@@ -443,12 +461,15 @@ class ApartmentAnalyzer:
                     result['gym_effective_time_mins'] = row_data.get(config.SHEET_COLUMNS.get("gym_effective_time_mins"))
                 
                 print(f"✓ Location analysis complete")
-                print(f"  Your commute: {result['commute_duration']} min via {result['commute_route']}")
-                print(f"  Partner commute: {result['commute_duration_partner']} min")
-                if result.get('route_annoyingness') is not None:
-                    print(f"  Route annoyingness: {result['route_annoyingness']:.1f}/10")
-                print(f"  Safety score: {result['safety_score_opendata']:.1f}/10")
-                print(f"  Amenities: {result['restaurants_nearby']} restaurants, {result['cafes_nearby']} cafes")
+                if recalc_commute:
+                    print(f"  Your commute: {result['commute_duration']} min via {result['commute_route']}")
+                    print(f"  Partner commute: {result['commute_duration_partner']} min")
+                    if result.get('route_annoyingness') is not None:
+                        print(f"  Route annoyingness: {result['route_annoyingness']:.1f}/10")
+                if recalc_safety:
+                    print(f"  Safety score: {result['safety_score_opendata']:.1f}/10")
+                if recalc_happening:
+                    print(f"  Amenities: {result['restaurants_nearby']} restaurants, {result['cafes_nearby']} cafes")
             else:
                 print("⚠ No address available, skipping location analysis")
             
@@ -514,16 +535,20 @@ class ApartmentAnalyzer:
             result['parking_score'] = scorecard.components['parking'].raw_value
             result['laundry_score'] = scorecard.components['laundry'].raw_value
             result['gym_score'] = scorecard.components['gym_nearby'].raw_value
+            result['commute_score'] = scorecard.components['commute'].raw_value
+            result['space_luxury_score'] = scorecard.components['space_luxury'].raw_value
             
             # Prepare JSON fields for sheet storage (already serialized at line 126, don't overwrite!)
             # commute_details_json was already set at line 126
             # crime_details needs to be serialized to JSON
             if 'crime_details' in result:
                 result['crime_details_json'] = json.dumps(result['crime_details']) if result['crime_details'] else ""
-                try:
-                    print(f"  -> Crime details prepared ({result['address']}): {json.dumps(result['crime_details'])[:200]}...")
-                except Exception as json_err:
-                    print(f"  ⚠ Failed to serialize crime details for {result['address']}: {json_err}")
+                # Only log if this was actually recalculated (not preserved data)
+                if recalc_safety:
+                    try:
+                        print(f"  -> Crime details recalculated ({result['address']}): {json.dumps(result['crime_details'])[:200]}...")
+                    except Exception as json_err:
+                        print(f"  ⚠ Failed to serialize crime details for {result['address']}: {json_err}")
             
             # Evaluate ideal criteria
             criteria_met = scorecard.evaluate_ideal_criteria()

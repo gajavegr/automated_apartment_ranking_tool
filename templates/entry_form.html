@@ -1359,6 +1359,10 @@
                                     <input type="checkbox" class="recalc-component" value="wfh">
                                     <span>💻 WFH Quality</span>
                                 </label>
+                                <label style="display: flex; align-items: center; gap: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px; cursor: pointer;">
+                                    <input type="checkbox" class="recalc-component" value="space_luxury">
+                                    <span>🏠 Space & Luxury</span>
+                                </label>
                             </div>
                         </div>
                         
@@ -1383,8 +1387,9 @@
                                 <li><strong>Parking:</strong> Parking scores only</li>
                                 <li><strong>Happening:</strong> Restaurant/cafe/park data (use after excluding places)</li>
                                 <li><strong>Safety:</strong> Crime scores and safety ratings</li>
-                                <li><strong>Commute:</strong> Commute times and routes</li>
+                                <li><strong>Commute:</strong> Commute times, routes, and commute scores</li>
                                 <li><strong>WFH:</strong> Work from home quality scores</li>
+                                <li><strong>Space & Luxury:</strong> Space and luxury scores (square footage, amenities)</li>
                                 <li><strong>All:</strong> Complete recalculation (use when scoring methodology changes)</li>
                             </ul>
                             <strong>⚠️ Note:</strong> Manual entries (ratings, types, etc.) will NOT be cleared.
@@ -3138,9 +3143,15 @@
                                     const apt = scatterData[context.dataIndex];
                                     const labels = [
                                         apt.address,
-                                        `Price: $${apt.price}`,
-                                        `Score: ${apt.score.toFixed(1)}`
+                                        `Total: $${apt.price}`
                                     ];
+                                    
+                                    // Show price breakdown if parking cost exists
+                                    if (apt.parking_cost > 0) {
+                                        labels.push(`  (Rent: $${apt.base_price}, Parking: $${apt.parking_cost})`);
+                                    }
+                                    
+                                    labels.push(`Score: ${apt.score.toFixed(1)}`);
                                     
                                     if (apt.score_min && apt.score_max && apt.score_min !== apt.score_max) {
                                         labels.push(`Range: ${apt.score_min.toFixed(1)} - ${apt.score_max.toFixed(1)}`);
@@ -3169,7 +3180,7 @@
                         x: {
                             title: {
                                 display: true,
-                                text: 'Monthly Rent ($)'
+                                text: 'Total Monthly Cost (Rent + Parking) ($)'
                             }
                         },
                         y: {
@@ -3288,7 +3299,11 @@
                             <tr class="apartment-row" onclick="showDetailPanel(${apt.row})" data-row="${apt.row}" ${rowStyle}>
                                 <td>${rankDisplay}</td>
                                 <td>${statusIcon}${apt.address}${tourIcon}</td>
-                                <td>$${apt.price}</td>
+                                <td>
+                                    <span style="cursor: help;" title="${apt.parking_cost > 0 ? `Rent: $${apt.base_price}\nParking: $${apt.parking_cost}\nTotal: $${apt.price}` : `Total: $${apt.price}`}">
+                                        $${apt.price}${apt.parking_cost > 0 ? '*' : ''}
+                                    </span>
+                                </td>
                                 <td>${scoreDisplay}</td>
                                 <td>
                                     <button class="btn-small" onclick="event.stopPropagation(); showDetailPanel(${apt.row})">View</button>
@@ -3305,6 +3320,8 @@
                     <span style="margin-left: 15px;"><span style="color: #dc3545;">▲</span> Incomplete (hover for details)</span>
                     <span style="margin-left: 15px;"><span style="color: #6c757d;">⭕</span> Not Analyzed (click Reanalyze)</span>
                     <span style="margin-left: 15px;"><span style="color: #0066cc;">ℹ️</span> Tour Questions</span>
+                    <br>
+                    <span style="margin-top: 5px; display: inline-block;">* = Includes parking cost (hover for breakdown)</span>
                 </div>
             `;
             
