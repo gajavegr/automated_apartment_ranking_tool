@@ -389,15 +389,18 @@ class LaundryScore(ScoreComponent):
 
 @dataclass
 class GymScore(ScoreComponent):
-    """Gym availability score - scaled by walking time only"""
+    """Gym availability score - scaled by travel time (walk or bike)"""
     gym_within_10min: bool = False  # Legacy field, kept for display
-    gym_walk_time_mins: Optional[float] = None  # Actual walking time in minutes - PRIMARY scoring factor
+    gym_walk_time_mins: Optional[float] = None  # Walking time in minutes
+    gym_bike_time_mins: Optional[float] = None  # Biking time in minutes (if calculated)
+    gym_transport_mode: Optional[str] = None  # 'walk' or 'bike' - user's preferred mode
+    gym_effective_time_mins: Optional[float] = None  # The time used for scoring based on transport_mode
     elevation_gain_to_gym: Optional[float] = None
     office_gym_only: bool = False
     
     def calculate(self, config_data: dict, **kwargs) -> float:
         """
-        Calculate gym score based ONLY on walking time.
+        Calculate gym score based on travel time (walk or bike based on user preference).
         Quality/rating is ignored since gyms are hand-picked by user.
         Score scales smoothly from 10 (0 min) to 0 (20+ min).
         """
@@ -405,7 +408,9 @@ class GymScore(ScoreComponent):
         
         print(f"    [GymScore.calculate] Input values:")
         print(f"      gym_walk_time_mins: {self.gym_walk_time_mins}")
-        print(f"      gym_within_10min: {self.gym_within_10min}")
+        print(f"      gym_bike_time_mins: {self.gym_bike_time_mins}")
+        print(f"      gym_transport_mode: {self.gym_transport_mode}")
+        print(f"      gym_effective_time_mins: {self.gym_effective_time_mins}")
         print(f"      office_gym_only: {self.office_gym_only}")
         
         # If only office gym is available, apply negative score
@@ -414,6 +419,8 @@ class GymScore(ScoreComponent):
             self.details.update({
                 "gym_within_10min": False,
                 "gym_walk_time_mins": None,
+                "gym_bike_time_mins": None,
+                "gym_transport_mode": None,
                 "office_gym_only": True,
                 "note": "No suitable nearby gyms - office gym only"
             })
@@ -421,33 +428,47 @@ class GymScore(ScoreComponent):
             print(f"      → Using office_gym_only: score = {score}")
             return self.raw_value
         
-        # Scale score based on walking time ONLY
-        if self.gym_walk_time_mins is not None:
+        # Use effective time (based on transport mode) for scoring
+        time_for_scoring = self.gym_effective_time_mins if self.gym_effective_time_mins is not None else self.gym_walk_time_mins
+        
+        if time_for_scoring is not None:
             # Linear scale: 0 min = 10 points, 20 min = 0 points
             max_acceptable_mins = 20.0
             
-            if self.gym_walk_time_mins <= 0:
+            if time_for_scoring <= 0:
                 score = 10.0
-            elif self.gym_walk_time_mins >= max_acceptable_mins:
+            elif time_for_scoring >= max_acceptable_mins:
                 score = 0.0
             else:
-                # Linear interpolation based on walking time
-                score = 10.0 * (1.0 - (self.gym_walk_time_mins / max_acceptable_mins))
+                # Linear interpolation based on travel time
+                score = 10.0 * (1.0 - (time_for_scoring / max_acceptable_mins))
+            
+            # Build scoring method description
+            if self.gym_transport_mode == 'bike' and self.gym_bike_time_mins is not None:
+                scoring_desc = f"Biking: {round(self.gym_bike_time_mins, 1)} min = {round(score, 1)}/10"
+            else:
+                scoring_desc = f"Walking: {round(time_for_scoring, 1)} min = {round(score, 1)}/10"
             
             self.details.update({
-                "gym_walk_time_mins": round(self.gym_walk_time_mins, 1),
-                "gym_within_10min": self.gym_walk_time_mins <= max_acceptable_mins,
-                "scoring_method": f"Distance-only: {round(self.gym_walk_time_mins, 1)} min walk = {round(score, 1)}/10"
+                "gym_walk_time_mins": round(self.gym_walk_time_mins, 1) if self.gym_walk_time_mins else None,
+                "gym_bike_time_mins": round(self.gym_bike_time_mins, 1) if self.gym_bike_time_mins else None,
+                "gym_transport_mode": self.gym_transport_mode or 'walk',
+                "gym_effective_time_mins": round(time_for_scoring, 1),
+                "gym_within_10min": time_for_scoring <= max_acceptable_mins,
+                "scoring_method": scoring_desc
             })
-            print(f"      → Distance-only scoring: walk_time={self.gym_walk_time_mins} min, score = {score:.1f}")
+            print(f"      → Scoring: {self.gym_transport_mode or 'walk'} time={time_for_scoring} min, score = {score:.1f}")
         else:
-            # Fallback: if no walk time, assume no suitable gym
+            # Fallback: if no time data, assume no suitable gym
             score = 0.0
-            print(f"      → No walk time data, assuming no suitable gym: score = {score}")
+            print(f"      → No travel time data, assuming no suitable gym: score = {score}")
             
             self.details.update({
                 "gym_within_10min": False,
-                "note": "No walking time data available - needs recalculation"
+                "gym_walk_time_mins": None,
+                "gym_bike_time_mins": None,
+                "gym_transport_mode": None,
+                "note": "No travel time data available - needs recalculation"
             })
         
         self.raw_value = max(0.0, min(10.0, score))
@@ -1032,6 +1053,9 @@ def build_scorecard(apartment_data: Dict[str, Any]) -> ApartmentScoreCard:
         weight=config.SCORE_COMPONENTS["gym_nearby"]["weight"],
         gym_within_10min=apartment_data.get("gym_within_10min", False),
         gym_walk_time_mins=apartment_data.get("gym_walk_time_mins"),
+        gym_bike_time_mins=apartment_data.get("gym_bike_time_mins"),
+        gym_transport_mode=apartment_data.get("gym_transport_mode"),
+        gym_effective_time_mins=apartment_data.get("gym_effective_time_mins"),
         elevation_gain_to_gym=apartment_data.get("elevation_to_gym"),
         office_gym_only=apartment_data.get("office_gym_only", False),
     )

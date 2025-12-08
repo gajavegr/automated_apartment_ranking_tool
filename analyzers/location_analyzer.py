@@ -9,6 +9,8 @@ Analyzes:
 
 import os
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from typing import Dict, Any, List, Optional, Tuple, Union
 from datetime import datetime, timedelta
 import time
@@ -38,6 +40,26 @@ class LocationAnalyzer:
         self.sheets_client = sheets_client
         self._excluded_places_cache = None
         self._excluded_places_cache_time = None
+        self.http_session = self._init_http_session()
+    
+    def _init_http_session(self) -> requests.Session:
+        """Create a shared HTTP session with retries for transient failures"""
+        session = requests.Session()
+        
+        retries = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=frozenset(["GET"])
+        )
+        
+        adapter = HTTPAdapter(max_retries=retries)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        
+        # Helpful User-Agent for debugging traffic in logs/trace tools
+        session.headers.update({"User-Agent": "ApartmentAnalyzer/1.0"})
+        return session
     
     def _get_excluded_places(self) -> List[str]:
         """Get list of excluded place IDs with caching"""
@@ -59,7 +81,7 @@ class LocationAnalyzer:
         
         return []
     
-    def _make_places_api_request(self, url: str, params: dict, timeout: int = 10) -> dict:
+    def _make_places_api_request(self, url: str, params: dict, timeout: int = 10, service: str = 'google_places') -> dict:
         """
         Make a rate-limited request to Google Places API
         
@@ -67,20 +89,29 @@ class LocationAnalyzer:
             url: API endpoint URL
             params: Request parameters
             timeout: Request timeout in seconds
+            service: Rate limiter bucket to use
             
         Returns:
             JSON response data
         """
-        self.rate_limiter.wait_if_needed('google_places')
-        response = requests.get(url, params=params, timeout=timeout)
-        return response.json()
+        self.rate_limiter.wait_if_needed(service)
+        try:
+            response = self.http_session.get(url, params=params, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"  ⚠️  Places API request failed ({service}): {e}")
+            return {'status': 'ERROR', 'error': str(e)}
     
-    def analyze_location(self, address: str) -> Dict[str, Any]:
+    def analyze_location(self, address: str, analyze_commute: bool = True, analyze_safety: bool = True, analyze_amenities: bool = True) -> Dict[str, Any]:
         """
         Complete location analysis for an apartment
         
         Args:
             address: Apartment address
+            analyze_commute: Whether to analyze commute times (default: True)
+            analyze_safety: Whether to analyze safety/crime data (default: True)
+            analyze_amenities: Whether to analyze nearby amenities/restaurants (default: True)
             
         Returns:
             Dictionary with all location analysis results
@@ -100,77 +131,80 @@ class LocationAnalyzer:
             return result
         
         # Commute analysis
-        print(f"\n📍 Analyzing commutes from: {address}")
-        print(f"  Your work: {config.YOUR_WORK_ADDRESS}")
-        print(f"  Partner work: {config.PARTNER_WORK_ADDRESS}")
-        
-        commute_details = {}
-        
-        if not config.YOUR_WORK_ADDRESS or config.YOUR_WORK_ADDRESS == "":
-            print("  ⚠️  YOUR_WORK_ADDRESS not configured in .env file")
-            result['commute_duration'] = 999
-            result['commute_route'] = 'not_configured'
-        else:
-            commute_your_work = self.get_commute(
-                address,
-                config.YOUR_WORK_ADDRESS,
-                mode=config.GOOGLE_MAPS_TRAVEL_MODE,
-                allow_alternatives=True
-            )
-            result['commute_duration'] = commute_your_work.get('duration_mins', 999)
-            result['commute_route'] = commute_your_work.get('route', '')
-            result['route_annoyingness'] = commute_your_work.get('annoyingness', {}).get('score', None)
-            commute_details['driver'] = commute_your_work
-            if 'error' in commute_your_work:
-                result['commute_error'] = commute_your_work['error']
-        
-        if not config.PARTNER_WORK_ADDRESS or config.PARTNER_WORK_ADDRESS == "":
-            print("  ⚠️  PARTNER_WORK_ADDRESS not configured in .env file")
-            result['commute_duration_partner'] = 999
-        else:
-            commute_partner_work = self.get_commute(
-                address,
-                config.PARTNER_WORK_ADDRESS,
-                mode=config.PARTNER_COMMUTE_MODE,
-                allow_alternatives=False,
-                fallback_modes=[config.PARTNER_COMMUTE_FALLBACK_MODE] if config.PARTNER_COMMUTE_FALLBACK_MODE else None
-            )
-            result['commute_duration_partner'] = commute_partner_work.get('duration_mins', 999)
-            commute_details['partner'] = commute_partner_work
-            if 'error' in commute_partner_work:
-                result['commute_partner_error'] = commute_partner_work['error']
-        
-        result['commute_details'] = commute_details
-        
-        # Calculate elevation gain to work (for hill access penalty)
-        work_coords = self.geocode_address(config.YOUR_WORK_ADDRESS)
-        if work_coords and result.get('apartment_elevation') is not None:
-            work_elev_data = self.calculate_elevation_gain(coords, work_coords)
-            result['elevation_to_work'] = work_elev_data['elevation_gain']
-            result['on_steep_hill_from_work'] = work_elev_data['is_steep_hill']
+        if analyze_commute:
+            print(f"\n📍 Analyzing commutes from: {address}")
+            print(f"  Your work: {config.YOUR_WORK_ADDRESS}")
+            print(f"  Partner work: {config.PARTNER_WORK_ADDRESS}")
+            
+            commute_details = {}
+            
+            if not config.YOUR_WORK_ADDRESS or config.YOUR_WORK_ADDRESS == "":
+                print("  ⚠️  YOUR_WORK_ADDRESS not configured in .env file")
+                result['commute_duration'] = 999
+                result['commute_route'] = 'not_configured'
+            else:
+                commute_your_work = self.get_commute(
+                    address,
+                    config.YOUR_WORK_ADDRESS,
+                    mode=config.GOOGLE_MAPS_TRAVEL_MODE,
+                    allow_alternatives=True
+                )
+                result['commute_duration'] = commute_your_work.get('duration_mins', 999)
+                result['commute_route'] = commute_your_work.get('route', '')
+                result['route_annoyingness'] = commute_your_work.get('annoyingness', {}).get('score', None)
+                commute_details['driver'] = commute_your_work
+                if 'error' in commute_your_work:
+                    result['commute_error'] = commute_your_work['error']
+            
+            if not config.PARTNER_WORK_ADDRESS or config.PARTNER_WORK_ADDRESS == "":
+                print("  ⚠️  PARTNER_WORK_ADDRESS not configured in .env file")
+                result['commute_duration_partner'] = 999
+            else:
+                commute_partner_work = self.get_commute(
+                    address,
+                    config.PARTNER_WORK_ADDRESS,
+                    mode=config.PARTNER_COMMUTE_MODE,
+                    allow_alternatives=False,
+                    fallback_modes=[config.PARTNER_COMMUTE_FALLBACK_MODE] if config.PARTNER_COMMUTE_FALLBACK_MODE else None
+                )
+                result['commute_duration_partner'] = commute_partner_work.get('duration_mins', 999)
+                commute_details['partner'] = commute_partner_work
+                if 'error' in commute_partner_work:
+                    result['commute_partner_error'] = commute_partner_work['error']
+            
+            result['commute_details'] = commute_details
+            
+            # Calculate elevation gain to work (for hill access penalty)
+            work_coords = self.geocode_address(config.YOUR_WORK_ADDRESS)
+            if work_coords and result.get('apartment_elevation') is not None:
+                work_elev_data = self.calculate_elevation_gain(coords, work_coords)
+                result['elevation_to_work'] = work_elev_data['elevation_gain']
+                result['on_steep_hill_from_work'] = work_elev_data['is_steep_hill']
         
         # Safety analysis
-        safety_data = self.get_safety_score(coords[0], coords[1])
-        result['safety_score_opendata'] = safety_data.get('safety_score', 5.0)
-        result['crime_incidents'] = safety_data.get('incident_count', 0)
-        
-        # Store detailed crime data as JSON for the sheet
-        crime_details = {
-            'incident_count': safety_data.get('incident_count', 0),
-            'avg_severity': safety_data.get('avg_severity', 0),
-            'count_score': safety_data.get('count_score'),
-            'severity_score': safety_data.get('severity_score'),
-            'incident_categories': safety_data.get('incident_categories', {}),
-            'search_radius_miles': 0.25,
-            'baseline_incidents': 500
-        }
-        result['crime_details'] = crime_details
+        if analyze_safety:
+            safety_data = self.get_safety_score(coords[0], coords[1])
+            result['safety_score_opendata'] = safety_data.get('safety_score', 5.0)
+            result['crime_incidents'] = safety_data.get('incident_count', 0)
+            
+            # Store detailed crime data as JSON for the sheet
+            crime_details = {
+                'incident_count': safety_data.get('incident_count', 0),
+                'avg_severity': safety_data.get('avg_severity', 0),
+                'count_score': safety_data.get('count_score'),
+                'severity_score': safety_data.get('severity_score'),
+                'incident_categories': safety_data.get('incident_categories', {}),
+                'search_radius_miles': 0.25,
+                'baseline_incidents': 500
+            }
+            result['crime_details'] = crime_details
         
         # Nearby amenities
-        amenities = self.get_nearby_amenities(coords[0], coords[1])
-        result['restaurants_nearby'] = amenities.get('restaurants', 0)
-        result['cafes_nearby'] = amenities.get('cafes', 0)
-        result['parks_nearby'] = amenities.get('parks', 0)
+        if analyze_amenities:
+            amenities = self.get_nearby_amenities(coords[0], coords[1])
+            result['restaurants_nearby'] = amenities.get('restaurants', 0)
+            result['cafes_nearby'] = amenities.get('cafes', 0)
+            result['parks_nearby'] = amenities.get('parks', 0)
         
         # Gym analysis
         gym_data = self.find_nearby_gyms(coords[0], coords[1])
@@ -373,10 +407,22 @@ class LocationAnalyzer:
                             # Only have PM data, duplicate it for AM
                             combined_alternatives[route_key] = self._combine_am_pm_routes(pm_route, pm_route)
                     
+                    # Find the route with the fastest AM time to use as the "primary" route
+                    # This ensures the "Fastest AM" label is accurate
+                    fastest_am_route = combined_primary.copy()
+                    fastest_am_time = combined_primary.get('duration_am_mins', 999)
+                    
+                    for route_key, route_data in combined_alternatives.items():
+                        am_time = route_data.get('duration_am_mins', 999)
+                        if am_time < fastest_am_time:
+                            fastest_am_time = am_time
+                            fastest_am_route = route_data.copy()
+                            fastest_am_route['route'] = route_key
+                    
                     result = {
                         'success': True,
                         'mode_used': current_mode,
-                        **combined_primary,
+                        **fastest_am_route,
                         'alternatives': combined_alternatives,
                     }
                 else:
@@ -668,6 +714,84 @@ class LocationAnalyzer:
         return {
             'transit_segments': transit_segments,
             'walking_minutes': walking_minutes
+        }
+    
+    def calculate_transit_annoyingness(
+        self, 
+        transit_details: Dict[str, Any],
+        weights: Optional[Dict[str, float]] = None,
+        ideal_duration: int = 30
+    ) -> Dict[str, Any]:
+        """
+        Calculate annoyingness score for transit routes based on walking time, transfers, and duration.
+        
+        Args:
+            transit_details: Output from _extract_transit_details or commute_details['partner']['transit_details']
+            weights: Optional custom weights dict with keys:
+                - walk_time_weight: Penalty per minute of walking (default: 0.15)
+                - transfer_weight: Penalty per transit transfer (default: 0.8)
+                - duration_weight: Penalty per minute over ideal (default: 0.1)
+            ideal_duration: Ideal commute duration in minutes for duration penalty (default: 30)
+            
+        Returns:
+            Dict with annoyingness score and breakdown:
+            {
+                'score': float (0-10, higher is better/less annoying),
+                'walking_minutes': int,
+                'num_transfers': int,
+                'walk_penalty': float,
+                'transfer_penalty': float,
+                'duration_penalty': float,
+                'penalties': dict with detailed breakdown
+            }
+        """
+        # Default weights if not provided
+        default_weights = {
+            'walk_time_weight': 0.15,  # Per minute of walking
+            'transfer_weight': 0.8,    # Per transfer
+            'duration_weight': 0.1,    # Per minute over ideal
+        }
+        w = {**default_weights, **(weights or {})}
+        
+        # Extract values from transit details
+        walking_minutes = transit_details.get('walking_minutes', 0)
+        transit_segments = transit_details.get('transit_segments', [])
+        # Number of transfers = number of segments - 1 (first segment isn't a transfer)
+        num_transfers = max(0, len(transit_segments) - 1)
+        
+        # Calculate penalties
+        walk_penalty = walking_minutes * w['walk_time_weight']
+        transfer_penalty = num_transfers * w['transfer_weight']
+        
+        # Duration penalty (requires total_duration_mins to be passed in transit_details)
+        total_duration = transit_details.get('total_duration_mins', 0)
+        duration_over_ideal = max(0, total_duration - ideal_duration)
+        duration_penalty = duration_over_ideal * w['duration_weight']
+        
+        # Calculate total penalty and score
+        total_penalty = walk_penalty + transfer_penalty + duration_penalty
+        
+        # Cap penalties to avoid negative scores
+        walk_penalty = min(3.0, walk_penalty)
+        transfer_penalty = min(3.0, transfer_penalty)
+        duration_penalty = min(2.0, duration_penalty)
+        total_penalty = min(10.0, walk_penalty + transfer_penalty + duration_penalty)
+        
+        score = max(0.0, 10.0 - total_penalty)
+        
+        return {
+            'score': round(score, 2),
+            'walking_minutes': walking_minutes,
+            'num_transfers': num_transfers,
+            'total_duration_mins': total_duration,
+            'walk_penalty': round(walk_penalty, 2),
+            'transfer_penalty': round(transfer_penalty, 2),
+            'duration_penalty': round(duration_penalty, 2),
+            'penalties': {
+                'walking': round(walk_penalty, 2),
+                'transfers': round(transfer_penalty, 2),
+                'duration': round(duration_penalty, 2),
+            }
         }
     
     def get_safety_score(self, lat: float, lng: float) -> Dict[str, Any]:
@@ -1115,11 +1239,11 @@ class LocationAnalyzer:
                 'key': self.api_key,
             }
             
-            self.rate_limiter.wait_if_needed('google_places')
-            response = requests.get(details_url, params=params, timeout=10)
-            details_data = response.json()
+            details_data = self._make_places_api_request(details_url, params, timeout=10, service='google_places')
             
-            if details_data['status'] != 'OK':
+            if details_data.get('status') != 'OK':
+                error_msg = details_data.get('error_message') or details_data.get('status')
+                print(f"    ⚠️  Places details not OK for {place_name}: {error_msg}")
                 return False
             
             place_details = details_data.get('result', {})
@@ -1140,12 +1264,21 @@ class LocationAnalyzer:
             
             # Use Claude to analyze
             import anthropic
+            import httpx
             claude_key = config.ANTHROPIC_API_KEY
             if not claude_key:
                 print(f"  ⚠️  No Anthropic API key, skipping {place_name}")
                 return False
             
-            client = anthropic.Anthropic(api_key=claude_key)
+            # NOTE: SSL verification disabled for corporate proxy/VPN environments
+            # Re-enable by removing http_client parameter or setting verify=True
+            http_client = httpx.Client(verify=False)
+            client = anthropic.Anthropic(
+                api_key=claude_key, 
+                max_retries=2, 
+                timeout=30,
+                http_client=http_client
+            )
             
             prompt = f"""Determine if this restaurant/cafe is suitable for vegetarians.
 
@@ -1169,12 +1302,31 @@ NOT suitable:
 - Seafood-only restaurants with no alternatives
 
 Respond with ONLY the word "YES" or "NO" (nothing else)."""
-
-            message = client.messages.create(
-                model="claude-3-5-haiku-20241022",  # Latest Haiku 3.5 - fast, cheap, and most up-to-date
-                max_tokens=100,  # Allow reasoning for debugging
-                messages=[{"role": "user", "content": prompt}]
-            )
+            
+            # Retry Claude calls to handle transient connection errors
+            message = None
+            last_error = None
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                try:
+                    message = client.messages.create(
+                        model="claude-3-5-haiku-20241022",  # Latest Haiku 3.5 - fast, cheap, and most up-to-date
+                        max_tokens=100,  # Allow reasoning for debugging
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    break
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_attempts - 1:
+                        wait_time = 1.5 * (2 ** attempt)
+                        print(f"    ⚠️  Claude request failed for {place_name} (attempt {attempt + 1}/{max_attempts}): {self._format_claude_error(e)}")
+                        time.sleep(wait_time)
+                    else:
+                        print(f"    ❌  Claude request failed for {place_name} after {max_attempts} attempts: {self._format_claude_error(e)}")
+                        return False
+            
+            if message is None:
+                return False
             
             response_text = message.content[0].text.strip()
             
@@ -1194,6 +1346,40 @@ Respond with ONLY the word "YES" or "NO" (nothing else)."""
             print(f"    ⚠️  Error checking {place_name}: {e}")
             # On error, be conservative and return False
             return False
+    
+    def _format_claude_error(self, error: Exception) -> str:
+        """
+        Build a detailed error string for Claude API failures so we can debug
+        network vs API errors (includes status, request_id, and payload if present).
+        """
+        try:
+            err_type = error.__class__.__name__
+            status = getattr(error, "status_code", None)
+            request_id = getattr(error, "request_id", None)
+            message = str(error)
+            
+            # Anthropic API errors often expose a .response attribute
+            payload = None
+            response = getattr(error, "response", None)
+            if response is not None:
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = getattr(response, "text", None)
+            
+            parts = [f"type={err_type}"]
+            if status is not None:
+                parts.append(f"status={status}")
+            if request_id:
+                parts.append(f"request_id={request_id}")
+            if message:
+                parts.append(f"msg={message}")
+            if payload:
+                parts.append(f"payload={payload}")
+            
+            return " | ".join(parts)
+        except Exception as format_err:
+            return f"unformatted_error={error} | formatter_failed={format_err}"
     
     def _haversine_distance(self, lat1: float, lng1: float, lat2: float, lng2: float) -> float:
         """Calculate distance in miles between two coordinates"""
@@ -2205,15 +2391,17 @@ Do not include any explanation, just the year or "UNKNOWN"."""
             print(f"Error finding laundromats: {e}")
             return []
     
-    def _get_walking_times(self, origin_lat: float, origin_lng: float, 
-                          destinations: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
+    def _get_travel_times(self, origin_lat: float, origin_lng: float, 
+                          destinations: List[Tuple[float, float]], 
+                          mode: str = 'walking') -> List[Dict[str, Any]]:
         """
-        Get walking times from origin to multiple destinations using Distance Matrix API
+        Get travel times from origin to multiple destinations using Distance Matrix API
         
         Args:
             origin_lat: Origin latitude
             origin_lng: Origin longitude
             destinations: List of (lat, lng) tuples for destinations
+            mode: Travel mode - 'walking' or 'bicycling'
             
         Returns:
             List of dictionaries with duration_mins and distance_miles
@@ -2234,7 +2422,7 @@ Do not include any explanation, just the year or "UNKNOWN"."""
             params = {
                 'origins': origin,
                 'destinations': dest_str,
-                'mode': 'walking',
+                'mode': mode,
                 'key': self.api_key,
             }
             
@@ -2266,8 +2454,38 @@ Do not include any explanation, just the year or "UNKNOWN"."""
             return results
         
         except Exception as e:
-            print(f"Error getting walking times: {e}")
+            print(f"Error getting {mode} times: {e}")
             return [{'duration_mins': None, 'distance_miles': None} for _ in destinations]
+    
+    def _get_walking_times(self, origin_lat: float, origin_lng: float, 
+                          destinations: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
+        """
+        Get walking times from origin to multiple destinations using Distance Matrix API
+        
+        Args:
+            origin_lat: Origin latitude
+            origin_lng: Origin longitude
+            destinations: List of (lat, lng) tuples for destinations
+            
+        Returns:
+            List of dictionaries with duration_mins and distance_miles
+        """
+        return self._get_travel_times(origin_lat, origin_lng, destinations, mode='walking')
+    
+    def _get_biking_times(self, origin_lat: float, origin_lng: float, 
+                         destinations: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
+        """
+        Get biking times from origin to multiple destinations using Distance Matrix API
+        
+        Args:
+            origin_lat: Origin latitude
+            origin_lng: Origin longitude
+            destinations: List of (lat, lng) tuples for destinations
+            
+        Returns:
+            List of dictionaries with duration_mins and distance_miles
+        """
+        return self._get_travel_times(origin_lat, origin_lng, destinations, mode='bicycling')
     
     def _calculate_distance(self, lat1: float, lng1: float, lat2: float, lng2: float) -> float:
         """Calculate distance between two points in miles using Haversine formula"""

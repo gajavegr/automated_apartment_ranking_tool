@@ -1,0 +1,249 @@
+person_name: Ganesh
+version: 1
+criteria:
+- id: commute
+  display_name: Commute
+  priority_order: 1
+  ideal:
+  - field: commute_duration
+    value: 20
+    operator: lte
+  acceptable:
+  - field: commute_duration
+    value: 45
+    operator: lte
+  veto:
+  - field: commute_duration
+    value: 60
+    operator: lte
+  veto_reason: Does not meet minimum commute requirements
+- id: price
+  display_name: Price
+  priority_order: 2
+  ideal:
+  - field: monthly_cost
+    value: 3500
+    operator: lte
+  acceptable:
+  - field: monthly_cost
+    value: 4000
+    operator: lte
+  veto:
+  - field: monthly_cost
+    value: 4600
+    operator: lte
+  veto_reason: Does not meet minimum price requirements
+- id: parking
+  display_name: Parking
+  priority_order: 3
+  ideal:
+  - field: parking_score
+    value: 8
+    operator: gte
+  acceptable:
+  - field: parking_score
+    value: 5
+    operator: gte
+  veto:
+  - field: parking_score
+    value: 3
+    operator: gte
+  veto_reason: Does not meet minimum parking requirements
+- id: gym
+  display_name: Gym
+  priority_order: 4
+  ideal:
+  - field: gym_walk_time
+    value: 10
+    operator: lte
+  acceptable:
+  - field: gym_walk_time
+    value: 25
+    operator: lte
+  veto:
+  - field: gym_walk_time
+    value: 30
+    operator: lte
+  veto_reason: Does not meet minimum gym requirements
+- id: wfh_quality
+  display_name: Wfh Quality
+  priority_order: 5
+  ideal:
+  - field: wfh_score
+    value: 8
+    operator: gte
+  acceptable:
+  - field: wfh_score
+    value: 5
+    operator: gte
+  veto:
+  - field: wfh_score
+    value: 2
+    operator: gte
+  veto_reason: Does not meet minimum wfh_quality requirements
+- id: space_luxury
+  display_name: Space Luxury
+  priority_order: 6
+  ideal:
+  - field: sqft
+    value: 900
+    operator: gte
+  acceptable:
+  - field: sqft
+    value: 600
+    operator: gte
+  veto:
+  - field: sqft
+    value: 475
+    operator: gte
+  veto_reason: Does not meet minimum space_luxury requirements
+- id: laundry
+  display_name: Laundry
+  priority_order: 7
+  ideal:
+  - field: laundry_score
+    value: 8
+    operator: gte
+  acceptable:
+  - field: laundry_score
+    value: 4
+    operator: gte
+  veto:
+  - field: laundry_score
+    value: 0
+    operator: gte
+  veto_reason: Does not meet minimum laundry requirements
+- id: safety
+  display_name: Safety
+  priority_order: 8
+  ideal:
+  - field: safety_score
+    value: 8
+    operator: gte
+  acceptable:
+  - field: safety_score
+    value: 4
+    operator: gte
+  veto:
+  - field: safety_score
+    value: 2
+    operator: gte
+  veto_reason: Does not meet minimum safety requirements
+- id: happening
+  display_name: Happening
+  priority_order: 9
+  ideal:
+  - field: happening_score
+    value: 7
+    operator: gte
+  acceptable:
+  - field: happening_score
+    value: 3
+    operator: gte
+  veto:
+  - field: happening_score
+    value: 0
+    operator: gte
+  veto_reason: Does not meet minimum happening requirements
+ahp_weights:
+  commute: 0.19302880862382912
+  safety: 0.09093526705275115
+  wfh_quality: 0.09533951152461308
+  gym: 0.10475125430093604
+  parking: 0.1554971193648264
+  space_luxury: 0.06797663582972789
+  happening: 0.062457219063879216
+  laundry: 0.12526292993850122
+  price: 0.10475125430093604
+ahp_consistency_ratio: 0.1845226176303003
+created_at: '2025-12-05T20:36:41.523792'
+updated_at: '2025-12-05T20:36:41.523793'
+notes: Generated from quiz on 2025-12-05
+quiz_responses:
+  pairwise_comparisons:
+    commute:safety: 5
+    wfh_quality:happening: 3
+    parking:gym: 5
+    space_luxury:commute: 0.14285714285714285
+    laundry:happening: 5
+    safety:happening: 7
+    parking:space_luxury: 7
+    commute:wfh_quality: 7
+    gym:safety: 5
+  threshold_values:
+    commute:
+      field: commute_duration
+      ideal: 20
+      acceptable: 45
+      veto: 60
+      is_lower_better: true
+    safety:
+      field: safety_score
+      ideal: 8
+      acceptable: 4
+      veto: 2
+      is_lower_better: false
+    wfh_quality:
+      field: wfh_score
+      ideal: 8
+      acceptable: 5
+      veto: 2
+      is_lower_better: false
+    gym:
+      field: gym_walk_time
+      ideal: 10
+      acceptable: 25
+      veto: 30
+      is_lower_better: true
+    parking:
+      field: parking_score
+      ideal: 8
+      acceptable: 5
+      veto: 3
+      is_lower_better: false
+    space_luxury:
+      field: sqft
+      ideal: 900
+      acceptable: 600
+      veto: 475
+      is_lower_better: false
+    happening:
+      field: happening_score
+      ideal: 7
+      acceptable: 3
+      veto: 0
+      is_lower_better: false
+    laundry:
+      field: laundry_score
+      ideal: 8
+      acceptable: 4
+      veto: 0
+      is_lower_better: false
+    price:
+      field: monthly_cost
+      ideal: 3500
+      acceptable: 4000
+      veto: 4600
+      is_lower_better: true
+  priority_ranking:
+  - commute
+  - price
+  - parking
+  - gym
+  - wfh_quality
+  - space_luxury
+  - laundry
+  - safety
+  - happening
+commute_config:
+  data_field: commute_time_you
+  mode: driving
+  include_commute_score: true
+  annoyingness_weights:
+    walk_time_weight: 0.15
+    transfer_weight: 0.8
+    duration_weight: 0.1
+    left_turn_weight: 0.6
+    congestion_weight: 10.0
+    low_speed_weight: 0.7
+    lane_split_weight: 2.5

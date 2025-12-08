@@ -7,7 +7,9 @@ for adding apartments to the analysis sheet.
 """
 
 import os
+import sys
 import json
+import signal
 import webbrowser
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
@@ -17,8 +19,33 @@ import config
 from utils.google_sheets import GoogleSheetsClient
 from analyzers.location_analyzer import LocationAnalyzer
 
+# Global flag for graceful shutdown
+shutdown_requested = False
+
+def signal_handler(sig, frame):
+    """Handle Ctrl+C gracefully"""
+    global shutdown_requested
+    if not shutdown_requested:
+        shutdown_requested = True
+        print("\n\n⚠️  Shutdown requested! Finishing current apartment, then stopping...")
+        print("⚠️  Press Ctrl+C again to force quit (may corrupt data)")
+    else:
+        print("\n\n❌ Force quit requested. Exiting immediately.")
+        sys.exit(1)
+
+# Register signal handler
+signal.signal(signal.SIGINT, signal_handler)
+
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
+
+# Register preference routes
+try:
+    from preferences.web_routes import register_preference_routes
+    register_preference_routes(app)
+    print("  ✓ Preference routes registered")
+except ImportError as e:
+    print(f"  ⚠️  Preference routes not available: {e}")
 
 # Initialize clients
 sheets_client = None
@@ -202,6 +229,9 @@ def _normalize_sheet_row_for_scoring(row):
     data['elevation_to_gym'] = _safe_float(_sheet_value(row, "elevation_to_gym"), None)
     data['gym_within_10min'] = _sheet_bool(_sheet_value(row, "gym_within_10min"), False)
     data['gym_walk_time_mins'] = _safe_float(_sheet_value(row, "gym_walk_time_mins"), None)
+    data['gym_bike_time_mins'] = _safe_float(_sheet_value(row, "gym_bike_time_mins"), None)
+    data['gym_transport_mode'] = _sheet_value(row, "gym_transport_mode", default=None)
+    data['gym_effective_time_mins'] = _safe_float(_sheet_value(row, "gym_effective_time_mins"), None)
     data['gym_quality'] = _safe_float(_sheet_value(row, "gym_quality"), 0.0)
     data['office_gym_only'] = _sheet_bool(_sheet_value(row, "office_gym_only"), False)
     data['rent_control'] = _sheet_bool(_sheet_value(row, "rent_control"), False)
@@ -761,6 +791,7 @@ def add_apartment():
         data = {
             'zillow_url': request.form.get('zillow_url', '').strip(),
             'address': request.form.get('address', '').strip(),
+            'availability_status': request.form.get('availability_status', 'Available').strip(),
             'manual_safety_rating': float(request.form.get('manual_safety_rating', 5.0)),
             # Store multi-select values as newline-separated for better readability
             'parking_type': '\n'.join(parking_types) if parking_types else 'none',
@@ -973,6 +1004,7 @@ def add_apartment():
         
         # Other columns (skip address since we handled it above)
         column_mapping = {
+            'availability_status': config.SHEET_COLUMNS['availability_status'],
             'price': config.SHEET_COLUMNS['price'],
             'bedrooms': config.SHEET_COLUMNS['bedrooms'],
             'bathrooms': config.SHEET_COLUMNS['bathrooms'],
@@ -1000,6 +1032,12 @@ def add_apartment():
             'kitchen_quality': config.SHEET_COLUMNS.get('kitchen_quality', 'Kitchen Quality'),
             'double_pane_windows': config.SHEET_COLUMNS.get('double_pane_windows', 'Double Pane Windows'),
             'study_door_type': config.SHEET_COLUMNS.get('study_door_type', 'Study Door Type'),
+            # Luxury amenities
+            'has_double_vanity': config.SHEET_COLUMNS.get('has_double_vanity', 'Has Double Vanity'),
+            'high_end_appliances': config.SHEET_COLUMNS.get('high_end_appliances', 'High-End Appliances'),
+            'walk_in_closet': config.SHEET_COLUMNS.get('walk_in_closet', 'Walk-In Closet'),
+            'has_balcony_patio': config.SHEET_COLUMNS.get('has_balcony_patio', 'Has Balcony/Patio'),
+            'has_fireplace': config.SHEET_COLUMNS.get('has_fireplace', 'Has Fireplace'),
         }
         
         for data_key, column_name in column_mapping.items():
@@ -1225,6 +1263,53 @@ def save_apartment_edits(row_number):
         return jsonify({'error': str(e), 'success': False}), 500
 
 
+@app.route('/update_gym_transport_mode/<int:row_number>', methods=['POST'])
+def update_gym_transport_mode(row_number):
+    """Update the gym transport mode preference for an apartment"""
+    try:
+        from main import ApartmentAnalyzer
+        from analyzers.scoring_engine import build_scorecard
+        from datetime import datetime
+        
+        data = request.get_json()
+        transport_mode = data.get('transport_mode', 'walk')
+        effective_time = data.get('effective_time')
+        
+        # Get current apartment data
+        records = sheets_client.read_main_sheet()
+        if not (0 <= row_number - 2 < len(records)):
+            return jsonify({'error': 'Apartment not found'}), 404
+        
+        apartment = records[row_number - 2]
+        
+        # Update transport mode in apartment data
+        apartment_for_scoring = _normalize_sheet_row_for_scoring(apartment)
+        apartment_for_scoring['gym_transport_mode'] = transport_mode
+        apartment_for_scoring['gym_effective_time_mins'] = effective_time
+        
+        # Recalculate score with new transport mode
+        scorecard = build_scorecard(apartment_for_scoring)
+        new_score = scorecard.calculate_total()
+        apartment_for_scoring['weighted_score'] = round(new_score, 2)
+        apartment_for_scoring['last_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Write updated data back to sheet
+        sheets_client.write_apartment_data(row_number, apartment_for_scoring)
+        
+        print(f"✓ Updated gym transport mode to '{transport_mode}' for row {row_number}, new score: {new_score:.2f}")
+        
+        return jsonify({
+            'success': True,
+            'new_score': round(new_score, 2),
+            'transport_mode': transport_mode
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
 @app.route('/run_analysis', methods=['POST'])
 def run_analysis():
     """Run analysis on all apartments"""
@@ -1264,7 +1349,30 @@ def run_analysis():
                     row_number = apartment.get('_row_number')
                     if row_number:
                         print(f"Writing analysis results to row {row_number}")
-                        sheets_client.write_apartment_data(row_number, result)
+                        
+                        # Rate limiting: Sleep between writes to avoid hitting API limits
+                        import time
+                        time.sleep(1.2)
+                        
+                        # Retry logic with exponential backoff
+                        max_retries = 3
+                        retry_delay = 5
+                        for attempt in range(max_retries):
+                            try:
+                                sheets_client.write_apartment_data(row_number, result)
+                                break  # Success
+                            except Exception as write_error:
+                                error_str = str(write_error)
+                                if 'RATE_LIMIT_EXCEEDED' in error_str or '429' in error_str:
+                                    if attempt < max_retries - 1:
+                                        wait_time = retry_delay * (2 ** attempt)
+                                        print(f"  ⏳ Rate limit hit, waiting {wait_time}s before retry {attempt + 1}/{max_retries}...")
+                                        time.sleep(wait_time)
+                                    else:
+                                        print(f"  ❌ Failed to write after {max_retries} attempts")
+                                        raise
+                                else:
+                                    raise
                     else:
                         print(f"⚠️  Warning: No row number found for apartment: {apartment.get('address')}")
                     results.append(result)
@@ -1329,6 +1437,14 @@ def reanalyze_apartment(row_number):
         apartment = all_records[row_number - 2]  # -2 for header and 1-indexing
         apartment['_row_number'] = row_number
         
+        # Skip apartments that are no longer available
+        availability_status = apartment.get(config.SHEET_COLUMNS.get("availability_status", ""), "").lower()
+        if availability_status in ['rented', 'removed', 'unavailable', 'off market', 'off-market']:
+            return jsonify({
+                'error': f'This apartment is no longer available (Status: {availability_status})',
+                'success': False
+            }), 400
+        
         address = apartment.get(config.SHEET_COLUMNS['address'], 'Unknown')
         print(f"Analyzing: {address}")
         sys.stdout.flush()
@@ -1370,6 +1486,63 @@ def reanalyze_apartment(row_number):
             
     except Exception as e:
         print(f"Error reanalyzing apartment: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.stdout.flush()
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
+@app.route('/reanalyze_sheet_only/<int:row_number>', methods=['POST'])
+def reanalyze_sheet_only(row_number):
+    """
+    Recalculate only sheet-based fields (e.g., updated parking/laundry) without external API calls.
+    Useful when categories were cleaned up and we just need to refresh the scorecard.
+    """
+    try:
+        import sys
+        from main import ApartmentAnalyzer
+        
+        sys.stdout.flush()
+        
+        print("\n" + "="*70)
+        print(f"SHEET-ONLY REANALYSIS FOR ROW {row_number}")
+        print("="*70)
+        sys.stdout.flush()
+        
+        # Get the apartment data
+        all_records = sheets_client.read_main_sheet()
+        if row_number - 2 >= len(all_records):
+            return jsonify({'error': 'Invalid row number', 'success': False}), 400
+        
+        apartment = all_records[row_number - 2]  # -2 for header and 1-indexing
+        apartment['_row_number'] = row_number
+        
+        address = apartment.get(config.SHEET_COLUMNS['address'], 'Unknown')
+        print(f"Analyzing (sheet-only): {address}")
+        sys.stdout.flush()
+        
+        analyzer = ApartmentAnalyzer()
+        result = analyzer.analyze_apartment(apartment, force_refresh=False, components_to_recalc=['sheet_only'])
+        
+        if result and 'error' not in result:
+            print(f"Writing sheet-only recalculation results to row {row_number}")
+            sheets_client.write_apartment_data(row_number, result)
+            sheets_client.update_scatter_plot_data()
+            
+            print(f"✓ Sheet-only reanalysis complete for {address}")
+            sys.stdout.flush()
+            
+            return jsonify({
+                'success': True,
+                'address': address,
+                'weighted_score': result.get('weighted_score', 0)
+            })
+        else:
+            error_msg = result.get('error', 'Unknown error') if result else 'Analysis failed'
+            return jsonify({'error': error_msg, 'success': False}), 500
+            
+    except Exception as e:
+        print(f"Error in sheet-only reanalysis: {e}")
         import traceback
         traceback.print_exc()
         sys.stdout.flush()
@@ -1459,8 +1632,23 @@ def get_analysis_data():
         scatter_data = []
         unanalyzed_data = []
         
+        # Get availability column name
+        availability_col = config.SHEET_COLUMNS.get("availability_status")
+        
         for i, r in enumerate(records):
             address = r.get(config.SHEET_COLUMNS['address'], 'Unknown')
+            
+            # Skip if no address
+            if not address or not address.strip():
+                continue
+            
+            # Skip unavailable apartments
+            if availability_col:
+                status = r.get(availability_col, "").strip().lower()
+                if status and status != "available":
+                    print(f"[DEBUG] Skipping unavailable apartment: {address} (status: {status})")
+                    continue
+            
             weighted_score = r.get(config.SHEET_COLUMNS['weighted_score'])
             
             if weighted_score:
@@ -1506,9 +1694,16 @@ def get_analysis_data():
                     # Determine data quality
                     is_complete = len(missing_fields) == 0
                     
+                    # Calculate effective price (rent + parking cost)
+                    base_price = float(r.get(config.SHEET_COLUMNS['price'], 0) or 0)
+                    parking_cost = float(r.get(config.SHEET_COLUMNS['parking_cost'], 0) or 0)
+                    effective_price = base_price + parking_cost
+                    
                     scatter_data.append({
                         'address': address,
-                        'price': float(r.get(config.SHEET_COLUMNS['price'], 0) or 0),
+                        'price': effective_price,  # Use effective price for plotting
+                        'base_price': base_price,  # Keep base price for reference
+                        'parking_cost': parking_cost,
                         'score': float(weighted_score),
                         'score_min': float(r.get(config.SHEET_COLUMNS['score_min'], weighted_score) or weighted_score),
                         'score_max': float(r.get(config.SHEET_COLUMNS['score_max'], weighted_score) or weighted_score),
@@ -1523,9 +1718,16 @@ def get_analysis_data():
                     continue
             else:
                 # Apartment has no score - needs analysis
+                # Calculate effective price (rent + parking cost)
+                base_price = float(r.get(config.SHEET_COLUMNS['price'], 0) or 0)
+                parking_cost = float(r.get(config.SHEET_COLUMNS['parking_cost'], 0) or 0)
+                effective_price = base_price + parking_cost
+                
                 unanalyzed_data.append({
                     'address': address,
-                    'price': float(r.get(config.SHEET_COLUMNS['price'], 0) or 0),
+                    'price': effective_price,  # Use effective price for plotting
+                    'base_price': base_price,  # Keep base price for reference
+                    'parking_cost': parking_cost,
                     'score': None,
                     'score_min': None,
                     'score_max': None,
@@ -1554,11 +1756,13 @@ def get_analysis_data():
                 comparison_data.append({
                     'address': apt_data['address'],
                     'row': apt_data['row'],
-                    'price': apt_data['price'],
+                    'price': apt_data['price'],  # This is effective price (rent + parking)
+                    'base_price': apt_data.get('base_price', apt_data['price']),  # Base rent without parking
+                    'parking_cost': apt_data.get('parking_cost', 0),
                     'score': apt_data['score'],
                     'score_min': apt_data['score_min'],
                     'score_max': apt_data['score_max'],
-                    'value_ratio': round(apt_data['score'] / (apt_data['price'] / 1000), 2) if apt_data.get('score') and apt_data['price'] > 0 else 0,  # Score per $1000
+                    'value_ratio': round(apt_data['score'] / (apt_data['price'] / 1000), 2) if apt_data.get('score') and apt_data['price'] > 0 else 0,  # Score per $1000 of effective price
                     'is_complete': apt_data['is_complete'],
                     
                     # Component scores
@@ -1796,6 +2000,17 @@ def clear_wfh(row_number):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/admin/request_shutdown', methods=['POST'])
+def admin_request_shutdown():
+    """Request graceful shutdown of current analysis"""
+    global shutdown_requested
+    shutdown_requested = True
+    return jsonify({
+        'success': True,
+        'message': 'Shutdown requested. Finishing current apartment...'
+    })
+
+
 @app.route('/admin/force_recalculate', methods=['POST'])
 def admin_force_recalculate():
     """
@@ -1804,14 +2019,28 @@ def admin_force_recalculate():
     
     Request body:
     {
-        "component": "gym_score" | "laundry_score" | "all",
+        "components": ["gym", "laundry", "parking", "happening", "all"],  // Array of components to recalculate
         "addresses": ["addr1", "addr2"] or "all"
     }
+    
+    Available components:
+    - "gym": Clear gym scores and travel time data (walk/bike)
+    - "laundry": Clear laundry scores
+    - "parking": Clear parking scores
+    - "happening": Clear happening scores (restaurants, cafes, parks)
+    - "safety": Clear safety scores
+    - "commute": Clear commute data
+    - "wfh": Clear WFH quality scores
+    - "all": Clear all scores and force full recalculation
     """
     try:
         data = request.json
-        component = data.get('component', 'all')
+        components = data.get('components', ['all'])
         addresses = data.get('addresses', 'all')
+        
+        # Ensure components is a list
+        if isinstance(components, str):
+            components = [components]
         
         # Clear cache to ensure fresh API calls (especially for Claude prompt changes)
         print("\n🗑️  Clearing cache for fresh analysis...")
@@ -1826,19 +2055,87 @@ def admin_force_recalculate():
         if addresses != 'all':
             records = [r for r in records if r.get(config.SHEET_COLUMNS["address"]) in addresses]
         
-        # Determine which columns to clear
+        # Determine which columns to clear based on components
         columns_to_clear = []
-        if component == 'gym_score' or component == 'all':
-            columns_to_clear.append(config.SHEET_COLUMNS["gym_score"])
-        if component == 'laundry_score' or component == 'all':
-            columns_to_clear.append(config.SHEET_COLUMNS["laundry_score"])
-        if component == 'all':
-            # Also clear score ranges to force full recalculation
+        component_descriptions = []
+        
+        if 'all' in components:
+            # Clear everything for full recalculation
             columns_to_clear.extend([
+                config.SHEET_COLUMNS["gym_score"],
+                config.SHEET_COLUMNS["gym_walk_time_mins"],
+                config.SHEET_COLUMNS["gym_bike_time_mins"],
+                config.SHEET_COLUMNS["gym_transport_mode"],
+                config.SHEET_COLUMNS["gym_effective_time_mins"],
+                config.SHEET_COLUMNS["laundry_score"],
+                config.SHEET_COLUMNS["parking_score"],
+                config.SHEET_COLUMNS["happening_score"],
+                config.SHEET_COLUMNS["safety_score_opendata"],
+                config.SHEET_COLUMNS["combined_safety"],
+                config.SHEET_COLUMNS["wfh_quality_score"],
+                config.SHEET_COLUMNS["commute_time_you"],
+                config.SHEET_COLUMNS["commute_route"],
                 config.SHEET_COLUMNS["score_min"],
                 config.SHEET_COLUMNS["score_max"],
                 config.SHEET_COLUMNS["weighted_score"]
             ])
+            component_descriptions.append("all components")
+        else:
+            # Clear specific components
+            if 'gym' in components:
+                columns_to_clear.extend([
+                    config.SHEET_COLUMNS["gym_score"],
+                    config.SHEET_COLUMNS["gym_walk_time_mins"],
+                    config.SHEET_COLUMNS["gym_bike_time_mins"],
+                    config.SHEET_COLUMNS["gym_transport_mode"],
+                    config.SHEET_COLUMNS["gym_effective_time_mins"],
+                ])
+                component_descriptions.append("gym (walk/bike times)")
+            
+            if 'laundry' in components:
+                columns_to_clear.append(config.SHEET_COLUMNS["laundry_score"])
+                component_descriptions.append("laundry")
+            
+            if 'parking' in components:
+                columns_to_clear.append(config.SHEET_COLUMNS["parking_score"])
+                component_descriptions.append("parking")
+            
+            if 'happening' in components:
+                columns_to_clear.extend([
+                    config.SHEET_COLUMNS["happening_score"],
+                    config.SHEET_COLUMNS["restaurants_nearby"],
+                    config.SHEET_COLUMNS["cafes_nearby"],
+                    config.SHEET_COLUMNS["parks_nearby"],
+                ])
+                component_descriptions.append("happening")
+            
+            if 'safety' in components:
+                columns_to_clear.extend([
+                    config.SHEET_COLUMNS["safety_score_opendata"],
+                    config.SHEET_COLUMNS["combined_safety"],
+                ])
+                component_descriptions.append("safety")
+            
+            if 'commute' in components:
+                columns_to_clear.extend([
+                    config.SHEET_COLUMNS["commute_time_you"],
+                    config.SHEET_COLUMNS["commute_route"],
+                    config.SHEET_COLUMNS["commute_time_partner"],
+                ])
+                component_descriptions.append("commute")
+            
+            if 'wfh' in components:
+                columns_to_clear.append(config.SHEET_COLUMNS["wfh_quality_score"])
+                component_descriptions.append("WFH quality")
+            
+            # Only clear aggregate scores if recalculating ALL components
+            # For partial recalc, we'll re-score using existing components
+            if len(components) >= 6:  # If most/all components selected
+                columns_to_clear.extend([
+                    config.SHEET_COLUMNS["score_min"],
+                    config.SHEET_COLUMNS["score_max"],
+                    config.SHEET_COLUMNS["weighted_score"]
+                ])
         
         # Get worksheet
         sheet = sheets_client.spreadsheet.worksheet(sheets_client.MAIN_SHEET_NAME)
@@ -1853,8 +2150,10 @@ def admin_force_recalculate():
         address_col_idx = header_row.index(config.SHEET_COLUMNS["address"]) + 1
         address_col = sheet.col_values(address_col_idx)
         
-        # Clear values for each apartment
+        # Build batch update list (to avoid rate limiting)
+        batch_updates = []
         cleared_count = 0
+        
         for record in records:
             address = record.get(config.SHEET_COLUMNS["address"])
             if not address:
@@ -1868,20 +2167,127 @@ def admin_force_recalculate():
                     break
             
             if row_num:
-                # Clear each column for this row
+                # Add updates for each column for this row
                 for col_name, col_idx in col_indices.items():
                     col_letter = sheets_client._col_index_to_letter(col_idx - 1)
-                    sheet.update(f'{col_letter}{row_num}', [['']])
-                    print(f"  Cleared {col_name} for row {row_num} ({address[:50]})")
+                    batch_updates.append({
+                        'range': f'{col_letter}{row_num}',
+                        'values': [['']]
+                    })
+                    print(f"  Will clear {col_name} for row {row_num} ({address[:50]})")
                 
                 cleared_count += 1
+        
+        # Execute batch update (1 API call instead of N)
+        if batch_updates:
+            print(f"\n📝 Executing batch update with {len(batch_updates)} cell updates...")
+            # Apply rate limiting before batch update
+            from utils.rate_limiter import get_rate_limiter
+            rate_limiter = get_rate_limiter()
+            rate_limiter.wait_if_needed('google_sheets_write')
+            
+            # Use batch_update to clear all values at once
+            sheet.batch_update(batch_updates, value_input_option='USER_ENTERED')
+            print(f"  ✓ Batch update complete!")
+        
+        # For partial recalc, re-analyze only the specified components
+        is_partial_recalc = 'all' not in components and len(components) < 6
+        if is_partial_recalc:
+            print(f"\n🔄 Starting partial recalculation for: {', '.join(components)}")
+            print(f"⏱️  Rate limiting enabled: 1.2s delay between writes to avoid API quota (50 writes/min)")
+            import sys
+            from main import ApartmentAnalyzer
+            sys.stdout.flush()
+            
+            analyzer = ApartmentAnalyzer()
+            
+            # Re-analyze only cleared apartments
+            analyzed_count = 0
+            for record in records:
+                # Check if shutdown was requested
+                global shutdown_requested
+                if shutdown_requested:
+                    print(f"\n⚠️  Shutdown requested. Stopping after {analyzed_count} apartments.")
+                    message = f'⚠️ Interrupted: Recalculated {", ".join(component_descriptions)} for {analyzed_count}/{len(records)} apartment(s).'
+                    break
+                
+                address = record.get(config.SHEET_COLUMNS["address"])
+                if not address:
+                    continue
+                
+                # Skip apartments that are no longer available
+                availability_status = record.get(config.SHEET_COLUMNS.get("availability_status", ""), "").lower()
+                if availability_status in ['rented', 'removed', 'unavailable', 'off market', 'off-market']:
+                    print(f"  ⏭️  Skipping {address[:50]} (Status: {availability_status})")
+                    continue
+                
+                # Find row number
+                row_num = None
+                for i, row_address in enumerate(address_col[1:], start=2):
+                    if row_address == address:
+                        row_num = i
+                        break
+                
+                if row_num:
+                    print(f"\n📍 Re-analyzing row {row_num}: {address[:50]} ({analyzed_count + 1}/{len(records)})")
+                    try:
+                        # Reload fresh data after clearing
+                        fresh_records = sheets_client.read_main_sheet()
+                        fresh_record = fresh_records[row_num - 2]
+                        
+                        # Analyze (will only recalculate specified components)
+                        result = analyzer.analyze_apartment(fresh_record, force_refresh=False, 
+                                                           components_to_recalc=components)
+                        
+                        if result and 'error' not in result:
+                            # Rate limiting: Google Sheets API allows 60 write requests per minute
+                            # Sleep for 1.2 seconds between writes to stay safely under the limit (50 writes/min)
+                            import time
+                            time.sleep(1.2)
+                            
+                            # Retry logic with exponential backoff for rate limit errors
+                            max_retries = 3
+                            retry_delay = 5
+                            for attempt in range(max_retries):
+                                try:
+                                    sheets_client.write_apartment_data(row_num, result)
+                                    analyzed_count += 1
+                                    print(f"  ✓ Updated row {row_num}")
+                                    break  # Success, exit retry loop
+                                except Exception as write_error:
+                                    error_str = str(write_error)
+                                    if 'RATE_LIMIT_EXCEEDED' in error_str or '429' in error_str:
+                                        if attempt < max_retries - 1:
+                                            wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                                            print(f"  ⏳ Rate limit hit, waiting {wait_time}s before retry {attempt + 1}/{max_retries}...")
+                                            time.sleep(wait_time)
+                                        else:
+                                            print(f"  ❌ Failed to write after {max_retries} attempts due to rate limiting")
+                                            raise
+                                    else:
+                                        # Non-rate-limit error, don't retry
+                                        raise
+                        else:
+                            print(f"  ⚠️  Analysis failed for row {row_num}: {result.get('error', 'Unknown error')}")
+                    except Exception as e:
+                        print(f"  ❌ Error analyzing row {row_num}: {e}")
+                        import traceback
+                        traceback.print_exc()
+            
+            message = f'Recalculated {", ".join(component_descriptions)} for {analyzed_count} apartment(s).'
+            
+            # Reset shutdown flag after completion
+            shutdown_requested = False
+        else:
+            message = f'Cleared {", ".join(component_descriptions)} for {cleared_count} apartment(s). Run analysis to recalculate.'
         
         return jsonify({
             'success': True,
             'cleared_count': cleared_count,
-            'columns': columns_to_clear,
+            'components': component_descriptions,
+            'columns': list(col_indices.keys()),
             'cache_cleared': True,
-            'message': f'Cleared {component} for {cleared_count} apartments and cleared cache. Run analysis to recalculate with fresh API calls.'
+            'message': message
         })
         
     except Exception as e:
@@ -1892,7 +2298,7 @@ def admin_force_recalculate():
 
 def open_browser():
     """Open browser after a short delay"""
-    webbrowser.open('http://127.0.0.1:5000')
+    webbrowser.open('http://127.0.0.1:5001')
 
 
 @app.route('/exclude_place', methods=['POST'])
@@ -2042,6 +2448,74 @@ def save_weights():
         return jsonify({'error': str(e), 'success': False}), 500
 
 
+@app.route('/save_commute_settings', methods=['POST'])
+def save_commute_settings():
+    """Save commute time settings"""
+    try:
+        data = request.get_json()
+        am_departure = data.get('am_departure')
+        pm_departure = data.get('pm_departure')
+        partner_address = data.get('partner_address', '')
+        partner_mode = data.get('partner_mode', 'driving')
+        
+        if not am_departure or not pm_departure:
+            return jsonify({'error': 'AM and PM departure times are required', 'success': False}), 400
+        
+        # Validate time format (HH:MM)
+        import re
+        time_pattern = re.compile(r'^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$')
+        if not time_pattern.match(am_departure) or not time_pattern.match(pm_departure):
+            return jsonify({'error': 'Invalid time format. Use HH:MM (24-hour)', 'success': False}), 400
+        
+        # Update config module (in-memory)
+        config.AM_DEPARTURE_TIME = am_departure
+        config.PM_DEPARTURE_TIME = pm_departure
+        if partner_address:
+            config.PARTNER_WORK_ADDRESS = partner_address
+        config.PARTNER_COMMUTE_MODE = partner_mode
+        
+        # Optionally save to a settings file or Google Sheets
+        # For now, we'll just update in-memory config
+        # In the future, you could add persistence to Settings sheet
+        
+        # Note: Commute times would need to be recalculated for all apartments
+        # For now, this just updates the settings for future calculations
+        
+        return jsonify({
+            'success': True,
+            'message': 'Commute settings saved successfully. Settings will be used for new commute calculations.',
+            'settings': {
+                'am_departure': am_departure,
+                'pm_departure': pm_departure,
+                'partner_address': partner_address,
+                'partner_mode': partner_mode
+            }
+        })
+    except Exception as e:
+        print(f"Error saving commute settings: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
+@app.route('/get_commute_settings', methods=['GET'])
+def get_commute_settings():
+    """Get current commute settings"""
+    try:
+        return jsonify({
+            'success': True,
+            'settings': {
+                'am_departure': config.AM_DEPARTURE_TIME,
+                'pm_departure': config.PM_DEPARTURE_TIME,
+                'partner_address': config.PARTNER_WORK_ADDRESS,
+                'partner_mode': config.PARTNER_COMMUTE_MODE
+            }
+        })
+    except Exception as e:
+        print(f"Error getting commute settings: {e}")
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
 def update_config_weights(weights: dict):
     """Update weights in config.py file (optional feature)"""
     config_path = os.path.join(os.path.dirname(__file__), 'config.py')
@@ -2090,12 +2564,12 @@ if __name__ == '__main__':
     
     print("✓ Clients initialized")
     print("\nStarting web server...")
-    print("URL: http://127.0.0.1:5000")
+    print("URL: http://127.0.0.1:5001")
     print("\nPress Ctrl+C to stop the server\n")
     
     # Open browser after 1 second
     Timer(1, open_browser).start()
     
-    # Run Flask app on 127.0.0.1 explicitly
-    app.run(debug=True, use_reloader=False, host='127.0.0.1', port=5000)
+    # Run Flask app on 127.0.0.1 explicitly (using port 5001 to avoid conflicts with Cursor IDE)
+    app.run(debug=True, use_reloader=False, host='127.0.0.1', port=5001)
 

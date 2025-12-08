@@ -23,6 +23,10 @@ PARTNER_WORK_ADDRESS = os.getenv("PARTNER_WORK_ADDRESS", "1355 Market St, San Fr
 PARTNER_COMMUTE_MODE = os.getenv("PARTNER_COMMUTE_MODE", "transit").lower()
 PARTNER_COMMUTE_FALLBACK_MODE = os.getenv("PARTNER_COMMUTE_FALLBACK_MODE", "walking").lower()
 
+# Commute Departure Times (24-hour format, HH:MM)
+AM_DEPARTURE_TIME = os.getenv("AM_DEPARTURE_TIME", "08:30")
+PM_DEPARTURE_TIME = os.getenv("PM_DEPARTURE_TIME", "18:00")
+
 # SF OpenData API
 SF_OPENDATA_API_ENDPOINT = os.getenv("SF_OPENDATA_API_ENDPOINT", "https://data.sfgov.org/resource/wg3w-h783.json")
 SF_OPENDATA_APP_TOKEN = os.getenv("SF_OPENDATA_APP_TOKEN")  # Get your token at: https://data.sfgov.org/profile/edit/developer_settings
@@ -50,6 +54,7 @@ SHEET_COLUMNS = {
     "commute_time_partner": "Commute Time (Partner)",
     "route_annoyingness": "Route Annoyingness (0-10)",
     "commute_details": "Commute Details (JSON)",
+    "commute_score": "Commute Score",
     
     # Safety
     "safety_score_opendata": "Safety Score (OpenData)",
@@ -92,8 +97,11 @@ SHEET_COLUMNS = {
     "laundry_score": "Laundry Score",
     "floor_level": "Floor Level",
     "view_quality": "View Quality",
-    "gym_within_10min": "Gym Within 20min Walk",  # Updated from 10min to 20min
-    "gym_walk_time_mins": "Time to Nearest Gym (min)",  # Walking time in minutes
+    "gym_within_10min": "Gym Within 20min",  # Updated from 10min to 20min (any mode)
+    "gym_walk_time_mins": "Gym Walk Time (min)",  # Walking time in minutes
+    "gym_bike_time_mins": "Gym Bike Time (min)",  # Biking time in minutes (if >15min walk)
+    "gym_transport_mode": "Gym Transport Mode",  # User's preferred mode: 'walk' or 'bike'
+    "gym_effective_time_mins": "Gym Time Used for Score (min)",  # Effective time based on transport mode
     "gym_quality": "Gym Quality",
     "gym_score": "Gym Score",
     "office_gym_only": "Office Gym Only",  # New field for office-only option
@@ -127,6 +135,9 @@ SHEET_COLUMNS = {
     
     # Gym selection
     "selected_gyms": "Selected Gyms",
+    
+    # Availability status
+    "availability_status": "Availability Status",
     
     # Final scores
     "weighted_score": "Weighted Score",
@@ -254,7 +265,7 @@ SCORE_COMPONENTS = {
         "weight": 0.10,  # Updated from 0.15 to 0.10 (QoL subsection)
         "preferences": {
             "ideal_duration": 30,  # Minutes
-            "acceptable_duration": 50,  # Minutes
+            "acceptable_duration": 60,  # Minutes (increased from 50 to allow more score variation)
             "preferred_route": "280",  # Highway preference
             "route_bonus": 1.5,  # Extra points for preferred route
             "annoyingness_penalty_weight": 0.35,  # (10-annoy) * weight = penalty in points
@@ -460,6 +471,7 @@ PLACES_SEARCH_RADIUS = 805  # meters (0.5 mile)
 GYM_SEARCH_RADIUS = 3219  # meters (2 miles) - Increased to find more gym options
 GYM_MIN_RATING = 4.0
 GYM_KEYWORDS = ["gym", "fitness", "weights", "squat rack"]
+GYM_BIKE_THRESHOLD_MINS = 15.0  # If walking time > this, also calculate biking time
 
 # SF OpenData Crime Settings
 CRIME_RADIUS_MILES = 0.25

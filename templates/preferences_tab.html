@@ -1,0 +1,1393 @@
+<!-- Preferences Tab Content -->
+<div id="preferencesTab" class="tab-content">
+    <div class="preferences-container">
+        <div class="preferences-header">
+            <h2>Preference-Based Evaluation</h2>
+            <p>Set thresholds and priorities for you and your partner, then evaluate apartments based on deal-breakers.</p>
+        </div>
+
+        <!-- Sub-tabs for different sections -->
+        <div class="pref-subtabs">
+            <button class="pref-subtab active" onclick="showPrefSubtab('profiles')">Profiles</button>
+            <button class="pref-subtab" onclick="showPrefSubtab('quiz')">Take Quiz</button>
+            <button class="pref-subtab" onclick="showPrefSubtab('evaluate')">Evaluate</button>
+        </div>
+
+        <!-- Profiles Section -->
+        <div id="prefProfilesSection" class="pref-section active">
+            <div class="section-header">
+                <h3>Preference Profiles</h3>
+                <div class="section-header-actions">
+                    <button class="btn btn-secondary" onclick="compareProfiles()">📊 Compare Profiles</button>
+                    <button class="btn btn-primary" onclick="createNewProfile()">+ Create New Profile</button>
+                </div>
+            </div>
+
+            <div id="profilesList" class="profiles-list">
+                <div class="loading-spinner">Loading profiles...</div>
+            </div>
+            
+            <!-- Profile Comparison Modal -->
+            <div id="profileCompareModal" class="modal hidden">
+                <div class="modal-content profile-compare-modal">
+                    <div class="modal-header">
+                        <h3>Compare Preference Profiles</h3>
+                        <button class="close-btn" onclick="closeProfileCompare()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="profileCompareContent">
+                            <div class="loading-spinner">Loading comparison...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Profile Editor Modal -->
+            <div id="profileEditorModal" class="modal hidden">
+                <div class="modal-content profile-modal">
+                    <div class="modal-header">
+                        <h3 id="profileEditorTitle">Edit Profile</h3>
+                        <button class="close-btn" onclick="closeProfileEditor()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="profile-editor">
+                            <div class="form-group">
+                                <label for="profileName">Profile Name</label>
+                                <input type="text" id="profileName" placeholder="e.g., Your Name">
+                            </div>
+
+                            <h4>Criteria Priority & Thresholds</h4>
+                            <p class="help-text">Drag to reorder priorities. Lower number = higher priority.</p>
+
+                            <div id="criteriaEditor" class="criteria-editor">
+                                <!-- Populated dynamically -->
+                            </div>
+
+                            <div class="form-group">
+                                <label for="profileNotes">Notes</label>
+                                <textarea id="profileNotes" rows="3" placeholder="Any additional notes about this profile..."></textarea>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" onclick="closeProfileEditor()">Cancel</button>
+                        <button class="btn btn-primary" onclick="saveProfile()">Save Profile</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quiz Section -->
+        <div id="prefQuizSection" class="pref-section hidden">
+            <div class="section-header">
+                <h3>Preference Quiz</h3>
+                <p>Answer scenarios to derive your priorities and weights automatically.</p>
+            </div>
+
+            <div class="quiz-setup">
+                <div class="form-group">
+                    <label for="quizPersonName">Your Name</label>
+                    <input type="text" id="quizPersonName" placeholder="Enter your name">
+                </div>
+                <button class="btn btn-primary" onclick="startQuiz()">Start Quiz</button>
+            </div>
+
+            <!-- Quiz Container -->
+            <div id="quizContainer" class="quiz-container hidden">
+                <!-- Progress bar -->
+                <div class="quiz-progress">
+                    <div class="progress-bar">
+                        <div id="quizProgressFill" class="progress-fill" style="width: 0%"></div>
+                    </div>
+                    <span id="quizProgressText">Step 1 of 3: Priority Ranking</span>
+                </div>
+
+                <!-- Phase 1: Priority Ranking -->
+                <div id="quizPhase1" class="quiz-phase">
+                    <h4>Step 1: Rank Your Priorities</h4>
+                    <p>Drag the criteria to order them from most important (top) to least important (bottom).</p>
+                    <div id="priorityRanking" class="priority-ranking">
+                        <!-- Populated dynamically -->
+                    </div>
+                    <button class="btn btn-primary" onclick="nextQuizPhase(2)">Continue to Thresholds →</button>
+                </div>
+
+                <!-- Phase 2: Threshold Questions -->
+                <div id="quizPhase2" class="quiz-phase hidden">
+                    <h4>Step 2: Set Your Thresholds</h4>
+                    <p>For each criterion, set what you consider ideal, acceptable, and a deal-breaker.</p>
+                    <div id="thresholdQuestions" class="threshold-questions">
+                        <!-- Populated dynamically -->
+                    </div>
+                    <button class="btn btn-secondary" onclick="previousQuizPhase(1)">← Back</button>
+                    <button class="btn btn-primary" onclick="nextQuizPhase(3)">Continue to Scenarios →</button>
+                </div>
+
+                <!-- Phase 3: Pairwise Comparisons -->
+                <div id="quizPhase3" class="quiz-phase hidden">
+                    <h4>Step 3: Trade-off Scenarios</h4>
+                    <p>For each scenario, indicate your preference. This helps derive accurate weights.</p>
+                    <div id="scenarioContainer" class="scenario-container">
+                        <!-- Current scenario shown here -->
+                    </div>
+                    <div class="scenario-nav">
+                        <button class="btn btn-secondary" id="prevScenarioBtn" onclick="previousScenario()">← Previous</button>
+                        <span id="scenarioCounter">1 / 10</span>
+                        <button class="btn btn-primary" id="nextScenarioBtn" onclick="nextScenario()">Next →</button>
+                    </div>
+                </div>
+
+                <!-- Results -->
+                <div id="quizResults" class="quiz-results hidden">
+                    <h4>Quiz Complete!</h4>
+                    <div id="quizResultsContent">
+                        <!-- Results populated here -->
+                    </div>
+                    <button class="btn btn-primary" onclick="saveQuizProfile()">Save Profile</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Profile View Modal (shared between tabs) -->
+        <div id="profileViewModal" class="modal hidden">
+            <div class="modal-content profile-modal">
+                <div class="modal-header">
+                    <h3 id="profileViewTitle">Profile Details</h3>
+                    <button class="close-btn" onclick="closeProfileViewModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="profileViewContent">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Evaluate Section -->
+        <div id="prefEvaluateSection" class="pref-section hidden">
+            <div class="section-header">
+                <h3>Evaluate Apartments</h3>
+                <p>Run preference-based evaluation against your apartment list.</p>
+            </div>
+
+            <div class="eval-setup">
+                <div class="form-group">
+                    <label>Select Profiles to Evaluate</label>
+                    <div id="evalProfileCheckboxes" class="profile-checkboxes">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Exclude Categories (Optional)</label>
+                    <p style="font-size: 12px; color: #86868b; margin: 4px 0 8px 0;">
+                        If certain categories have uniformly low scores across all apartments (e.g., commute), 
+                        you can exclude them from the evaluation to focus on differentiating factors.
+                    </p>
+                    <div id="evalExcludeCategoriesCheckboxes" class="category-checkboxes">
+                        <label><input type="checkbox" value="commute"> 🚗 Commute</label>
+                        <label><input type="checkbox" value="safety"> 🛡️ Safety</label>
+                        <label><input type="checkbox" value="wfh"> 💻 WFH Quality</label>
+                        <label><input type="checkbox" value="happening"> 🎉 Happening</label>
+                        <label><input type="checkbox" value="parking"> 🅿️ Parking</label>
+                        <label><input type="checkbox" value="gym"> 🏋️ Gym</label>
+                        <label><input type="checkbox" value="laundry"> 🧺 Laundry</label>
+                        <label><input type="checkbox" value="space"> 📐 Space & Luxury</label>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="evalMaxVetoes">Max Vetoes Allowed</label>
+                        <select id="evalMaxVetoes">
+                            <option value="0">0 (No deal-breakers)</option>
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3+</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="evalTopN">Show Top N</label>
+                        <input type="number" id="evalTopN" value="10" min="1" max="50">
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" onclick="runPreferenceEvaluation()">
+                    🎯 Run Evaluation
+                </button>
+            </div>
+
+            <!-- Evaluation Results -->
+            <div id="evalResults" class="eval-results hidden">
+                <div class="eval-summary">
+                    <div id="evalSummaryContent"></div>
+                </div>
+
+                <div class="eval-shortlist">
+                    <h4>Tour Shortlist</h4>
+                    <div id="evalShortlistContent"></div>
+                </div>
+
+                <div class="eval-full-results">
+                    <h4>Full Results</h4>
+                    <table class="eval-table">
+                        <thead>
+                            <tr>
+                                <th onclick="sortEvalTable('rank')" class="sortable-header" title="Click to sort">
+                                    Rank <span class="sort-indicator"></span>
+                                </th>
+                                <th onclick="sortEvalTable('apartment')" class="sortable-header" title="Click to sort">
+                                    Apartment <span class="sort-indicator"></span>
+                                </th>
+                                <th onclick="sortEvalTable('score')" class="sortable-header active" title="Click to sort">
+                                    Joint Score <span class="sort-indicator">▼</span>
+                                </th>
+                                <th onclick="sortEvalTable('vetoes')" class="sortable-header" title="Click to sort">
+                                    Vetoes <span class="sort-indicator"></span>
+                                </th>
+                                <th onclick="sortEvalTable('status')" class="sortable-header" title="Click to sort">
+                                    Status <span class="sort-indicator"></span>
+                                </th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="evalTableBody">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Apartment Detail Modal -->
+            <div id="prefDetailModal" class="modal hidden">
+                <div class="modal-content pref-detail-modal">
+                    <div class="modal-header">
+                        <h3 id="prefDetailTitle">Apartment Evaluation Detail</h3>
+                        <button class="close-btn" onclick="closePrefDetailModal()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="prefDetailContent">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+/* Preferences Tab Styles */
+.preferences-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.preferences-header {
+    margin-bottom: 24px;
+}
+
+.preferences-header h2 {
+    margin: 0 0 8px 0;
+    color: #1d1d1f;
+}
+
+.preferences-header p {
+    color: #86868b;
+    margin: 0;
+}
+
+/* Sub-tabs */
+.pref-subtabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+    border-bottom: 2px solid #e0e0e0;
+    padding-bottom: 12px;
+}
+
+.pref-subtab {
+    padding: 10px 20px;
+    background: none;
+    border: none;
+    border-radius: 8px 8px 0 0;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 500;
+    color: #666;
+    transition: all 0.2s;
+}
+
+.pref-subtab:hover {
+    background: #f5f5f7;
+    color: #1d1d1f;
+}
+
+.pref-subtab.active {
+    background: #0066cc;
+    color: white;
+}
+
+.pref-section {
+    display: none;
+}
+
+.pref-section.active {
+    display: block;
+}
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.section-header h3 {
+    margin: 0;
+    color: #1d1d1f;
+}
+
+.section-header-actions {
+    display: flex;
+    gap: 10px;
+}
+
+/* Profile Comparison Modal */
+.profile-compare-modal {
+    max-width: 1200px;
+    width: 95vw;
+    max-height: 95vh;
+    overflow: hidden;
+}
+
+.profile-compare-modal .modal-body {
+    padding: 20px;
+    overflow-y: auto;
+    max-height: calc(95vh - 80px);
+}
+
+.profile-compare-header {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+}
+
+.profile-compare-card {
+    flex: 1;
+    min-width: 200px;
+    background: #f8f9fa;
+    border-radius: 12px;
+    padding: 16px;
+    text-align: center;
+}
+
+.profile-compare-card h4 {
+    margin: 0 0 8px 0;
+    font-size: 16px;
+}
+
+.profile-compare-card .profile-stats {
+    font-size: 13px;
+    color: #666;
+}
+
+.profile-compare-criteria {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.compare-criterion-row {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 12px;
+    padding: 16px;
+}
+
+.compare-criterion-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #eee;
+}
+
+.compare-criterion-header h5 {
+    margin: 0;
+    font-size: 15px;
+}
+
+.compare-profiles-grid {
+    display: grid;
+    gap: 12px;
+}
+
+.compare-profile-thresholds {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 12px;
+}
+
+.compare-profile-thresholds h6 {
+    margin: 0 0 8px 0;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.compare-threshold-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+    font-size: 13px;
+}
+
+.compare-threshold-label {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.compare-threshold-label.ideal { background: #d4edda; color: #155724; }
+.compare-threshold-label.acceptable { background: #fff3cd; color: #856404; }
+.compare-threshold-label.veto { background: #f8d7da; color: #721c24; }
+
+/* Profiles List */
+.profiles-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
+}
+
+.profile-card {
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 12px;
+    padding: 20px;
+    transition: all 0.2s;
+}
+
+.profile-card:hover {
+    border-color: #0066cc;
+    box-shadow: 0 4px 12px rgba(0, 102, 204, 0.1);
+}
+
+.profile-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;
+}
+
+.profile-card-header h4 {
+    margin: 0;
+    color: #1d1d1f;
+}
+
+.profile-version {
+    font-size: 12px;
+    color: #86868b;
+    background: #f5f5f7;
+    padding: 2px 8px;
+    border-radius: 12px;
+}
+
+.profile-card-meta {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 16px;
+}
+
+.profile-card-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* Criteria Editor */
+.criteria-editor {
+    margin-bottom: 20px;
+}
+
+.criterion-item {
+    background: #f5f5f7;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+    cursor: grab;
+}
+
+.criterion-item:active {
+    cursor: grabbing;
+}
+
+.criterion-item.dragging {
+    opacity: 0.5;
+}
+
+.criterion-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.criterion-header strong {
+    color: #1d1d1f;
+}
+
+.criterion-priority {
+    font-size: 12px;
+    color: white;
+    background: #0066cc;
+    padding: 2px 8px;
+    border-radius: 12px;
+}
+
+.threshold-inputs {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+}
+
+.threshold-input label {
+    display: block;
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 4px;
+}
+
+.threshold-input input {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #d2d2d7;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+/* Quiz Styles */
+.quiz-setup {
+    background: white;
+    padding: 24px;
+    border-radius: 12px;
+    border: 1px solid #e0e0e0;
+    max-width: 400px;
+}
+
+.quiz-container {
+    background: white;
+    padding: 24px;
+    border-radius: 12px;
+    border: 1px solid #e0e0e0;
+}
+
+.quiz-progress {
+    margin-bottom: 24px;
+}
+
+.progress-bar {
+    height: 8px;
+    background: #e0e0e0;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+
+.progress-fill {
+    height: 100%;
+    background: #0066cc;
+    transition: width 0.3s ease;
+}
+
+#quizProgressText {
+    font-size: 13px;
+    color: #666;
+}
+
+.quiz-phase {
+    display: none;
+}
+
+.quiz-phase.active {
+    display: block;
+}
+
+.quiz-phase h4 {
+    margin: 0 0 8px 0;
+    color: #1d1d1f;
+}
+
+.quiz-phase > p {
+    color: #86868b;
+    margin-bottom: 20px;
+}
+
+/* Priority Ranking */
+.priority-ranking {
+    margin-bottom: 20px;
+}
+
+.priority-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: #f5f5f7;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    cursor: grab;
+    transition: all 0.2s;
+}
+
+.priority-item:hover {
+    border-color: #0066cc;
+}
+
+.priority-item:active {
+    cursor: grabbing;
+}
+
+.priority-item.dragging {
+    opacity: 0.5;
+    background: #e3f2fd;
+}
+
+.priority-number {
+    width: 28px;
+    height: 28px;
+    background: #0066cc;
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.priority-label {
+    flex: 1;
+    font-weight: 500;
+    color: #1d1d1f;
+}
+
+.priority-handle {
+    color: #86868b;
+    font-size: 18px;
+}
+
+/* Threshold Questions */
+.threshold-questions {
+    margin-bottom: 20px;
+}
+
+.threshold-question {
+    background: #f5f5f7;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+}
+
+.threshold-question label {
+    display: block;
+    font-weight: 500;
+    color: #1d1d1f;
+    margin-bottom: 12px;
+}
+
+.threshold-sliders {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+}
+
+.threshold-slider-group {
+    text-align: center;
+}
+
+.threshold-slider-group span {
+    display: block;
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 4px;
+}
+
+.threshold-slider-group input[type="number"] {
+    width: 80px;
+    padding: 8px;
+    border: 1px solid #d2d2d7;
+    border-radius: 6px;
+    text-align: center;
+}
+
+.threshold-slider-group small {
+    display: block;
+    font-size: 11px;
+    color: #86868b;
+    margin-top: 4px;
+}
+
+/* Scenario */
+.scenario-container {
+    background: #f9f9f9;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+}
+
+.scenario-title {
+    font-weight: 600;
+    color: #1d1d1f;
+    margin-bottom: 8px;
+}
+
+.scenario-context {
+    font-size: 13px;
+    color: #666;
+    font-style: italic;
+    margin-bottom: 16px;
+}
+
+.scenario-options {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 20px;
+}
+
+.scenario-option {
+    background: white;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 16px;
+}
+
+.scenario-option h5 {
+    margin: 0 0 8px 0;
+    color: #0066cc;
+}
+
+.scenario-option p {
+    margin: 0;
+    font-size: 14px;
+    color: #333;
+}
+
+.preference-scale {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.preference-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.preference-option:hover {
+    border-color: #0066cc;
+    background: #f5f9ff;
+}
+
+.preference-option.selected {
+    border-color: #0066cc;
+    background: #e3f2fd;
+}
+
+.preference-option input[type="radio"] {
+    margin: 0;
+}
+
+.preference-option label {
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.scenario-nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+#scenarioCounter {
+    color: #666;
+    font-size: 14px;
+}
+
+/* Quiz Results */
+.quiz-results {
+    text-align: center;
+}
+
+.quiz-results h4 {
+    color: #28a745;
+    margin-bottom: 20px;
+}
+
+.results-weights {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 12px;
+    margin: 20px 0;
+    text-align: left;
+}
+
+.weight-item {
+    background: #f5f5f7;
+    padding: 12px;
+    border-radius: 8px;
+}
+
+.weight-item strong {
+    display: block;
+    color: #1d1d1f;
+    margin-bottom: 4px;
+}
+
+.weight-item span {
+    color: #0066cc;
+    font-weight: 600;
+}
+
+.consistency-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 13px;
+    margin-bottom: 20px;
+}
+
+.consistency-badge.good {
+    background: #d4edda;
+    color: #155724;
+}
+
+.consistency-badge.poor {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+/* Evaluation Results */
+.eval-setup {
+    background: white;
+    padding: 24px;
+    border-radius: 12px;
+    border: 1px solid #e0e0e0;
+    margin-bottom: 24px;
+}
+
+.profile-checkboxes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.category-checkboxes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.category-checkboxes label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: #f5f5f7;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+
+.category-checkboxes label:hover {
+    background: #e8e8ed;
+}
+
+.category-checkboxes input[type="checkbox"] {
+    cursor: pointer;
+}
+
+.profile-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: #f5f5f7;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.profile-checkbox input[type="checkbox"] {
+    margin: 0;
+}
+
+.eval-results {
+    margin-top: 24px;
+}
+
+.eval-summary {
+    background: white;
+    padding: 24px;
+    border-radius: 12px;
+    border: 1px solid #e0e0e0;
+    margin-bottom: 24px;
+}
+
+.eval-summary h4 {
+    margin: 0 0 16px 0;
+}
+
+.summary-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 16px;
+}
+
+.summary-stat {
+    text-align: center;
+    padding: 16px;
+    background: #f5f5f7;
+    border-radius: 8px;
+}
+
+.summary-stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: #0066cc;
+}
+
+.summary-stat-label {
+    font-size: 12px;
+    color: #666;
+    margin-top: 4px;
+}
+
+.eval-shortlist {
+    background: white;
+    padding: 24px;
+    border-radius: 12px;
+    border: 1px solid #e0e0e0;
+    margin-bottom: 24px;
+}
+
+.eval-shortlist h4 {
+    margin: 0 0 16px 0;
+}
+
+.shortlist-item {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    background: #f9f9f9;
+    border-radius: 8px;
+    margin-bottom: 8px;
+}
+
+.shortlist-rank {
+    width: 32px;
+    height: 32px;
+    background: #0066cc;
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+}
+
+.shortlist-info {
+    flex: 1;
+}
+
+.shortlist-address {
+    font-weight: 500;
+    color: #1d1d1f;
+}
+
+.shortlist-meta {
+    font-size: 12px;
+    color: #666;
+}
+
+.shortlist-score {
+    font-size: 18px;
+    font-weight: 600;
+    color: #0066cc;
+}
+
+.eval-full-results {
+    background: white;
+    padding: 24px;
+    border-radius: 12px;
+    border: 1px solid #e0e0e0;
+}
+
+.eval-full-results h4 {
+    margin: 0 0 16px 0;
+}
+
+.eval-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.eval-table th,
+.eval-table td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.eval-table th {
+    background: #f5f5f7;
+    font-weight: 600;
+    color: #1d1d1f;
+}
+
+.eval-table th.sortable-header {
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.2s;
+}
+
+.eval-table th.sortable-header:hover {
+    background: #e8e8ed;
+}
+
+.eval-table th.sortable-header.active {
+    background: #e0e0e5;
+    color: #0066cc;
+}
+
+.eval-table .sort-indicator {
+    font-size: 10px;
+    margin-left: 4px;
+    color: #86868b;
+}
+
+.eval-table th.sortable-header.active .sort-indicator {
+    color: #0066cc;
+    font-weight: bold;
+}
+
+.eval-table tr:hover {
+    background: #f9f9f9;
+}
+
+.status-ok {
+    color: #28a745;
+    font-weight: 600;
+}
+
+.status-veto {
+    color: #dc3545;
+    font-weight: 600;
+}
+
+/* Detail Modal - Wide for side-by-side layout */
+.pref-detail-modal {
+    max-width: 1400px;
+    width: 95vw;
+    max-height: 95vh;
+    overflow: hidden;
+}
+
+.pref-detail-modal .modal-body {
+    padding: 16px;
+    overflow: hidden;
+}
+
+.pref-detail-modal .modal-header {
+    position: sticky;
+    top: 0;
+    background: #fff;
+    z-index: 20;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 16px 20px;
+}
+
+/* Side-by-side split view layout */
+.eval-detail-split-view {
+    display: flex;
+    gap: 20px;
+    height: calc(90vh - 120px);
+    min-height: 500px;
+}
+
+.eval-detail-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+    border-radius: 12px;
+    border: 1px solid #e0e0e0;
+    overflow: hidden;
+    min-width: 0;
+}
+
+.eval-panel-left {
+    flex: 1.2;
+}
+
+.eval-panel-right {
+    flex: 0.8;
+}
+
+.eval-panel-header {
+    position: sticky;
+    top: 0;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    padding: 12px 16px;
+    border-bottom: 1px solid #e0e0e0;
+    z-index: 10;
+}
+
+.eval-panel-header h4 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: #1d1d1f;
+}
+
+.eval-panel-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+/* Legacy tab styles (kept for backwards compatibility) */
+.eval-detail-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    border-bottom: 2px solid #e0e0e0;
+}
+
+.eval-detail-tab {
+    padding: 10px 16px;
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    color: #666;
+    transition: all 0.2s;
+}
+
+.eval-detail-tab:hover {
+    color: #0066cc;
+    background: #f5f5f7;
+}
+
+.eval-detail-tab.active {
+    color: #0066cc;
+    border-bottom-color: #0066cc;
+    font-weight: 600;
+}
+
+.eval-detail-content {
+    display: none;
+}
+
+.eval-detail-content.active {
+    display: block;
+}
+
+/* Responsive: Stack panels on smaller screens */
+@media (max-width: 1200px) {
+    .eval-detail-split-view {
+        flex-direction: column;
+        height: auto;
+        max-height: calc(90vh - 100px);
+    }
+    
+    .eval-detail-panel {
+        max-height: 50vh;
+    }
+    
+    .eval-panel-left,
+    .eval-panel-right {
+        flex: none;
+    }
+}
+
+.detail-section {
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.detail-section:last-child {
+    border-bottom: none;
+}
+
+.detail-section h5 {
+    margin: 0 0 12px 0;
+    color: #1d1d1f;
+}
+
+.tier-result {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #f5f5f7;
+    border-radius: 6px;
+    margin-bottom: 8px;
+}
+
+.tier-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.tier-badge.ideal {
+    background: #d4edda;
+    color: #155724;
+}
+
+.tier-badge.acceptable {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.tier-badge.veto {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.help-text {
+    font-size: 13px;
+    color: #86868b;
+    margin-bottom: 16px;
+}
+
+/* Modal specifics */
+.profile-modal {
+    max-width: 700px;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Profile View Styles */
+.profile-view-section {
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.profile-view-section:last-child {
+    border-bottom: none;
+}
+
+.profile-view-section h4 {
+    margin: 0 0 12px 0;
+    color: #1d1d1f;
+}
+
+.weights-list {
+    display: grid;
+    gap: 8px;
+}
+
+.weight-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #f5f5f7;
+    padding: 10px 12px;
+    border-radius: 6px;
+}
+
+.weight-bar {
+    flex: 1;
+    height: 8px;
+    background: linear-gradient(90deg, #0066cc 0%, #0066cc var(--width, 0%), #e0e0e0 var(--width, 0%));
+    border-radius: 4px;
+    margin: 0 12px;
+}
+
+.criteria-list-view {
+    display: grid;
+    gap: 12px;
+}
+
+.criterion-detail {
+    background: #f5f5f7;
+    padding: 12px 16px;
+    border-radius: 8px;
+}
+
+.criterion-header-view {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.priority-badge {
+    background: #0066cc;
+    color: white;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.threshold-values {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-size: 13px;
+}
+
+.tier-ideal {
+    color: #28a745;
+    font-weight: 500;
+}
+
+.tier-acceptable {
+    color: #ffc107;
+    font-weight: 500;
+}
+
+.tier-veto {
+    color: #dc3545;
+    font-weight: 500;
+}
+
+.veto-reason {
+    display: block;
+    margin-top: 8px;
+    color: #666;
+    font-style: italic;
+}
+
+</style>
+
+
+

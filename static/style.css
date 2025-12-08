@@ -379,7 +379,76 @@ input[type="range"]::-moz-range-thumb {
     color: #1d1d1f;
 }
 
-.street-view,
+/* Street view container with mini map */
+.street-view-container {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+}
+
+.street-view {
+    flex: 2;
+    height: 350px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #f5f5f7;
+}
+
+.street-view-mini-map {
+    flex: 1;
+    height: 350px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #f5f5f7;
+    border: 2px solid #007aff;
+    cursor: pointer;
+}
+
+.street-view-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.street-view-help {
+    margin-top: 10px;
+    padding: 10px;
+    background: #e8f4ff;
+    border-radius: 6px;
+    font-size: 14px;
+    color: #1d1d1f;
+}
+
+.street-view-help p {
+    margin: 0;
+}
+
+/* Street View Modal */
+.street-view-modal-container {
+    display: flex;
+    gap: 20px;
+    height: 100%;
+    padding: 20px;
+}
+
+.street-view-modal-pano {
+    flex: 2;
+    height: 100%;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #f5f5f7;
+}
+
+.street-view-modal-map {
+    flex: 1;
+    height: 100%;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #f5f5f7;
+    border: 3px solid #007aff;
+    cursor: pointer;
+}
+
 .map-view {
     width: 100%;
     height: 300px;
@@ -462,7 +531,15 @@ input[type="range"]::-moz-range-thumb {
         font-size: 24px;
     }
     
+    .street-view-container,
+    .street-view-modal-container {
+        flex-direction: column;
+    }
+
     .street-view,
+    .street-view-mini-map,
+    .street-view-modal-pano,
+    .street-view-modal-map,
     .map-view {
         height: 250px;
     }
@@ -2114,5 +2191,465 @@ input[type="range"]::-moz-range-thumb {
 .apartment-selector-meta {
     font-size: 12px;
     color: #666;
+}
+
+/* Profile View Styles */
+.profile-view-section {
+    margin-bottom: 24px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #eee;
+}
+
+.profile-view-section:last-child {
+    border-bottom: none;
+}
+
+.profile-view-section h4 {
+    margin: 0 0 12px 0;
+    color: #1d1d1f;
+    font-size: 16px;
+}
+
+.weights-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.weights-list .weight-item {
+    display: grid;
+    grid-template-columns: 120px 1fr 60px;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    background: #f5f5f7;
+    border-radius: 6px;
+}
+
+.weight-bar {
+    height: 8px;
+    background: linear-gradient(90deg, #0066cc, #5ac8fa);
+    border-radius: 4px;
+    min-width: 10px;
+}
+
+.criteria-list-view {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.criterion-detail {
+    padding: 12px;
+    background: #f5f5f7;
+    border-radius: 8px;
+    border-left: 4px solid #0066cc;
+}
+
+.criterion-header-view {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.priority-badge {
+    background: #0066cc;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.threshold-values {
+    display: flex;
+    gap: 16px;
+    font-size: 13px;
+    flex-wrap: wrap;
+}
+
+.tier-ideal {
+    color: #34c759;
+}
+
+.tier-acceptable {
+    color: #ff9500;
+}
+
+.tier-veto {
+    color: #ff3b30;
+}
+
+.veto-reason {
+    display: block;
+    margin-top: 6px;
+    color: #666;
+    font-style: italic;
+}
+
+/* ========================================================================
+   PREFERENCE EVALUATION SLIDER VISUALIZATION
+   ======================================================================== */
+
+.criteria-sliders-container {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding: 16px 0;
+}
+
+.criterion-slider-row {
+    background: #f8f9fa;
+    border-radius: 12px;
+    padding: 16px;
+    border: 1px solid #e8e8ed;
+}
+
+.criterion-slider-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.criterion-slider-title {
+    font-weight: 600;
+    font-size: 15px;
+    color: #1d1d1f;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.criterion-actual-value {
+    font-size: 13px;
+    color: #666;
+    background: #e8e8ed;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-weight: 500;
+}
+
+.slider-profiles-stack {
+    position: relative;
+    margin-top: 8px;
+}
+
+.profile-slider-container {
+    margin-bottom: 12px;
+}
+
+.profile-slider-container:last-child {
+    margin-bottom: 0;
+}
+
+.profile-slider-label {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 4px;
+    font-weight: 500;
+}
+
+.profile-slider {
+    height: 32px;
+    position: relative;
+    border-radius: 6px;
+    overflow: visible; /* Allow score line to extend slightly outside */
+    background: #e0e0e0;
+}
+
+.slider-zone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    transition: opacity 0.2s;
+}
+
+.slider-zone.ideal {
+    background: linear-gradient(135deg, #34c759, #30b350);
+}
+
+.slider-zone.acceptable {
+    background: linear-gradient(135deg, #ff9500, #f5a623);
+}
+
+.slider-zone.veto {
+    background: linear-gradient(135deg, #ff3b30, #dc3545);
+}
+
+.slider-zone-label {
+    opacity: 0.9;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Scale labels for unified slider bounds */
+.scale-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6px;
+    font-size: 11px;
+    color: #666;
+    padding: 0 4px;
+}
+
+.scale-label.min-label {
+    text-align: left;
+}
+
+.scale-label.max-label {
+    text-align: right;
+}
+
+/* Score line that crosses all profiles */
+.score-line-container {
+    position: absolute;
+    top: -4px;  /* Extend above slider */
+    bottom: -4px; /* Extend below slider */
+    width: 4px;
+    z-index: 30; /* Higher z-index to ensure visibility */
+    pointer-events: none;
+    transform: translateX(-50%); /* Center on the position */
+}
+
+.score-line {
+    width: 4px;
+    height: 100%;
+    background: #000;
+    border-radius: 2px;
+    box-shadow: 0 0 6px rgba(0, 0, 0, 0.5), 0 0 2px rgba(0, 0, 0, 0.8);
+}
+
+.score-line-marker {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 12px;
+    height: 12px;
+    background: #000;
+    border: 3px solid white;
+    border-radius: 50%;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+/* Threshold markers on slider */
+.threshold-marker {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: rgba(255, 255, 255, 0.6);
+    z-index: 5;
+}
+
+.threshold-marker::after {
+    content: attr(data-value);
+    position: absolute;
+    bottom: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 9px;
+    color: #666;
+    white-space: nowrap;
+}
+
+/* Criterion details panel */
+.criterion-details-panel {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #e0e0e0;
+}
+
+.criterion-details-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+}
+
+.criterion-detail-card {
+    background: white;
+    border-radius: 8px;
+    padding: 12px;
+    border: 1px solid #e8e8ed;
+}
+
+.criterion-detail-card h6 {
+    font-size: 12px;
+    color: #666;
+    margin: 0 0 8px 0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.threshold-display {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.threshold-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+}
+
+.threshold-tier-label {
+    font-weight: 500;
+}
+
+.threshold-tier-label.ideal { color: #34c759; }
+.threshold-tier-label.acceptable { color: #ff9500; }
+.threshold-tier-label.veto { color: #ff3b30; }
+
+.threshold-value {
+    color: #1d1d1f;
+    font-weight: 600;
+}
+
+/* Tier result badges */
+.tier-result-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.tier-result-badge.ideal {
+    background: #d1f4e0;
+    color: #0d6832;
+}
+
+.tier-result-badge.acceptable {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.tier-result-badge.veto {
+    background: #ffe0e0;
+    color: #c41e3a;
+}
+
+/* Distance indicator */
+.distance-indicator {
+    font-size: 12px;
+    color: #666;
+    margin-top: 4px;
+}
+
+.distance-indicator.positive { color: #34c759; }
+.distance-indicator.negative { color: #ff3b30; }
+
+/* Score percentage bar */
+.score-percentage-bar {
+    height: 6px;
+    background: #e0e0e0;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 8px;
+}
+
+.score-percentage-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.score-percentage-fill.ideal { background: #34c759; }
+.score-percentage-fill.acceptable { background: #ff9500; }
+.score-percentage-fill.veto { background: #ff3b30; }
+
+/* Evaluation table redesign */
+.eval-criteria-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+
+.eval-criteria-table th {
+    text-align: left;
+    padding: 12px;
+    background: #f5f5f7;
+    font-weight: 600;
+    font-size: 13px;
+    color: #1d1d1f;
+    border-bottom: 2px solid #e0e0e0;
+}
+
+.eval-criteria-table td {
+    padding: 0;
+    border-bottom: 1px solid #f0f0f0;
+    vertical-align: top;
+}
+
+.eval-criteria-table tr:last-child td {
+    border-bottom: none;
+}
+
+/* Modal sizing for evaluation detail */
+.pref-detail-modal .modal-content {
+    max-width: 900px;
+    width: 95%;
+}
+
+/* Price display with parking breakdown */
+.price-breakdown {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 12px;
+}
+
+.price-breakdown .total-price {
+    font-weight: 600;
+    font-size: 14px;
+    color: #1d1d1f;
+}
+
+.price-breakdown .price-component {
+    color: #666;
+}
+
+.price-breakdown .parking-included {
+    color: #ff9500;
+    font-style: italic;
+}
+
+/* Responsive adjustments for sliders */
+@media (max-width: 768px) {
+    .criterion-slider-row {
+        padding: 12px;
+    }
+    
+    .criterion-slider-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+    
+    .criterion-details-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .slider-zone-label {
+        font-size: 8px;
+    }
+    
+    .profile-slider {
+        height: 28px;
+    }
 }
 
