@@ -9,9 +9,15 @@
 </head>
 <body>
     <div class="container">
-        <header>
+        <header style="position: relative;">
             <h1>🏠 Apartment Analyzer</h1>
             <p>Manage your apartment listings and analyze your options</p>
+            {% if current_user %}
+            <div class="user-chip" style="position: absolute; top: 0; right: 0; display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 0.9rem; color: #6e6e73;">👤 {{ current_user }}</span>
+                <a href="{{ url_for('logout') }}" class="btn btn-secondary" style="padding: 6px 14px; font-size: 0.85rem; text-decoration: none;">Log out</a>
+            </div>
+            {% endif %}
         </header>
 
         <div class="tabs">

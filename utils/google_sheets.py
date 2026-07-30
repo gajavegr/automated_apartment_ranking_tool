@@ -8,6 +8,7 @@ Handles multi-tab operations for:
 """
 
 import os
+import contextvars
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
@@ -20,6 +21,31 @@ import config
 from utils.rate_limiter import get_rate_limiter
 
 
+# ---------------------------------------------------------------------------
+# Per-user context
+#
+# The multi-user deployment stores each user's data in their own set of
+# worksheet tabs, namespaced as "<username> - <Base Tab Name>". The active
+# username is tracked per request/thread via a context variable so the single
+# shared GoogleSheetsClient instance resolves worksheet lookups to the right
+# user's tabs. When no user is set (e.g. CLI scripts, single-user usage), the
+# base tab names are used unchanged for backwards compatibility.
+# ---------------------------------------------------------------------------
+_current_user_var: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "current_sheets_user", default=None
+)
+
+
+def set_current_user(username: Optional[str]) -> None:
+    """Set the active username for worksheet scoping (per request/thread)."""
+    _current_user_var.set(username.strip() if username else None)
+
+
+def get_current_user() -> Optional[str]:
+    """Get the active username used for worksheet scoping, or None."""
+    return _current_user_var.get()
+
+
 class GoogleSheetsClient:
     """Client for interacting with Google Sheets"""
     
@@ -28,16 +54,69 @@ class GoogleSheetsClient:
         'https://www.googleapis.com/auth/drive'
     ]
     
-    # Sheet names
-    MAIN_SHEET_NAME = "Apartment Data"
-    SCATTER_PLOT_SHEET_NAME = "Price vs Score"
-    CRITERIA_MATRIX_SHEET_NAME = "Criteria Matrix"
+    # ------------------------------------------------------------------
+    # Worksheet (tab) names
+    #
+    # Per-user tabs are namespaced as "<username> - <base name>" and resolved
+    # dynamically via the properties below based on the active user context
+    # (see set_current_user / get_current_user). Global tabs are shared across
+    # all users and are NOT namespaced.
+    # ------------------------------------------------------------------
+
+    # Base names for per-user tabs
+    _BASE_MAIN_SHEET_NAME = "Apartment Data"
+    _BASE_SCATTER_PLOT_SHEET_NAME = "Price vs Score"
+    _BASE_CRITERIA_MATRIX_SHEET_NAME = "Criteria Matrix"
+    _BASE_PLACES_OF_INTEREST_SHEET_NAME = "Places of Interest"
+    _BASE_EXCLUDED_PLACES_SHEET_NAME = "Excluded Places"
+    _BASE_USER_EDITS_LOG_SHEET_NAME = "User Edits Log"
+    _BASE_SETTINGS_SHEET_NAME = "Settings"
+
+    # Global (shared) tabs — not namespaced per user.
+    # "Approved Gyms" is a shared reference cache of gym metadata (place_id,
+    # coordinates, rating) so expensive gym lookups aren't duplicated per user.
     APPROVED_GYMS_SHEET_NAME = "Approved Gyms"
-    PLACES_OF_INTEREST_SHEET_NAME = "Places of Interest"
-    EXCLUDED_PLACES_SHEET_NAME = "Excluded Places"
-    USER_EDITS_LOG_SHEET_NAME = "User Edits Log"
-    SETTINGS_SHEET_NAME = "Settings"
-    
+    # "Users" is the registry of usernames used for the uniqueness check.
+    USERS_SHEET_NAME = "Users"
+
+    def _scoped_name(self, base_name: str) -> str:
+        """Return the current user's namespaced tab name for a base name.
+
+        Falls back to the base name when no user context is set.
+        """
+        user = get_current_user()
+        if user:
+            return f"{user} - {base_name}"
+        return base_name
+
+    @property
+    def MAIN_SHEET_NAME(self) -> str:
+        return self._scoped_name(self._BASE_MAIN_SHEET_NAME)
+
+    @property
+    def SCATTER_PLOT_SHEET_NAME(self) -> str:
+        return self._scoped_name(self._BASE_SCATTER_PLOT_SHEET_NAME)
+
+    @property
+    def CRITERIA_MATRIX_SHEET_NAME(self) -> str:
+        return self._scoped_name(self._BASE_CRITERIA_MATRIX_SHEET_NAME)
+
+    @property
+    def PLACES_OF_INTEREST_SHEET_NAME(self) -> str:
+        return self._scoped_name(self._BASE_PLACES_OF_INTEREST_SHEET_NAME)
+
+    @property
+    def EXCLUDED_PLACES_SHEET_NAME(self) -> str:
+        return self._scoped_name(self._BASE_EXCLUDED_PLACES_SHEET_NAME)
+
+    @property
+    def USER_EDITS_LOG_SHEET_NAME(self) -> str:
+        return self._scoped_name(self._BASE_USER_EDITS_LOG_SHEET_NAME)
+
+    @property
+    def SETTINGS_SHEET_NAME(self) -> str:
+        return self._scoped_name(self._BASE_SETTINGS_SHEET_NAME)
+
     def __init__(self, credentials_path: str = None, sheet_id: str = None):
         """
         Initialize Google Sheets client
@@ -1155,4 +1234,91 @@ class GoogleSheetsClient:
             'backgroundColor': {'red': 0.2, 'green': 0.4, 'blue': 0.8}
         })
         sheet.freeze(rows=1)
+
+    # ------------------------------------------------------------------
+    # User registry (multi-user support)
+    #
+    # A single global "Users" tab holds the set of usernames. It is used for
+    # the uniqueness check on registration and to resolve the canonical
+    # (stored) casing of a username at login so worksheet tab names match.
+    # ------------------------------------------------------------------
+
+    def _get_users_worksheet(self) -> gspread.Worksheet:
+        """Get (or create + initialize) the global Users registry worksheet."""
+        try:
+            return self.spreadsheet.worksheet(self.USERS_SHEET_NAME)
+        except WorksheetNotFound:
+            worksheet = self.spreadsheet.add_worksheet(
+                title=self.USERS_SHEET_NAME,
+                rows=1000,
+                cols=3
+            )
+            headers = ["Username", "Created At"]
+            worksheet.update('A1:B1', [headers])
+            worksheet.format('A1:B1', {
+                'textFormat': {'bold': True},
+                'backgroundColor': {'red': 0.2, 'green': 0.4, 'blue': 0.8}
+            })
+            worksheet.freeze(rows=1)
+            return worksheet
+
+    def list_users(self) -> List[str]:
+        """Return all registered usernames (as stored)."""
+        worksheet = self._get_users_worksheet()
+        records = worksheet.get_all_records()
+        users = []
+        for record in records:
+            username = str(record.get('Username', '')).strip()
+            if username:
+                users.append(username)
+        return users
+
+    def get_canonical_username(self, username: str) -> Optional[str]:
+        """Return the stored form of a username matching case-insensitively.
+
+        Returns None if the username is not registered.
+        """
+        if not username:
+            return None
+        target = username.strip().lower()
+        for stored in self.list_users():
+            if stored.lower() == target:
+                return stored
+        return None
+
+    def user_exists(self, username: str) -> bool:
+        """Return True if a username is already registered (case-insensitive)."""
+        return self.get_canonical_username(username) is not None
+
+    def create_user(self, username: str) -> bool:
+        """Register a new username and initialize their worksheet tabs.
+
+        Returns True if created, False if the username already exists
+        (case-insensitive collision).
+        """
+        username = (username or "").strip()
+        if not username:
+            raise ValueError("Username cannot be empty")
+
+        if self.user_exists(username):
+            return False
+
+        worksheet = self._get_users_worksheet()
+        worksheet.append_row([
+            username,
+            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        ])
+
+        # Initialize this user's core worksheet tabs so the app has headers
+        # to read/write against immediately after registration.
+        previous_user = get_current_user()
+        try:
+            set_current_user(username)
+            self.initialize_sheets()
+        except Exception as e:
+            print(f"⚠️  Warning: could not initialize sheets for '{username}': {e}")
+        finally:
+            set_current_user(previous_user)
+
+        return True
 

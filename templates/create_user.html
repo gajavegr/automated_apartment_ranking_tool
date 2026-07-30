@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create User - Apartment Analyzer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        .auth-wrapper {
+            max-width: 460px;
+            margin: 8vh auto;
+        }
+        .auth-card {
+            background: white;
+            border-radius: 18px;
+            padding: 36px 32px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+        }
+        .auth-card h1 {
+            font-size: 1.6rem;
+            margin: 0 0 4px;
+        }
+        .auth-sub {
+            color: #6e6e73;
+            margin: 0 0 24px;
+            font-size: 0.95rem;
+        }
+        .auth-card .btn {
+            width: 100%;
+            justify-content: center;
+            margin-top: 8px;
+        }
+        .auth-alt {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 0.9rem;
+            color: #6e6e73;
+        }
+        .auth-alt a {
+            color: #0071e3;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .auth-note {
+            margin-top: 22px;
+            padding: 12px 14px;
+            background: #f5f5f7;
+            border-radius: 10px;
+            font-size: 0.8rem;
+            color: #6e6e73;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-wrapper">
+        <div class="auth-card">
+            <h1>🏠 Create a User</h1>
+            <p class="auth-sub">Pick a username to get your own apartment workspace</p>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <form method="POST" action="{{ url_for('create_user') }}">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text"
+                           id="username"
+                           name="username"
+                           placeholder="e.g. ganesh"
+                           value="{{ prefill }}"
+                           autocomplete="username"
+                           maxlength="60"
+                           autofocus
+                           required>
+                    <small>Must be unique. This is how the app finds your data.</small>
+                </div>
+                <button type="submit" class="btn btn-primary">Create User</button>
+            </form>
+
+            <p class="auth-alt">
+                Already have a user? <a href="{{ url_for('login') }}">Sign in</a>
+            </p>
+
+            <div class="auth-note">
+                ⚠️ Usernames aren't password protected. This layer personalizes
+                your data; it doesn't secure it. Don't store anything sensitive.
+            </div>
+        </div>
+    </div>
+</body>
+</html>
