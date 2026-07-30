@@ -12,11 +12,14 @@ import json
 import signal
 import webbrowser
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from functools import wraps
+from flask import (
+    Flask, render_template, request, jsonify, redirect, url_for, flash, session, g
+)
 from threading import Timer
 
 import config
-from utils.google_sheets import GoogleSheetsClient
+from utils.google_sheets import GoogleSheetsClient, set_current_user
 from analyzers.location_analyzer import LocationAnalyzer
 
 # Global flag for graceful shutdown
@@ -37,7 +40,10 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+# Use a stable secret key so Flask sessions survive across gunicorn workers and
+# restarts. In production (e.g. Railway) set FLASK_SECRET_KEY; the random
+# fallback is only suitable for a single-process local dev server.
+app.secret_key = os.environ.get('FLASK_SECRET_KEY') or os.urandom(24)
 
 # Register preference routes
 try:
@@ -258,10 +264,151 @@ def _normalize_sheet_row_for_scoring(row):
     return data
 
 
+# ---------------------------------------------------------------------------
+# Authentication (username-only, no password)
+#
+# This is a lightweight personalization layer, NOT a security boundary:
+# knowing a username is enough to access that user's data. See README.
+# ---------------------------------------------------------------------------
+
+# Endpoints reachable without a logged-in user.
+PUBLIC_ENDPOINTS = {'login', 'create_user', 'logout', 'health_check', 'static'}
+
+
+def _wants_json_response() -> bool:
+    """Heuristic: does the current request expect a JSON (API) response?
+
+    The only HTML page in this app is the entry form at '/'. Every other route
+    returns JSON and is called via fetch/XHR. So the one case that should get an
+    HTML redirect is a top-level browser navigation: a GET that asks for HTML.
+    Everything else (fetch calls, XHR, POSTs) gets a JSON 401.
+    """
+    if request.method in ('GET', 'HEAD') and 'text/html' in request.headers.get('Accept', ''):
+        return False
+    return True
+
+
+@app.before_request
+def require_login():
+    """Gate all routes behind a selected user and set the per-request context."""
+    # Resolve the active user for this request (drives per-user sheet scoping).
+    username = session.get('username')
+    g.username = username
+    set_current_user(username)
+
+    endpoint = request.endpoint
+    if endpoint in PUBLIC_ENDPOINTS or endpoint is None:
+        return None
+
+    if not username:
+        if _wants_json_response():
+            return jsonify({'error': 'Not logged in', 'login_required': True}), 401
+        return redirect(url_for('login'))
+
+    return None
+
+
+@app.after_request
+def _clear_user_context(response):
+    """Reset the per-request user context after the response is built."""
+    set_current_user(None)
+    return response
+
+
+@app.context_processor
+def inject_current_user():
+    """Make the current username available to all templates."""
+    return {'current_user': session.get('username')}
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Username-only login page (the app entry point)."""
+    # Already logged in? Go straight to the app.
+    if session.get('username'):
+        return redirect(url_for('index'))
+
+    if request.method == 'POST':
+        username = (request.form.get('username') or '').strip()
+        if not username:
+            flash('Please enter a username.', 'error')
+            return redirect(url_for('login'))
+
+        if sheets_client is None:
+            flash('Backend not ready. Please try again in a moment.', 'error')
+            return redirect(url_for('login'))
+
+        try:
+            canonical = sheets_client.get_canonical_username(username)
+        except Exception as e:
+            print(f"Error checking username during login: {e}")
+            flash('Could not reach the user registry. Please try again.', 'error')
+            return redirect(url_for('login'))
+
+        if not canonical:
+            flash(f'No user named "{username}" exists. Create one first.', 'error')
+            return redirect(url_for('create_user', username=username))
+
+        session['username'] = canonical
+        flash(f'Welcome back, {canonical}!', 'success')
+        return redirect(url_for('index'))
+
+    return render_template('login.html')
+
+
+@app.route('/create_user', methods=['GET', 'POST'])
+def create_user():
+    """Register a new username."""
+    if request.method == 'POST':
+        username = (request.form.get('username') or '').strip()
+
+        if not username:
+            flash('Please enter a username.', 'error')
+            return redirect(url_for('create_user'))
+
+        if len(username) > 60:
+            flash('Username is too long (max 60 characters).', 'error')
+            return redirect(url_for('create_user'))
+
+        if sheets_client is None:
+            flash('Backend not ready. Please try again in a moment.', 'error')
+            return redirect(url_for('create_user'))
+
+        try:
+            created = sheets_client.create_user(username)
+        except Exception as e:
+            print(f"Error creating user: {e}")
+            import traceback
+            traceback.print_exc()
+            flash('Could not create the user. Please try again.', 'error')
+            return redirect(url_for('create_user'))
+
+        if not created:
+            flash(f'Username "{username}" is already taken. Choose another.', 'error')
+            return redirect(url_for('create_user'))
+
+        session['username'] = username
+        flash(f'Account "{username}" created. Welcome!', 'success')
+        return redirect(url_for('index'))
+
+    # Pre-fill the username if we were redirected here from a failed login.
+    prefill = (request.args.get('username') or '').strip()
+    return render_template('create_user.html', prefill=prefill)
+
+
+@app.route('/logout', methods=['GET', 'POST'])
+def logout():
+    """Log out the current user."""
+    session.pop('username', None)
+    set_current_user(None)
+    flash('You have been logged out.', 'success')
+    return redirect(url_for('login'))
+
+
 @app.route('/')
 def index():
     """Show the entry form"""
-    return render_template('entry_form.html', 
+    return render_template('entry_form.html',
                          google_maps_api_key=config.GOOGLE_MAPS_API_KEY,
                          sf_neighborhoods=config.SF_NEIGHBORHOODS)
 

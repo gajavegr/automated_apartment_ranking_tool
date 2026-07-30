@@ -212,6 +212,41 @@ python main.py --analyze-new
 
 This will calculate commute times, safety scores, nearby amenities, and final rankings.
 
+### Multi-User Mode (username login)
+
+The web app supports lightweight multi-user usage so several people can keep
+their apartment lists, weights, and settings separate on one deployment.
+
+**How it works:**
+
+- Visiting the app lands on a **login page**. Enter a username to continue.
+- **New users** register on the **Create User** page. Usernames must be unique
+  (the check is case-insensitive).
+- Once logged in, the app remembers you via a Flask session cookie, and every
+  screen operates on *your* data only.
+- Each user's data lives in its own set of Google Sheet tabs, namespaced as
+  `<username> - Apartment Data`, `<username> - Settings`, etc. A global `Users`
+  tab holds the registry of usernames. Shared reference data (the `Approved
+  Gyms` cache) stays global so expensive lookups aren't duplicated per user.
+- Use the **Log out** link in the header (next to your username) to switch users.
+
+> ⚠️ **This is identification, not authentication.** There are no passwords —
+> anyone who knows a username can access that user's data. It's a
+> convenience/personalization layer, **not** a security boundary. Don't store
+> anything sensitive.
+
+**Session secret key:** set `FLASK_SECRET_KEY` to a stable random value in any
+production / multi-worker deployment (see `env.example`). Without it, sessions
+don't survive restarts and won't be shared across gunicorn workers, so users get
+logged out unexpectedly. Generate one with:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+For local single-process development the app falls back to a random key if
+`FLASK_SECRET_KEY` is unset.
+
 ### Alternative: Terminal Interface
 
 If you prefer the terminal (though the web interface is recommended):
