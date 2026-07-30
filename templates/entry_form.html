@@ -12,12 +12,13 @@
         <header style="position: relative;">
             <h1>🏠 Apartment Analyzer</h1>
             <p>Manage your apartment listings and analyze your options</p>
-            {% if current_user %}
             <div class="user-chip" style="position: absolute; top: 0; right: 0; display: flex; align-items: center; gap: 10px;">
+                <button type="button" class="btn btn-secondary" onclick="openOnboarding()" style="padding: 6px 14px; font-size: 0.85rem;" title="Getting started guide">❔ Getting started</button>
+                {% if current_user %}
                 <span style="font-size: 0.9rem; color: #6e6e73;">👤 {{ current_user }}</span>
                 <a href="{{ url_for('logout') }}" class="btn btn-secondary" style="padding: 6px 14px; font-size: 0.85rem; text-decoration: none;">Log out</a>
+                {% endif %}
             </div>
-            {% endif %}
         </header>
 
         <div class="tabs">
@@ -1424,10 +1425,154 @@
         </div>
     </div>
 
+    <!-- ===================== Onboarding walkthrough ===================== -->
+    <div id="onboardingModal" class="modal onboarding-modal" style="display: none;">
+        <div class="modal-content onboarding-content">
+            <button type="button" class="modal-close onboarding-close" onclick="closeOnboarding()" aria-label="Close">&times;</button>
+            <div class="onboarding-body">
+                <div class="onboarding-icon" id="onboardingIcon">👋</div>
+                <h2 class="onboarding-title" id="onboardingTitle">Welcome</h2>
+                <div class="onboarding-text" id="onboardingText"></div>
+            </div>
+            <div class="onboarding-footer">
+                <div class="onboarding-dots" id="onboardingDots"></div>
+                <div class="onboarding-actions">
+                    <button type="button" class="btn btn-secondary" id="onboardingSkipBtn" onclick="closeOnboarding()">Skip</button>
+                    <button type="button" class="btn btn-secondary" id="onboardingBackBtn" onclick="onboardingPrev()" style="display: none;">Back</button>
+                    <button type="button" class="btn btn-primary" id="onboardingNextBtn" onclick="onboardingNext()">Next</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="{{ url_for('static', filename='preferences.js') }}?v=20251208v7"></script>
     <script>
+        // ===================== Onboarding walkthrough =====================
+        // Server tells us whether this user has already finished/dismissed it.
+        const ONBOARDING_COMPLETED = {{ 'true' if onboarding_completed else 'false' }};
+
+        const ONBOARDING_STEPS = [
+            {
+                icon: '👋',
+                title: 'Welcome to Apartment Analyzer',
+                html: `
+                    <p>This tool helps you compare apartments objectively — scoring each one on
+                    what <em>you</em> care about, from commute and safety to nearby gyms and price.</p>
+                    <p>Here's the recommended workflow:</p>
+                    <ol class="onboarding-steps">
+                        <li><strong>Set your preferences</strong> — tell it what matters to you.</li>
+                        <li><strong>Add apartments</strong> — with Google Maps &amp; optional AI photo analysis.</li>
+                        <li><strong>Run analysis</strong> — score every candidate.</li>
+                        <li><strong>Review results</strong> — scatter plot &amp; criteria matrix.</li>
+                        <li><strong>Adjust &amp; iterate</strong> — tweak weights and re-analyze.</li>
+                    </ol>`
+            },
+            {
+                icon: '⚖️',
+                title: '1. Set your preferences',
+                html: `
+                    <p>Start in the <strong>Preferences</strong> tab. Create a profile and set
+                    <strong>weights</strong> for what matters most — commute time, neighborhood safety,
+                    nearby amenities (gyms, cafes, restaurants, parks), price, and more.</p>
+                    <p>These weights drive the scoring, so every apartment is judged by your priorities.
+                    You can keep several profiles and compare what each one values.</p>`
+            },
+            {
+                icon: '🏠',
+                title: '2. Add apartments',
+                html: `
+                    <p>In the <strong>Entry</strong> tab, add each listing. Paste a Zillow URL and start
+                    typing the address — Google Maps autocompletes it and pulls in location data.</p>
+                    <p>Enter rent, size and details, and optionally run <strong>AI photo analysis</strong>
+                    to summarize the listing's photos. Load and edit existing apartments here too.</p>`
+            },
+            {
+                icon: '📊',
+                title: '3. Run the analysis',
+                html: `
+                    <p>Open the <strong>Analysis</strong> tab and click <strong>Run Analysis</strong>. The
+                    tool gathers location intelligence for each apartment — commute times, SF-crime-based
+                    safety scoring, and nearby gyms, restaurants, cafes and parks — then scores them
+                    against your weighted preferences.</p>`
+            },
+            {
+                icon: '🔍',
+                title: '4. Review & iterate',
+                html: `
+                    <p>Results appear as two visualizations: a <strong>price-vs-score scatter plot</strong>
+                    to spot the best value, and a <strong>criteria matrix</strong> breaking down how each
+                    apartment scored on every factor.</p>
+                    <p>Not sure about your weights? Head back to <strong>Preferences</strong>, adjust, and
+                    re-analyze. Iterate until the ranking feels right.</p>
+                    <p style="color:#6e6e73; font-size:0.85rem;">💡 You can reopen this guide anytime via
+                    <strong>❔ Getting started</strong> in the top-right.</p>`
+            }
+        ];
+
+        let onboardingStep = 0;
+        // Whether we've already told the server onboarding is done (avoid re-POSTing).
+        let onboardingMarked = ONBOARDING_COMPLETED;
+
+        function renderOnboardingStep() {
+            const step = ONBOARDING_STEPS[onboardingStep];
+            document.getElementById('onboardingIcon').textContent = step.icon;
+            document.getElementById('onboardingTitle').textContent = step.title;
+            document.getElementById('onboardingText').innerHTML = step.html;
+
+            // Progress dots
+            const dots = ONBOARDING_STEPS.map((_, i) =>
+                `<span class="ob-dot${i === onboardingStep ? ' active' : ''}"></span>`).join('');
+            document.getElementById('onboardingDots').innerHTML = dots;
+
+            // Buttons
+            const isFirst = onboardingStep === 0;
+            const isLast = onboardingStep === ONBOARDING_STEPS.length - 1;
+            document.getElementById('onboardingBackBtn').style.display = isFirst ? 'none' : '';
+            document.getElementById('onboardingSkipBtn').style.display = isLast ? 'none' : '';
+            document.getElementById('onboardingNextBtn').textContent =
+                isLast ? 'Set your preferences →' : 'Next';
+        }
+
+        function openOnboarding() {
+            onboardingStep = 0;
+            renderOnboardingStep();
+            document.getElementById('onboardingModal').style.display = 'flex';
+        }
+
+        function onboardingNext() {
+            if (onboardingStep < ONBOARDING_STEPS.length - 1) {
+                onboardingStep++;
+                renderOnboardingStep();
+            } else {
+                // Finished: close and drop the user into the Preferences tab.
+                closeOnboarding();
+                showTab('preferences');
+            }
+        }
+
+        function onboardingPrev() {
+            if (onboardingStep > 0) {
+                onboardingStep--;
+                renderOnboardingStep();
+            }
+        }
+
+        function closeOnboarding() {
+            document.getElementById('onboardingModal').style.display = 'none';
+            markOnboardingComplete();
+        }
+
+        function markOnboardingComplete() {
+            if (onboardingMarked) return;
+            onboardingMarked = true;
+            fetch('/onboarding/complete', { method: 'POST' }).catch(err => {
+                // Non-fatal: worst case the guide auto-opens again next visit.
+                console.warn('Could not save onboarding state:', err);
+            });
+        }
+
         let map;
         let streetView;
         let streetViewMiniMap;
@@ -4657,6 +4802,11 @@ Score = 10 × (1 - ${parseFloat(gymWalkTime).toFixed(1)} / ${maxTime}) = ${gymSc
             setupPhotoSelectorButton();
             setupClearWfhButton();
             updatePhotoSelectorHelper();
+
+            // First-run: auto-open the onboarding walkthrough for new users.
+            if (!ONBOARDING_COMPLETED) {
+                openOnboarding();
+            }
             
             // Setup collapsible sections
             document.querySelectorAll('.collapsible-section').forEach(button => {
