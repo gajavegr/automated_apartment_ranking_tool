@@ -408,9 +408,36 @@ def logout():
 @app.route('/')
 def index():
     """Show the entry form"""
+    # Whether to auto-open the first-run onboarding walkthrough for this user.
+    onboarding_completed = True
+    username = session.get('username')
+    if username and sheets_client is not None:
+        try:
+            onboarding_completed = sheets_client.has_completed_onboarding(username)
+        except Exception as e:
+            print(f"Error checking onboarding state: {e}")
+
     return render_template('entry_form.html',
                          google_maps_api_key=config.GOOGLE_MAPS_API_KEY,
-                         sf_neighborhoods=config.SF_NEIGHBORHOODS)
+                         sf_neighborhoods=config.SF_NEIGHBORHOODS,
+                         onboarding_completed=onboarding_completed)
+
+
+@app.route('/onboarding/complete', methods=['POST'])
+def onboarding_complete():
+    """Mark the current user's onboarding as finished/dismissed so it doesn't
+    auto-open again on future visits. Idempotent."""
+    username = session.get('username')
+    if not username:
+        return jsonify({'error': 'Not logged in', 'login_required': True}), 401
+    if sheets_client is None:
+        return jsonify({'success': False, 'error': 'Backend not ready'}), 503
+    try:
+        sheets_client.mark_onboarding_complete(username)
+        return jsonify({'success': True})
+    except Exception as e:
+        print(f"Error marking onboarding complete: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/health')

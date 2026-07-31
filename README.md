@@ -247,6 +247,24 @@ python -c "import secrets; print(secrets.token_hex(32))"
 For local single-process development the app falls back to a random key if
 `FLASK_SECRET_KEY` is unset.
 
+### Getting started walkthrough (onboarding)
+
+The first time a user logs in, a short **Getting started** walkthrough opens
+automatically. It introduces the main features and the recommended workflow:
+
+1. **Set your preferences** (Preferences tab) — weight what matters to you.
+2. **Add apartments** (Entry tab) — with Google Maps assist and optional AI
+   photo analysis.
+3. **Run analysis** (Analysis tab) — score every candidate.
+4. **Review results** — price-vs-score scatter plot and criteria matrix.
+5. **Adjust weights and iterate.**
+
+Users can step through it, **Skip** it, or finish and jump straight to the
+Preferences tab. It can be reopened anytime via the **❔ Getting started** button
+in the top-right. Whether a user has completed or dismissed it is tracked
+per-user in the `Users` tab (an `Onboarded At` column), so returning users
+aren't shown it again automatically.
+
 ### Alternative: Terminal Interface
 
 If you prefer the terminal (though the web interface is recommended):

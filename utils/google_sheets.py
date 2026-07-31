@@ -78,6 +78,9 @@ class GoogleSheetsClient:
     APPROVED_GYMS_SHEET_NAME = "Approved Gyms"
     # "Users" is the registry of usernames used for the uniqueness check.
     USERS_SHEET_NAME = "Users"
+    # Column in the Users tab that records when a user finished/dismissed the
+    # first-run onboarding walkthrough (blank = not yet onboarded).
+    _ONBOARDED_AT_HEADER = "Onboarded At"
 
     def _scoped_name(self, base_name: str) -> str:
         """Return the current user's namespaced tab name for a base name.
@@ -1253,9 +1256,9 @@ class GoogleSheetsClient:
                 rows=1000,
                 cols=3
             )
-            headers = ["Username", "Created At"]
-            worksheet.update('A1:B1', [headers])
-            worksheet.format('A1:B1', {
+            headers = ["Username", "Created At", self._ONBOARDED_AT_HEADER]
+            worksheet.update('A1:C1', [headers])
+            worksheet.format('A1:C1', {
                 'textFormat': {'bold': True},
                 'backgroundColor': {'red': 0.2, 'green': 0.4, 'blue': 0.8}
             })
@@ -1321,4 +1324,70 @@ class GoogleSheetsClient:
             set_current_user(previous_user)
 
         return True
+
+    # ------------------------------------------------------------------
+    # Onboarding state (multi-user support)
+    #
+    # Whether a user has finished/dismissed the first-run walkthrough is
+    # tracked in the global Users tab (an "Onboarded At" timestamp column)
+    # rather than a per-user tab, so it's a single lookup keyed by username.
+    # ------------------------------------------------------------------
+
+    def has_completed_onboarding(self, username: str) -> bool:
+        """Return True if the user has finished or dismissed onboarding.
+
+        Robust to an older Users tab that predates the "Onboarded At" column:
+        the header is simply absent from the records, so this returns False.
+        """
+        if not username:
+            return False
+        target = username.strip().lower()
+        try:
+            worksheet = self._get_users_worksheet()
+            for record in worksheet.get_all_records():
+                stored = str(record.get('Username', '')).strip()
+                if stored.lower() == target:
+                    return bool(str(record.get(self._ONBOARDED_AT_HEADER, '')).strip())
+        except Exception as e:
+            print(f"Error reading onboarding state for '{username}': {e}")
+        return False
+
+    def mark_onboarding_complete(self, username: str) -> bool:
+        """Record that the user has finished/dismissed onboarding.
+
+        Adds the "Onboarded At" column to the Users tab on the fly if it does
+        not exist yet (older registries created with only two columns), then
+        stamps the current time in the matching user's row. Returns True on a
+        successful write, False if the user could not be found.
+        """
+        if not username:
+            return False
+        target = username.strip().lower()
+        try:
+            worksheet = self._get_users_worksheet()
+            header_row = worksheet.row_values(1)
+
+            # Locate (or append) the "Onboarded At" column.
+            try:
+                col_idx = header_row.index(self._ONBOARDED_AT_HEADER) + 1
+            except ValueError:
+                col_idx = len(header_row) + 1
+                worksheet.update_cell(1, col_idx, self._ONBOARDED_AT_HEADER)
+
+            # Find the user's row (row 1 is the header).
+            usernames = worksheet.col_values(1)
+            row_idx = None
+            for i, stored in enumerate(usernames[1:], start=2):
+                if str(stored).strip().lower() == target:
+                    row_idx = i
+                    break
+            if row_idx is None:
+                return False
+
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            worksheet.update_cell(row_idx, col_idx, timestamp)
+            return True
+        except Exception as e:
+            print(f"Error marking onboarding complete for '{username}': {e}")
+            return False
 
