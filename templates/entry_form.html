@@ -2004,8 +2004,19 @@
 
         function onPlaceChanged() {
             const place = autocomplete.getPlace();
-            
+
             if (!place.geometry) {
+                // The user pressed Enter or blurred without picking a prediction from
+                // the dropdown. In that case the Autocomplete widget fires this event
+                // with an unresolved stub (no geometry / address_components), so the
+                // client-side neighborhood detection below would be skipped entirely.
+                // Fall back to geocoding the typed address on the backend, which both
+                // updates the maps and auto-populates neighborhoods via /get_neighborhoods.
+                const typedAddress = document.getElementById('address').value.trim();
+                if (typedAddress) {
+                    populateNeighborhoodsForAddress(typedAddress);
+                    geocodeAndUpdateMaps(typedAddress);
+                }
                 return;
             }
 
@@ -2050,6 +2061,26 @@
                 label.appendChild(document.createTextNode(' ' + neighborhood));
                 container.appendChild(label);
             });
+        }
+
+        // Fallback neighborhood detection used when the Autocomplete widget fires
+        // without a resolved place (e.g. the user typed the full address and pressed
+        // Enter instead of clicking a prediction). Uses the backend geocoder so the
+        // neighborhood is populated regardless of how the address was entered.
+        async function populateNeighborhoodsForAddress(address) {
+            try {
+                const response = await fetch('/get_neighborhoods', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address })
+                });
+                const data = await response.json();
+                if (data.success && Array.isArray(data.neighborhoods) && data.neighborhoods.length) {
+                    updateNeighborhoodCheckboxes(data.neighborhoods);
+                }
+            } catch (error) {
+                console.error('Error fetching neighborhoods:', error);
+            }
         }
 
         function updateNeighborhoodCheckboxes(neighborhoods) {
