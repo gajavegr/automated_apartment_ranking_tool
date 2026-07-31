@@ -1625,45 +1625,77 @@ def run_analysis():
         sys.stdout.flush()
         
         results = []
+        # Apartments that were picked up but couldn't be scored or written.
+        # Tracked so we can tell the user *why* instead of silently reporting 0.
+        failures = []
+
+        def _apt_label(apt):
+            addr = apt.get(config.SHEET_COLUMNS['address'], '') or 'Unknown address'
+            return str(addr)[:80]
+
         for apartment in apartments_to_analyze:
+            label = _apt_label(apartment)
+            row_number = apartment.get('_row_number')
             try:
                 result = analyzer.analyze_apartment(apartment)
-                if result and 'error' not in result:
-                    # Write each result back to the sheet
-                    row_number = apartment.get('_row_number')
-                    if row_number:
-                        print(f"Writing analysis results to row {row_number}")
-                        
-                        # Rate limiting: Sleep between writes to avoid hitting API limits
-                        import time
-                        time.sleep(1.2)
-                        
-                        # Retry logic with exponential backoff
-                        max_retries = 3
-                        retry_delay = 5
-                        for attempt in range(max_retries):
-                            try:
-                                sheets_client.write_apartment_data(row_number, result)
-                                break  # Success
-                            except Exception as write_error:
-                                error_str = str(write_error)
-                                if 'RATE_LIMIT_EXCEEDED' in error_str or '429' in error_str:
-                                    if attempt < max_retries - 1:
-                                        wait_time = retry_delay * (2 ** attempt)
-                                        print(f"  ⏳ Rate limit hit, waiting {wait_time}s before retry {attempt + 1}/{max_retries}...")
-                                        time.sleep(wait_time)
-                                    else:
-                                        print(f"  ❌ Failed to write after {max_retries} attempts")
-                                        raise
-                                else:
-                                    raise
-                    else:
-                        print(f"⚠️  Warning: No row number found for apartment: {apartment.get('address')}")
-                    results.append(result)
+
+                # analyze_apartment reports failures by returning {'error': ...}
+                # rather than raising, so check for that explicitly.
+                if not result or 'error' in result:
+                    reason = (result or {}).get('error', 'analysis returned no result')
+                    print(f"  ✗ Analysis failed for row {row_number} ({label}): {reason}")
+                    failures.append({
+                        'row': row_number, 'address': label,
+                        'stage': 'analysis', 'reason': str(reason),
+                    })
+                    continue
+
+                if not row_number:
+                    print(f"⚠️  Warning: No row number found for apartment: {label}")
+                    failures.append({
+                        'row': None, 'address': label,
+                        'stage': 'write', 'reason': 'no row number for apartment',
+                    })
+                    continue
+
+                # Write the result back to the sheet
+                print(f"Writing analysis results to row {row_number}")
+
+                # Rate limiting: Sleep between writes to avoid hitting API limits
+                import time
+                time.sleep(1.2)
+
+                # Retry logic with exponential backoff
+                max_retries = 3
+                retry_delay = 5
+                for attempt in range(max_retries):
+                    try:
+                        sheets_client.write_apartment_data(row_number, result)
+                        break  # Success
+                    except Exception as write_error:
+                        error_str = str(write_error)
+                        if 'RATE_LIMIT_EXCEEDED' in error_str or '429' in error_str:
+                            if attempt < max_retries - 1:
+                                wait_time = retry_delay * (2 ** attempt)
+                                print(f"  ⏳ Rate limit hit, waiting {wait_time}s before retry {attempt + 1}/{max_retries}...")
+                                time.sleep(wait_time)
+                            else:
+                                print(f"  ❌ Failed to write after {max_retries} attempts")
+                                raise
+                        else:
+                            raise
+
+                results.append(result)
             except Exception as e:
-                print(f"Error analyzing apartment: {e}")
+                # Scored but the write (or something after scoring) blew up — the
+                # apartment was NOT persisted, so surface it as a failure.
+                print(f"Error analyzing apartment (row {row_number}, {label}): {e}")
                 import traceback
                 traceback.print_exc()
+                failures.append({
+                    'row': row_number, 'address': label,
+                    'stage': 'write', 'reason': str(e),
+                })
                 continue
         
         # Update visualizations
@@ -1689,10 +1721,23 @@ def run_analysis():
         import time
         time.sleep(1.5)
         
-        message = f"Successfully analyzed {len(results)} apartment(s)"
+        found = len(apartments_to_analyze)
+        analyzed = len(results)
+        failed = len(failures)
+
+        if found == 0:
+            message = "No apartments needed analysis — everything is already up to date."
+        elif failed == 0:
+            message = f"Successfully analyzed {analyzed} apartment(s)."
+        else:
+            message = (f"Analyzed {analyzed} of {found} apartment(s); "
+                       f"{failed} could not be analyzed.")
+
         return jsonify({
-            'success': True, 
-            'analyzed': len(results),
+            'success': True,
+            'found': found,
+            'analyzed': analyzed,
+            'failed': failures,
             'message': message
         })
     except Exception as e:
