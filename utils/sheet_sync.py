@@ -367,19 +367,6 @@ class CrossEnvSync:
             n = n // 26 - 1
         return letter
 
-    def _append_record(self, worksheet, headers: List[str], record: Dict[str, Any]) -> None:
-        row = [_cell(record.get(h, "")) for h in headers]
-        worksheet.append_row(row, value_input_option="USER_ENTERED")
-
-    def _overwrite_row(self, worksheet, headers: List[str], row_number: int, record: Dict[str, Any]) -> None:
-        row = [_cell(record.get(h, "")) for h in headers]
-        last_col = self._col_letter(len(headers) - 1)
-        worksheet.update(
-            range_name=f"A{row_number}:{last_col}{row_number}",
-            values=[row],
-            value_input_option="USER_ENTERED",
-        )
-
     def apply(self, plan: Dict[str, Any]) -> Dict[str, Any]:
         """Apply a reconciliation plan.
 
@@ -451,7 +438,25 @@ class CrossEnvSync:
         target_by_url, target_by_addr = self._build_lookup(target_items)
         source_by_url, source_by_addr = self._build_lookup(source_items)
 
+        # Header-aligned writes require a header row on the target. A freshly
+        # created (or partially initialized) tab may have none — seed it from the
+        # source sheet's header so copied rows land in the right columns. Without
+        # this, writes would silently produce blank rows.
         headers = target_ws.row_values(1)
+        if not headers:
+            source_headers = source_ws.row_values(1) if source_ws else []
+            if not source_headers:
+                raise RuntimeError(
+                    "Cannot sync: neither the target nor the source worksheet has a "
+                    "header row to align columns against."
+                )
+            last_col = self._col_letter(len(source_headers) - 1)
+            target_ws.update(
+                range_name=f"A1:{last_col}1",
+                values=[source_headers],
+                value_input_option="USER_ENTERED",
+            )
+            headers = source_headers
 
         summary = {
             "direction": direction,
@@ -476,17 +481,24 @@ class CrossEnvSync:
             summary["snapshot"] = self._snapshot(target_ws, base)
 
         # 1) Additions: source-only apartments the user asked to bring over.
+        #    Batched into a single append call to stay well under API quotas.
+        rows_to_add = []
         for s in source_items:
             sid = _identity(s)
             if sid is None:
                 continue
             match = self._find_match(s, target_by_url, target_by_addr)
             if match is None and sid in add_keys:
-                self._append_record(target_ws, headers, s["record"])
+                rows_to_add.append([_cell(s["record"].get(h, "")) for h in headers])
                 summary["added"].append(_summary(s["record"]))
+        if rows_to_add:
+            target_ws.append_rows(rows_to_add, value_input_option="USER_ENTERED")
 
         # 2) Conflicts: matched apartments with differing fields.
         #    Overwrite target with source only when the source side wins.
+        #    Batched into a single update call.
+        last_col = self._col_letter(len(headers) - 1)
+        overwrite_updates = []
         for s in source_items:
             sid = _identity(s)
             if sid is None:
@@ -498,10 +510,16 @@ class CrossEnvSync:
             if resolution == source_side:
                 # Only write if something actually differs (keep idempotent).
                 if self._field_diffs(match["record"], s["record"]):
-                    self._overwrite_row(target_ws, headers, match["row"], s["record"])
+                    row = [_cell(s["record"].get(h, "")) for h in headers]
+                    overwrite_updates.append({
+                        "range": f"A{match['row']}:{last_col}{match['row']}",
+                        "values": [row],
+                    })
                     summary["overwritten"].append(_summary(s["record"]))
             else:
                 summary["skipped"] += 1
+        if overwrite_updates:
+            target_ws.batch_update(overwrite_updates, value_input_option="USER_ENTERED")
 
         # 3) Deletions (opt-in only): target-only apartments the user chose to drop.
         if allow_delete and delete_keys:

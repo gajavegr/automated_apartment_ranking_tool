@@ -291,10 +291,13 @@ class GoogleSheetsClient:
     
     def _initialize_main_sheet(self, sheet: gspread.Worksheet) -> None:
         """Initialize main data sheet with headers"""
-        # Check if already initialized
+        # Check if already initialized. The first written header is
+        # "Manual Safety Rating" (zillow_url is stored but not a displayed column),
+        # so compare against that — comparing to zillow_url never matched and
+        # caused headers to be rewritten on every init.
         if sheet.row_count > 0 and sheet.col_count > 0:
             first_row = sheet.row_values(1)
-            if first_row and first_row[0] == config.SHEET_COLUMNS["zillow_url"]:
+            if first_row and first_row[0] == config.SHEET_COLUMNS["manual_safety"]:
                 return  # Already initialized
         
         # Create headers
@@ -370,14 +373,24 @@ class GoogleSheetsClient:
             config.SHEET_COLUMNS["last_analyzed"],
         ]
         
-        sheet.update('A1:BA1', [headers])
-        
+        # Build the header range dynamically from the number of headers — a
+        # hardcoded 'A1:BA1' (53 cols) is narrower than the current header list
+        # and made the write fail ("tried writing to column BB"), leaving new
+        # users with a header-less tab. Ensure the sheet is wide enough first.
+        num_cols = len(headers)
+        if sheet.col_count < num_cols:
+            sheet.add_cols(num_cols - sheet.col_count)
+        last_col = self._col_index_to_letter(num_cols - 1)
+        header_range = f'A1:{last_col}1'
+
+        sheet.update(header_range, [headers])
+
         # Apply formatting
-        sheet.format('A1:BA1', {
+        sheet.format(header_range, {
             'textFormat': {'bold': True},
             'backgroundColor': {'red': 0.8, 'green': 0.8, 'blue': 0.8}
         })
-        
+
         # Freeze header row
         sheet.freeze(rows=1)
     
