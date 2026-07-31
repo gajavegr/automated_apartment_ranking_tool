@@ -2996,7 +2996,19 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    alert(`Analysis complete! Analyzed ${data.analyzed} apartments.`);
+                    // Prefer the server's human-readable summary; fall back for
+                    // older responses that only sent `analyzed`.
+                    let msg = data.message || `Analysis complete! Analyzed ${data.analyzed} apartments.`;
+                    const failed = data.failed || [];
+                    if (failed.length > 0) {
+                        const lines = failed.map(f => {
+                            const where = f.row ? `row ${f.row}` : 'unsaved row';
+                            return `• ${f.address || 'Unknown'} (${where}) — ${f.reason || 'unknown error'}`;
+                        });
+                        msg += `\n\nCould not analyze:\n${lines.join('\n')}` +
+                               `\n\nThese are usually transient (a Maps/Sheets hiccup or rate limit). Try Run Analysis again.`;
+                    }
+                    alert(msg);
                     loadAnalysisData();
                 } else {
                     alert('Error running analysis: ' + (data.error || 'Unknown error'));
