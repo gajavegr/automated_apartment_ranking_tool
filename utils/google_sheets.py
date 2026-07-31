@@ -323,10 +323,21 @@ class GoogleSheetsClient:
             config.SHEET_COLUMNS["last_analyzed"],
         ]
         
-        sheet.update('A1:BA1', [headers])
-        
-        # Apply formatting
-        sheet.format('A1:BA1', {
+        # Ensure the sheet is wide enough for every header before writing.
+        # New tabs are created with a fixed default column count (see
+        # _get_or_create_worksheet) that can be narrower than this header row —
+        # the schema has grown over time — and writing past the sheet's width
+        # otherwise fails with a Google Sheets 400 (INVALID_ARGUMENT), which
+        # aborts new-user tab creation partway. Grow the sheet as needed, then
+        # write to a range sized to the headers rather than a hardcoded one.
+        if sheet.col_count < len(headers):
+            sheet.add_cols(len(headers) - sheet.col_count)
+
+        end_col = self._col_index_to_letter(len(headers) - 1)
+        sheet.update(f'A1:{end_col}1', [headers])
+
+        # Apply formatting across the full header range.
+        sheet.format(f'A1:{end_col}1', {
             'textFormat': {'bold': True},
             'backgroundColor': {'red': 0.8, 'green': 0.8, 'blue': 0.8}
         })
