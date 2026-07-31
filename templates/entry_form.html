@@ -1409,6 +1409,36 @@
                         </div>
                     </div>
                     
+                    <!-- Danger Zone: delete account -->
+                    <div class="admin-section danger-zone">
+                        <h3>⚠️ Danger Zone — Delete Account</h3>
+                        <p>
+                            Permanently delete <strong>{{ current_user }}</strong> and
+                            <strong>all</strong> of this account's data — every
+                            "{{ current_user }} - *" tab (apartments, criteria, places of
+                            interest, excluded places, edit log, settings) plus the entry in
+                            the Users registry. Other users and shared tabs are not affected.
+                        </p>
+                        <p style="color: #b00020; font-weight: 600;">
+                            This cannot be undone. Export anything you want to keep first.
+                        </p>
+                        <p>
+                            To confirm, type your username
+                            (<code>{{ current_user }}</code>) below:
+                        </p>
+                        <div class="admin-actions" style="align-items: center; gap: 10px;">
+                            <input type="text" id="deleteAccountConfirm"
+                                   placeholder="Type your username to confirm"
+                                   autocomplete="off"
+                                   style="padding: 8px 12px; border: 1px solid #d2d2d7; border-radius: 6px; min-width: 240px;">
+                            <button id="deleteAccountBtn" class="btn btn-danger"
+                                    onclick="deleteMyAccount()">
+                                Delete my account &amp; data
+                            </button>
+                        </div>
+                        <div id="deleteAccountStatus" style="margin-top: 12px;"></div>
+                    </div>
+
                     <!-- Other Admin Tools -->
                     <div class="admin-section">
                         <h3>🔧 Other Tools</h3>
@@ -2155,8 +2185,19 @@
 
         function onPlaceChanged() {
             const place = autocomplete.getPlace();
-            
+
             if (!place.geometry) {
+                // The user pressed Enter or blurred without picking a prediction from
+                // the dropdown. In that case the Autocomplete widget fires this event
+                // with an unresolved stub (no geometry / address_components), so the
+                // client-side neighborhood detection below would be skipped entirely.
+                // Fall back to geocoding the typed address on the backend, which both
+                // updates the maps and auto-populates neighborhoods via /get_neighborhoods.
+                const typedAddress = document.getElementById('address').value.trim();
+                if (typedAddress) {
+                    populateNeighborhoodsForAddress(typedAddress);
+                    geocodeAndUpdateMaps(typedAddress);
+                }
                 return;
             }
 
@@ -2201,6 +2242,26 @@
                 label.appendChild(document.createTextNode(' ' + neighborhood));
                 container.appendChild(label);
             });
+        }
+
+        // Fallback neighborhood detection used when the Autocomplete widget fires
+        // without a resolved place (e.g. the user typed the full address and pressed
+        // Enter instead of clicking a prediction). Uses the backend geocoder so the
+        // neighborhood is populated regardless of how the address was entered.
+        async function populateNeighborhoodsForAddress(address) {
+            try {
+                const response = await fetch('/get_neighborhoods', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address })
+                });
+                const data = await response.json();
+                if (data.success && Array.isArray(data.neighborhoods) && data.neighborhoods.length) {
+                    updateNeighborhoodCheckboxes(data.neighborhoods);
+                }
+            } catch (error) {
+                console.error('Error fetching neighborhoods:', error);
+            }
         }
 
         function updateNeighborhoodCheckboxes(neighborhoods) {
@@ -5397,6 +5458,59 @@ Score = 10 × (1 - ${parseFloat(gymWalkTime).toFixed(1)} / ${maxTime}) = ${gymSc
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Sync Schema';
+            }
+        }
+
+        async function deleteMyAccount() {
+            const input = document.getElementById('deleteAccountConfirm');
+            const btn = document.getElementById('deleteAccountBtn');
+            const statusDiv = document.getElementById('deleteAccountStatus');
+            const username = '{{ current_user }}';
+            const typed = (input.value || '').trim();
+
+            statusDiv.innerHTML = '';
+
+            if (typed !== username) {
+                statusDiv.innerHTML = `<p class="error">Type your exact username (<code>${username}</code>) to confirm.</p>`;
+                return;
+            }
+
+            if (!confirm(
+                `PERMANENTLY delete "${username}" and ALL of this account's data?\n\n` +
+                'This removes every per-user tab and cannot be undone.'
+            )) {
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Deleting…';
+            try {
+                const response = await fetch('/admin/delete_user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: username, confirm: typed })
+                });
+                const data = await response.json();
+
+                if (!response.ok || !data.success) {
+                    statusDiv.innerHTML = `<p class="error">${(data && data.error) || 'Could not delete the account.'}</p>`;
+                    btn.disabled = false;
+                    btn.textContent = 'Delete my account & data';
+                    return;
+                }
+
+                const count = (data.tabs_deleted || []).length;
+                statusDiv.innerHTML =
+                    `<p style="color: #1a7f37;">Deleted "${data.username}" and ${count} tab(s). Redirecting…</p>`;
+
+                // The server clears the session when you delete yourself, so send
+                // the user back to the login page.
+                setTimeout(() => { window.location.href = data.logged_out ? '/login' : '/'; }, 1200);
+            } catch (error) {
+                console.error('Error deleting account:', error);
+                statusDiv.innerHTML = `<p class="error">Error deleting account: ${error.message}</p>`;
+                btn.disabled = false;
+                btn.textContent = 'Delete my account & data';
             }
         }
 

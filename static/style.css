@@ -1507,6 +1507,15 @@ input[type="range"]::-moz-range-thumb {
     gap: 10px;
 }
 
+.admin-section.danger-zone {
+    border: 1px solid #f3c2c2;
+    background: #fdf6f6;
+}
+
+.admin-section.danger-zone h3 {
+    color: #b00020;
+}
+
 .admin-note {
     margin-top: 15px;
     padding: 15px;

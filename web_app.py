@@ -405,6 +405,79 @@ def logout():
     return redirect(url_for('login'))
 
 
+@app.route('/admin/delete_user', methods=['POST'])
+def admin_delete_user():
+    """Delete a user and all of their per-user data.
+
+    This is destructive and hard to reverse: the user's per-user worksheet
+    tabs ("<username> - *") and their Users-registry row are permanently
+    removed. Global tabs and other users' data are never touched.
+
+    Because the app has no real authentication (see README), this is not a
+    security boundary — any logged-in user can call it. To guard against
+    *accidental* deletion it requires a typed confirmation: the request must
+    echo the exact target username.
+
+    Request JSON:
+        {
+            "username": "<user to delete>",
+            "confirm":  "<must exactly match username>"
+        }
+
+    If the deleted user is the currently logged-in user, their session is
+    cleared so they're logged out.
+    """
+    if sheets_client is None:
+        return jsonify({'success': False, 'error': 'Backend not ready. Please try again in a moment.'}), 503
+
+    data = request.get_json(silent=True) or {}
+    username = (data.get('username') or '').strip()
+    confirm = (data.get('confirm') or '').strip()
+
+    if not username:
+        return jsonify({'success': False, 'error': 'A username is required.'}), 400
+
+    # Typed-confirmation guard: the client must send back the exact username.
+    if confirm != username:
+        return jsonify({
+            'success': False,
+            'error': 'Confirmation did not match. Type the exact username to confirm deletion.',
+        }), 400
+
+    try:
+        result = sheets_client.delete_user(username)
+    except Exception as e:
+        print(f"Error deleting user '{username}': {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': 'Could not delete the user. Please try again.'}), 500
+
+    if not result.get('existed'):
+        return jsonify({
+            'success': False,
+            'existed': False,
+            'error': f'No user named "{username}" exists.',
+        }), 404
+
+    # If the user deleted themselves (or an admin deleted the active user),
+    # clear the session so they're logged out.
+    canonical = result.get('username', username)
+    logged_out = False
+    if (session.get('username') or '').strip().lower() == canonical.strip().lower():
+        session.pop('username', None)
+        set_current_user(None)
+        logged_out = True
+
+    return jsonify({
+        'success': True,
+        'existed': True,
+        'username': canonical,
+        'tabs_deleted': result.get('tabs_deleted', []),
+        'registry_row_removed': result.get('registry_row_removed', False),
+        'logged_out': logged_out,
+    })
+
+
 @app.route('/')
 def index():
     """Show the entry form"""
