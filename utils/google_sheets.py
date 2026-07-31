@@ -1325,6 +1325,86 @@ class GoogleSheetsClient:
 
         return True
 
+    def delete_user(self, username: str) -> Dict[str, Any]:
+        """Delete a user and all of their per-user data. Inverse of create_user.
+
+        Removes the user's row from the global Users registry and deletes every
+        worksheet tab namespaced to that user ("<username> - *"). Global tabs
+        (Users, Approved Gyms) and other users' tabs are never touched.
+
+        Matching is case-insensitive (like get_canonical_username) so the caller
+        can pass whatever casing they have; the canonical stored form is used to
+        build the tab prefix.
+
+        Returns a result dict:
+            {
+                'existed': bool,            # was the user in the registry?
+                'deleted': bool,            # did we remove anything?
+                'username': str,            # canonical username (or the input
+                                            #   if it wasn't registered)
+                'tabs_deleted': List[str],  # titles of per-user tabs removed
+                'registry_row_removed': bool,
+            }
+
+        Deleting a non-existent user is not an error: it returns
+        existed=False / deleted=False so callers can respond with a clear,
+        non-500 message.
+        """
+        requested = (username or "").strip()
+        canonical = self.get_canonical_username(requested) if requested else None
+
+        if not canonical:
+            return {
+                'existed': False,
+                'deleted': False,
+                'username': requested,
+                'tabs_deleted': [],
+                'registry_row_removed': False,
+            }
+
+        # Safety guard: only ever delete tabs that carry this exact user's
+        # "<username> - " prefix. The " - " separator (not just "<username>")
+        # keeps us from matching another user whose name shares this prefix
+        # (e.g. "bob" must not match "bobby - Apartment Data"). Global tabs have
+        # no prefix and are additionally excluded by name below.
+        prefix = f"{canonical} - ".lower()
+        global_tabs = {self.USERS_SHEET_NAME.lower(), self.APPROVED_GYMS_SHEET_NAME.lower()}
+
+        tabs_deleted: List[str] = []
+        for worksheet in self.spreadsheet.worksheets():
+            title = worksheet.title
+            if title.lower() in global_tabs:
+                continue
+            if title.lower().startswith(prefix):
+                try:
+                    self.spreadsheet.del_worksheet(worksheet)
+                    tabs_deleted.append(title)
+                except Exception as e:
+                    print(f"⚠️  Warning: could not delete tab '{title}': {e}")
+
+        # Remove the user's row from the global Users registry (case-insensitive
+        # match on the canonical name). Row 1 is the header.
+        registry_row_removed = False
+        try:
+            users_ws = self._get_users_worksheet()
+            usernames = users_ws.col_values(1)
+            target = canonical.lower()
+            for i, stored in enumerate(usernames[1:], start=2):
+                if str(stored).strip().lower() == target:
+                    users_ws.delete_rows(i)
+                    registry_row_removed = True
+                    break
+        except Exception as e:
+            print(f"⚠️  Warning: could not remove '{canonical}' from Users registry: {e}")
+
+        return {
+            'existed': True,
+            'deleted': registry_row_removed or bool(tabs_deleted),
+            'username': canonical,
+            'tabs_deleted': tabs_deleted,
+            'registry_row_removed': registry_row_removed,
+        }
+
     # ------------------------------------------------------------------
     # Onboarding state (multi-user support)
     #
