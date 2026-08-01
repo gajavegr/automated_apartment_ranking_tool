@@ -1,0 +1,249 @@
+person_name: Quintin Bynum
+version: 1
+criteria:
+- id: price
+  display_name: Price
+  priority_order: 1
+  ideal:
+  - field: monthly_cost
+    value: 3900
+    operator: lte
+  acceptable:
+  - field: monthly_cost
+    value: 4900
+    operator: lte
+  veto:
+  - field: monthly_cost
+    value: 5100
+    operator: lte
+  veto_reason: Does not meet minimum price requirements
+- id: commute
+  display_name: Commute
+  priority_order: 2
+  ideal:
+  - field: commute_duration
+    value: 60
+    operator: lte
+  acceptable:
+  - field: commute_duration
+    value: 80
+    operator: lte
+  veto:
+  - field: commute_duration
+    value: 100
+    operator: lte
+  veto_reason: Does not meet minimum commute requirements
+- id: safety
+  display_name: Safety
+  priority_order: 3
+  ideal:
+  - field: safety_score
+    value: 8
+    operator: gte
+  acceptable:
+  - field: safety_score
+    value: 6
+    operator: gte
+  veto:
+  - field: safety_score
+    value: 5
+    operator: gte
+  veto_reason: Does not meet minimum safety requirements
+- id: space_luxury
+  display_name: Space Luxury
+  priority_order: 4
+  ideal:
+  - field: sqft
+    value: 900
+    operator: gte
+  acceptable:
+  - field: sqft
+    value: 650
+    operator: gte
+  veto:
+  - field: sqft
+    value: 450
+    operator: gte
+  veto_reason: Does not meet minimum space_luxury requirements
+- id: happening
+  display_name: Happening
+  priority_order: 5
+  ideal:
+  - field: happening_score
+    value: 7
+    operator: gte
+  acceptable:
+  - field: happening_score
+    value: 4
+    operator: gte
+  veto:
+  - field: happening_score
+    value: 2
+    operator: gte
+  veto_reason: Does not meet minimum happening requirements
+- id: laundry
+  display_name: Laundry
+  priority_order: 6
+  ideal:
+  - field: laundry_score
+    value: 8
+    operator: gte
+  acceptable:
+  - field: laundry_score
+    value: 5
+    operator: gte
+  veto:
+  - field: laundry_score
+    value: 0
+    operator: gte
+  veto_reason: Does not meet minimum laundry requirements
+- id: wfh_quality
+  display_name: Wfh Quality
+  priority_order: 7
+  ideal:
+  - field: wfh_score
+    value: 7
+    operator: gte
+  acceptable:
+  - field: wfh_score
+    value: 5
+    operator: gte
+  veto:
+  - field: wfh_score
+    value: 2
+    operator: gte
+  veto_reason: Does not meet minimum wfh_quality requirements
+- id: parking
+  display_name: Parking
+  priority_order: 8
+  ideal:
+  - field: parking_score
+    value: 8
+    operator: gte
+  acceptable:
+  - field: parking_score
+    value: 5
+    operator: gte
+  veto:
+  - field: parking_score
+    value: 2
+    operator: gte
+  veto_reason: Does not meet minimum parking requirements
+- id: gym
+  display_name: Gym
+  priority_order: 9
+  ideal:
+  - field: gym_walk_time
+    value: 10
+    operator: lte
+  acceptable:
+  - field: gym_walk_time
+    value: 15
+    operator: lte
+  veto:
+  - field: gym_walk_time
+    value: 40
+    operator: lte
+  veto_reason: Does not meet minimum gym requirements
+ahp_weights:
+  commute: 0.2002274217459604
+  gym: 0.07389360011059729
+  happening: 0.1311696246666283
+  laundry: 0.08836294052351658
+  parking: 0.09898511271181236
+  price: 0.10566556841561658
+  safety: 0.12635627880246786
+  space_luxury: 0.10865773727177554
+  wfh_quality: 0.06668171575162511
+ahp_consistency_ratio: 0.2540912470043337
+created_at: '2026-07-30T19:26:02.007685'
+updated_at: '2026-07-30T19:26:02.007712'
+notes: Generated from quiz on 2026-07-30
+quiz_responses:
+  pairwise_comparisons:
+    commute:safety: 5
+    commute:wfh_quality: 9
+    gym:safety: 0.2
+    laundry:happening: 0.2
+    parking:gym: 5
+    parking:space_luxury: 0.1111111111111111
+    safety:happening: 5
+    space_luxury:commute: 0.14285714285714285
+    wfh_quality:happening: 0.14285714285714285
+  priority_ranking:
+  - price
+  - commute
+  - safety
+  - space_luxury
+  - happening
+  - laundry
+  - wfh_quality
+  - parking
+  - gym
+  threshold_values:
+    commute:
+      acceptable: 80
+      field: commute_duration
+      ideal: 60
+      is_lower_better: true
+      veto: 100
+    gym:
+      acceptable: 15
+      field: gym_walk_time
+      ideal: 10
+      is_lower_better: true
+      veto: 40
+    happening:
+      acceptable: 4
+      field: happening_score
+      ideal: 7
+      is_lower_better: false
+      veto: 2
+    laundry:
+      acceptable: 5
+      field: laundry_score
+      ideal: 8
+      is_lower_better: false
+      veto: 0
+    parking:
+      acceptable: 5
+      field: parking_score
+      ideal: 8
+      is_lower_better: false
+      veto: 2
+    price:
+      acceptable: 4900
+      field: monthly_cost
+      ideal: 3900
+      is_lower_better: true
+      veto: 5100
+    safety:
+      acceptable: 6
+      field: safety_score
+      ideal: 8
+      is_lower_better: false
+      veto: 5
+    space_luxury:
+      acceptable: 650
+      field: sqft
+      ideal: 900
+      is_lower_better: false
+      veto: 450
+    wfh_quality:
+      acceptable: 5
+      field: wfh_score
+      ideal: 7
+      is_lower_better: false
+      veto: 2
+commute_config:
+  data_field: commute_time_you
+  mode: driving
+  include_commute_score: true
+  annoyingness_weights:
+    walk_time_weight: 0.15
+    transfer_weight: 0.8
+    duration_weight: 0.1
+    left_turn_weight: 0.6
+    congestion_weight: 10.0
+    low_speed_weight: 0.7
+    lane_split_weight: 2.5
