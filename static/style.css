@@ -646,6 +646,116 @@ input[type="range"]::-moz-range-thumb {
     color: #666;
 }
 
+/* ---- Real-time analysis progress card ---- */
+.analysis-progress {
+    padding: 24px 0;
+}
+
+.analysis-progress-card {
+    background: white;
+    border-radius: 12px;
+    padding: 24px 28px;
+    max-width: 640px;
+    margin: 0 auto;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+}
+
+.analysis-progress-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 18px;
+}
+
+.analysis-progress-header h3 {
+    margin: 0;
+    font-size: 1.15rem;
+    color: #1d1d1f;
+}
+
+.analysis-progress-spinner {
+    width: 20px;
+    height: 20px;
+    border: 3px solid #e5e5ea;
+    border-top-color: #0071e3;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+    flex-shrink: 0;
+}
+
+.analysis-progress-bar-track {
+    width: 100%;
+    height: 10px;
+    background: #e5e5ea;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.analysis-progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #0071e3, #34c759);
+    border-radius: 6px;
+    width: 0;
+    transition: width 0.4s ease;
+}
+
+.analysis-progress-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 10px;
+    font-size: 0.9rem;
+    color: #6e6e73;
+}
+
+.analysis-progress-eta,
+#analysisProgressEta {
+    font-variant-numeric: tabular-nums;
+    color: #0071e3;
+    font-weight: 500;
+}
+
+.analysis-progress-current {
+    margin-top: 14px;
+    font-size: 0.95rem;
+    color: #1d1d1f;
+    min-height: 1.2em;
+}
+
+.analysis-progress-current .analysis-progress-dot {
+    color: #0071e3;
+    animation: analysisPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes analysisPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
+}
+
+.analysis-progress-log {
+    list-style: none;
+    margin: 16px 0 0;
+    padding: 0;
+    max-height: 180px;
+    overflow-y: auto;
+    border-top: 1px solid #f0f0f2;
+}
+
+.analysis-progress-log li {
+    padding: 6px 2px;
+    font-size: 0.88rem;
+    color: #3a3a3c;
+    border-bottom: 1px solid #f5f5f7;
+}
+
+.analysis-progress-log li.fail {
+    color: #b26a00;
+}
+
+.analysis-progress-current .error {
+    color: #d70015;
+}
+
 .analysis-section {
     background: white;
     border-radius: 12px;
