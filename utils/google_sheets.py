@@ -8,6 +8,7 @@ Handles multi-tab operations for:
 """
 
 import os
+import contextvars
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
@@ -20,6 +21,31 @@ import config
 from utils.rate_limiter import get_rate_limiter
 
 
+# ---------------------------------------------------------------------------
+# Per-user context
+#
+# The multi-user deployment stores each user's data in their own set of
+# worksheet tabs, namespaced as "<username> - <Base Tab Name>". The active
+# username is tracked per request/thread via a context variable so the single
+# shared GoogleSheetsClient instance resolves worksheet lookups to the right
+# user's tabs. When no user is set (e.g. CLI scripts, single-user usage), the
+# base tab names are used unchanged for backwards compatibility.
+# ---------------------------------------------------------------------------
+_current_user_var: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "current_sheets_user", default=None
+)
+
+
+def set_current_user(username: Optional[str]) -> None:
+    """Set the active username for worksheet scoping (per request/thread)."""
+    _current_user_var.set(username.strip() if username else None)
+
+
+def get_current_user() -> Optional[str]:
+    """Get the active username used for worksheet scoping, or None."""
+    return _current_user_var.get()
+
+
 class GoogleSheetsClient:
     """Client for interacting with Google Sheets"""
     
@@ -28,16 +54,72 @@ class GoogleSheetsClient:
         'https://www.googleapis.com/auth/drive'
     ]
     
-    # Sheet names
-    MAIN_SHEET_NAME = "Apartment Data"
-    SCATTER_PLOT_SHEET_NAME = "Price vs Score"
-    CRITERIA_MATRIX_SHEET_NAME = "Criteria Matrix"
+    # ------------------------------------------------------------------
+    # Worksheet (tab) names
+    #
+    # Per-user tabs are namespaced as "<username> - <base name>" and resolved
+    # dynamically via the properties below based on the active user context
+    # (see set_current_user / get_current_user). Global tabs are shared across
+    # all users and are NOT namespaced.
+    # ------------------------------------------------------------------
+
+    # Base names for per-user tabs
+    _BASE_MAIN_SHEET_NAME = "Apartment Data"
+    _BASE_SCATTER_PLOT_SHEET_NAME = "Price vs Score"
+    _BASE_CRITERIA_MATRIX_SHEET_NAME = "Criteria Matrix"
+    _BASE_PLACES_OF_INTEREST_SHEET_NAME = "Places of Interest"
+    _BASE_EXCLUDED_PLACES_SHEET_NAME = "Excluded Places"
+    _BASE_USER_EDITS_LOG_SHEET_NAME = "User Edits Log"
+    _BASE_SETTINGS_SHEET_NAME = "Settings"
+
+    # Global (shared) tabs — not namespaced per user.
+    # "Approved Gyms" is a shared reference cache of gym metadata (place_id,
+    # coordinates, rating) so expensive gym lookups aren't duplicated per user.
     APPROVED_GYMS_SHEET_NAME = "Approved Gyms"
-    PLACES_OF_INTEREST_SHEET_NAME = "Places of Interest"
-    EXCLUDED_PLACES_SHEET_NAME = "Excluded Places"
-    USER_EDITS_LOG_SHEET_NAME = "User Edits Log"
-    SETTINGS_SHEET_NAME = "Settings"
-    
+    # "Users" is the registry of usernames used for the uniqueness check.
+    USERS_SHEET_NAME = "Users"
+    # Column in the Users tab that records when a user finished/dismissed the
+    # first-run onboarding walkthrough (blank = not yet onboarded).
+    _ONBOARDED_AT_HEADER = "Onboarded At"
+
+    def _scoped_name(self, base_name: str) -> str:
+        """Return the current user's namespaced tab name for a base name.
+
+        Falls back to the base name when no user context is set.
+        """
+        user = get_current_user()
+        if user:
+            return f"{user} - {base_name}"
+        return base_name
+
+    @property
+    def MAIN_SHEET_NAME(self) -> str:
+        return self._scoped_name(self._BASE_MAIN_SHEET_NAME)
+
+    @property
+    def SCATTER_PLOT_SHEET_NAME(self) -> str:
+        return self._scoped_name(self._BASE_SCATTER_PLOT_SHEET_NAME)
+
+    @property
+    def CRITERIA_MATRIX_SHEET_NAME(self) -> str:
+        return self._scoped_name(self._BASE_CRITERIA_MATRIX_SHEET_NAME)
+
+    @property
+    def PLACES_OF_INTEREST_SHEET_NAME(self) -> str:
+        return self._scoped_name(self._BASE_PLACES_OF_INTEREST_SHEET_NAME)
+
+    @property
+    def EXCLUDED_PLACES_SHEET_NAME(self) -> str:
+        return self._scoped_name(self._BASE_EXCLUDED_PLACES_SHEET_NAME)
+
+    @property
+    def USER_EDITS_LOG_SHEET_NAME(self) -> str:
+        return self._scoped_name(self._BASE_USER_EDITS_LOG_SHEET_NAME)
+
+    @property
+    def SETTINGS_SHEET_NAME(self) -> str:
+        return self._scoped_name(self._BASE_SETTINGS_SHEET_NAME)
+
     def __init__(self, credentials_path: str = None, sheet_id: str = None):
         """
         Initialize Google Sheets client
@@ -241,10 +323,21 @@ class GoogleSheetsClient:
             config.SHEET_COLUMNS["last_analyzed"],
         ]
         
-        sheet.update('A1:BA1', [headers])
-        
-        # Apply formatting
-        sheet.format('A1:BA1', {
+        # Ensure the sheet is wide enough for every header before writing.
+        # New tabs are created with a fixed default column count (see
+        # _get_or_create_worksheet) that can be narrower than this header row —
+        # the schema has grown over time — and writing past the sheet's width
+        # otherwise fails with a Google Sheets 400 (INVALID_ARGUMENT), which
+        # aborts new-user tab creation partway. Grow the sheet as needed, then
+        # write to a range sized to the headers rather than a hardcoded one.
+        if sheet.col_count < len(headers):
+            sheet.add_cols(len(headers) - sheet.col_count)
+
+        end_col = self._col_index_to_letter(len(headers) - 1)
+        sheet.update(f'A1:{end_col}1', [headers])
+
+        # Apply formatting across the full header range.
+        sheet.format(f'A1:{end_col}1', {
             'textFormat': {'bold': True},
             'backgroundColor': {'red': 0.8, 'green': 0.8, 'blue': 0.8}
         })
@@ -1155,4 +1248,237 @@ class GoogleSheetsClient:
             'backgroundColor': {'red': 0.2, 'green': 0.4, 'blue': 0.8}
         })
         sheet.freeze(rows=1)
+
+    # ------------------------------------------------------------------
+    # User registry (multi-user support)
+    #
+    # A single global "Users" tab holds the set of usernames. It is used for
+    # the uniqueness check on registration and to resolve the canonical
+    # (stored) casing of a username at login so worksheet tab names match.
+    # ------------------------------------------------------------------
+
+    def _get_users_worksheet(self) -> gspread.Worksheet:
+        """Get (or create + initialize) the global Users registry worksheet."""
+        try:
+            return self.spreadsheet.worksheet(self.USERS_SHEET_NAME)
+        except WorksheetNotFound:
+            worksheet = self.spreadsheet.add_worksheet(
+                title=self.USERS_SHEET_NAME,
+                rows=1000,
+                cols=3
+            )
+            headers = ["Username", "Created At", self._ONBOARDED_AT_HEADER]
+            worksheet.update('A1:C1', [headers])
+            worksheet.format('A1:C1', {
+                'textFormat': {'bold': True},
+                'backgroundColor': {'red': 0.2, 'green': 0.4, 'blue': 0.8}
+            })
+            worksheet.freeze(rows=1)
+            return worksheet
+
+    def list_users(self) -> List[str]:
+        """Return all registered usernames (as stored)."""
+        worksheet = self._get_users_worksheet()
+        records = worksheet.get_all_records()
+        users = []
+        for record in records:
+            username = str(record.get('Username', '')).strip()
+            if username:
+                users.append(username)
+        return users
+
+    def get_canonical_username(self, username: str) -> Optional[str]:
+        """Return the stored form of a username matching case-insensitively.
+
+        Returns None if the username is not registered.
+        """
+        if not username:
+            return None
+        target = username.strip().lower()
+        for stored in self.list_users():
+            if stored.lower() == target:
+                return stored
+        return None
+
+    def user_exists(self, username: str) -> bool:
+        """Return True if a username is already registered (case-insensitive)."""
+        return self.get_canonical_username(username) is not None
+
+    def create_user(self, username: str) -> bool:
+        """Register a new username and initialize their worksheet tabs.
+
+        Returns True if created, False if the username already exists
+        (case-insensitive collision).
+        """
+        username = (username or "").strip()
+        if not username:
+            raise ValueError("Username cannot be empty")
+
+        if self.user_exists(username):
+            return False
+
+        worksheet = self._get_users_worksheet()
+        worksheet.append_row([
+            username,
+            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        ])
+
+        # Initialize this user's core worksheet tabs so the app has headers
+        # to read/write against immediately after registration.
+        previous_user = get_current_user()
+        try:
+            set_current_user(username)
+            self.initialize_sheets()
+        except Exception as e:
+            print(f"⚠️  Warning: could not initialize sheets for '{username}': {e}")
+        finally:
+            set_current_user(previous_user)
+
+        return True
+
+    def delete_user(self, username: str) -> Dict[str, Any]:
+        """Delete a user and all of their per-user data. Inverse of create_user.
+
+        Removes the user's row from the global Users registry and deletes every
+        worksheet tab namespaced to that user ("<username> - *"). Global tabs
+        (Users, Approved Gyms) and other users' tabs are never touched.
+
+        Matching is case-insensitive (like get_canonical_username) so the caller
+        can pass whatever casing they have; the canonical stored form is used to
+        build the tab prefix.
+
+        Returns a result dict:
+            {
+                'existed': bool,            # was the user in the registry?
+                'deleted': bool,            # did we remove anything?
+                'username': str,            # canonical username (or the input
+                                            #   if it wasn't registered)
+                'tabs_deleted': List[str],  # titles of per-user tabs removed
+                'registry_row_removed': bool,
+            }
+
+        Deleting a non-existent user is not an error: it returns
+        existed=False / deleted=False so callers can respond with a clear,
+        non-500 message.
+        """
+        requested = (username or "").strip()
+        canonical = self.get_canonical_username(requested) if requested else None
+
+        if not canonical:
+            return {
+                'existed': False,
+                'deleted': False,
+                'username': requested,
+                'tabs_deleted': [],
+                'registry_row_removed': False,
+            }
+
+        # Safety guard: only ever delete tabs that carry this exact user's
+        # "<username> - " prefix. The " - " separator (not just "<username>")
+        # keeps us from matching another user whose name shares this prefix
+        # (e.g. "bob" must not match "bobby - Apartment Data"). Global tabs have
+        # no prefix and are additionally excluded by name below.
+        prefix = f"{canonical} - ".lower()
+        global_tabs = {self.USERS_SHEET_NAME.lower(), self.APPROVED_GYMS_SHEET_NAME.lower()}
+
+        tabs_deleted: List[str] = []
+        for worksheet in self.spreadsheet.worksheets():
+            title = worksheet.title
+            if title.lower() in global_tabs:
+                continue
+            if title.lower().startswith(prefix):
+                try:
+                    self.spreadsheet.del_worksheet(worksheet)
+                    tabs_deleted.append(title)
+                except Exception as e:
+                    print(f"⚠️  Warning: could not delete tab '{title}': {e}")
+
+        # Remove the user's row from the global Users registry (case-insensitive
+        # match on the canonical name). Row 1 is the header.
+        registry_row_removed = False
+        try:
+            users_ws = self._get_users_worksheet()
+            usernames = users_ws.col_values(1)
+            target = canonical.lower()
+            for i, stored in enumerate(usernames[1:], start=2):
+                if str(stored).strip().lower() == target:
+                    users_ws.delete_rows(i)
+                    registry_row_removed = True
+                    break
+        except Exception as e:
+            print(f"⚠️  Warning: could not remove '{canonical}' from Users registry: {e}")
+
+        return {
+            'existed': True,
+            'deleted': registry_row_removed or bool(tabs_deleted),
+            'username': canonical,
+            'tabs_deleted': tabs_deleted,
+            'registry_row_removed': registry_row_removed,
+        }
+
+    # ------------------------------------------------------------------
+    # Onboarding state (multi-user support)
+    #
+    # Whether a user has finished/dismissed the first-run walkthrough is
+    # tracked in the global Users tab (an "Onboarded At" timestamp column)
+    # rather than a per-user tab, so it's a single lookup keyed by username.
+    # ------------------------------------------------------------------
+
+    def has_completed_onboarding(self, username: str) -> bool:
+        """Return True if the user has finished or dismissed onboarding.
+
+        Robust to an older Users tab that predates the "Onboarded At" column:
+        the header is simply absent from the records, so this returns False.
+        """
+        if not username:
+            return False
+        target = username.strip().lower()
+        try:
+            worksheet = self._get_users_worksheet()
+            for record in worksheet.get_all_records():
+                stored = str(record.get('Username', '')).strip()
+                if stored.lower() == target:
+                    return bool(str(record.get(self._ONBOARDED_AT_HEADER, '')).strip())
+        except Exception as e:
+            print(f"Error reading onboarding state for '{username}': {e}")
+        return False
+
+    def mark_onboarding_complete(self, username: str) -> bool:
+        """Record that the user has finished/dismissed onboarding.
+
+        Adds the "Onboarded At" column to the Users tab on the fly if it does
+        not exist yet (older registries created with only two columns), then
+        stamps the current time in the matching user's row. Returns True on a
+        successful write, False if the user could not be found.
+        """
+        if not username:
+            return False
+        target = username.strip().lower()
+        try:
+            worksheet = self._get_users_worksheet()
+            header_row = worksheet.row_values(1)
+
+            # Locate (or append) the "Onboarded At" column.
+            try:
+                col_idx = header_row.index(self._ONBOARDED_AT_HEADER) + 1
+            except ValueError:
+                col_idx = len(header_row) + 1
+                worksheet.update_cell(1, col_idx, self._ONBOARDED_AT_HEADER)
+
+            # Find the user's row (row 1 is the header).
+            usernames = worksheet.col_values(1)
+            row_idx = None
+            for i, stored in enumerate(usernames[1:], start=2):
+                if str(stored).strip().lower() == target:
+                    row_idx = i
+                    break
+            if row_idx is None:
+                return False
+
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            worksheet.update_cell(row_idx, col_idx, timestamp)
+            return True
+        except Exception as e:
+            print(f"Error marking onboarding complete for '{username}': {e}")
+            return False
 
