@@ -1936,101 +1936,90 @@ def run_analysis_stream():
     """Run analysis on all apartments, streaming real-time progress to the client.
 
     Emits newline-delimited JSON (NDJSON) events so the Analysis tab can show a
-    live progress view (which apartment is being processed, how many are left,
-    and an estimated time remaining) instead of a static spinner.
+    live, step-by-step progress view (which apartment, which of the internal
+    analysis steps, a percentage bar, and a whole-run countdown) instead of a
+    static spinner.
 
-    Event shapes (one JSON object per line):
-      {"type": "start", "total": N}
-      {"type": "analyzing", "index": i, "total": N, "address": "...", "elapsed": s, "eta": s}
-      {"type": "item_done", "index": i, "total": N, "address": "...", "success": bool, "elapsed": s, "eta": s}
-      {"type": "complete", "analyzed": k, "total": N, "message": "...", "elapsed": s}
-      {"type": "error", "message": "...", "fatal": bool}
+    The analysis itself runs in a background worker thread that pushes progress
+    onto a queue; this request drains the queue and streams events. That lets us
+    surface the sub-steps happening deep inside a single (multi-minute) apartment
+    analysis, and keeps bytes flowing (heartbeats) on slow steps.
+
+    Event types (one JSON object per line): start, apartment, step, item_done,
+    note, heartbeat, error, complete.
     """
     import time
+    import queue
+    import threading
     from utils.google_sheets import get_current_user, set_current_user
 
-    # Capture the active user NOW, while the request context is intact. The
-    # streaming body runs after Flask's @after_request has already reset the
-    # per-user context to None, so we must re-establish it inside the generator
-    # (otherwise per-user sheet scoping would be lost mid-stream).
+    # Canonical, ordered analysis steps for ONE apartment, with rough relative
+    # duration weights (in seconds). The weights only seed the countdown — actual
+    # pacing is continuously re-estimated from measured elapsed time as the run
+    # progresses, so the estimate self-corrects.
+    STEP_PLAN = [
+        ("basic",     "Reading listing details",                    2),
+        ("geocode",   "Locating the address",                       3),
+        ("commute",   "Calculating commute times",                 45),
+        ("safety",    "Checking crime & safety data",              25),
+        ("amenities", "Finding nearby restaurants, cafés & parks", 60),
+        ("poi",       "Walk times to your saved places",           20),
+        ("gym",       "Finding & timing your gyms",                30),
+        ("scoring",   "Computing the weighted score",               3),
+        ("save",      "Saving results to your sheet",               6),
+    ]
+    STEP_INDEX = {key: i for i, (key, _label, _w) in enumerate(STEP_PLAN)}
+    STEP_TOTAL = len(STEP_PLAN)
+    STEP_LABELS = [label for _k, label, _w in STEP_PLAN]
+    APT_WEIGHT = sum(w for _k, _l, w in STEP_PLAN)  # total weight of one apartment
+    # Cumulative weight completed BEFORE entering step i (index-aligned to STEP_PLAN).
+    CUM_BEFORE = []
+    _acc = 0
+    for _k, _l, _w in STEP_PLAN:
+        CUM_BEFORE.append(_acc)
+        _acc += _w
+
     stream_username = getattr(g, 'username', None) or session.get('username')
 
     def event(payload):
         return json.dumps(payload) + "\n"
 
-    @stream_with_context
-    def generate():
+    # Thread-safe channel between the analysis worker and the SSE generator.
+    q = queue.Queue()
+    SENTINEL = object()
+
+    def worker():
         import sys
         import traceback
         from main import ApartmentAnalyzer
 
-        # Re-apply the per-user sheet context for the duration of the stream.
-        previous_user = get_current_user()
+        # Re-establish per-user sheet scoping inside the worker thread. contextvars
+        # do NOT propagate across threads, and @after_request has already cleared
+        # the request's — without this, writes would hit the wrong user's sheet.
         set_current_user(stream_username)
-
-        start_time = time.time()
-
-        def eta_for(completed, total):
-            """Estimate seconds remaining based on average time per completed item."""
-            if completed <= 0:
-                return None
-            elapsed = time.time() - start_time
-            avg = elapsed / completed
-            remaining = max(0, total - completed)
-            return round(avg * remaining, 1)
-
         try:
-            sys.stdout.flush()
-            print("\n" + "=" * 70)
-            print("RUNNING ANALYSIS (streaming)")
-            print("=" * 70)
-            sys.stdout.flush()
-
             analyzer = ApartmentAnalyzer()
-            apartments_to_analyze = sheets_client.get_apartments_needing_analysis()
-            total = len(apartments_to_analyze)
+            apartments = sheets_client.get_apartments_needing_analysis()
+            total = len(apartments)
+            q.put(("start", {"total": total, "steps": STEP_TOTAL, "step_labels": STEP_LABELS}))
 
-            print(f"\nFound {total} apartments to analyze")
-            sys.stdout.flush()
-
-            yield event({"type": "start", "total": total})
-
-            results = []
-            for i, apartment in enumerate(apartments_to_analyze, start=1):
+            analyzed = 0
+            for i, apartment in enumerate(apartments):
                 address = apartment.get(config.SHEET_COLUMNS['address'], 'Unknown')
+                q.put(("apartment", {"index": i, "total": total, "address": address}))
 
-                yield event({
-                    "type": "analyzing",
-                    "index": i,
-                    "total": total,
-                    "address": address,
-                    "elapsed": round(time.time() - start_time, 1),
-                    "eta": eta_for(i - 1, total),
-                })
+                def cb(step_key, _i=i, _addr=address):
+                    q.put(("step", {"index": _i, "address": _addr, "step_key": step_key}))
 
-                item_success = False
+                success = False
                 try:
-                    result = analyzer.analyze_apartment(apartment)
-                    if not result or 'error' in result:
-                        # analyze_apartment reports failures by returning
-                        # {'error': ...} rather than raising — surface the reason
-                        # instead of silently marking the item unsuccessful.
-                        reason = (result or {}).get('error', 'analysis returned no result')
-                        print(f"  ✗ Analysis failed for {address}: {reason}")
-                        yield event({
-                            "type": "error",
-                            "message": f"Could not analyze {address}: {reason}",
-                            "fatal": False,
-                        })
-                    else:
+                    result = analyzer.analyze_apartment(apartment, progress_callback=cb)
+                    if result and 'error' not in result:
                         row_number = apartment.get('_row_number')
                         if row_number:
-                            print(f"Writing analysis results to row {row_number}")
-                            # Rate limiting: sleep between writes to avoid API limits
-                            time.sleep(1.2)
-
-                            # Retry logic with exponential backoff
-                            max_retries = 3
+                            cb("save")
+                            time.sleep(1.2)  # rate-limit friendliness between writes
+                            max_retries = 4
                             retry_delay = 5
                             for attempt in range(max_retries):
                                 try:
@@ -2038,81 +2027,146 @@ def run_analysis_stream():
                                     break
                                 except Exception as write_error:
                                     error_str = str(write_error)
-                                    if 'RATE_LIMIT_EXCEEDED' in error_str or '429' in error_str:
-                                        if attempt < max_retries - 1:
-                                            wait_time = retry_delay * (2 ** attempt)
-                                            print(f"  ⏳ Rate limit hit, waiting {wait_time}s before retry {attempt + 1}/{max_retries}...")
-                                            time.sleep(wait_time)
-                                        else:
-                                            print(f"  ❌ Failed to write after {max_retries} attempts")
-                                            raise
+                                    is_rate = 'RATE_LIMIT_EXCEEDED' in error_str or '429' in error_str
+                                    if attempt < max_retries - 1:
+                                        wait_time = retry_delay * (2 ** attempt) if is_rate else retry_delay
+                                        q.put(("note", {"message": f"Save retry {attempt + 1}/{max_retries} in {wait_time}s…"}))
+                                        time.sleep(wait_time)
                                     else:
                                         raise
+                            analyzed += 1
+                            success = True
                         else:
-                            print(f"⚠️  Warning: No row number found for apartment: {apartment.get('address')}")
-                        results.append(result)
-                        item_success = True
+                            q.put(("error", {"message": f"No row number for {address}", "fatal": False}))
+                    else:
+                        err = result.get('error') if isinstance(result, dict) else 'no result returned'
+                        q.put(("error", {"message": f"Could not analyze {address}: {err}", "fatal": False}))
                 except Exception as e:
-                    print(f"Error analyzing apartment: {e}")
                     traceback.print_exc()
-                    yield event({
-                        "type": "error",
-                        "message": f"Error analyzing {address}: {e}",
-                        "fatal": False,
-                    })
+                    q.put(("error", {"message": f"Error analyzing {address}: {e}", "fatal": False}))
 
-                yield event({
-                    "type": "item_done",
-                    "index": i,
-                    "total": total,
-                    "address": address,
-                    "success": item_success,
-                    "elapsed": round(time.time() - start_time, 1),
-                    "eta": eta_for(i, total),
-                })
+                q.put(("item_done", {"index": i, "total": total, "address": address, "success": success}))
 
-            # Update visualizations
-            if results:
-                sheets_client.update_scatter_plot_data()
+            # Refresh the scatter-plot tab from whatever actually landed.
+            if analyzed:
+                try:
+                    sheets_client.update_scatter_plot_data()
+                except Exception as e:
+                    print(f"scatter update failed: {e}")
 
-                criteria_results = []
-                for result in results:
-                    if result.get('scorecard'):
-                        criteria_results.append({
-                            'address': result.get('address', ''),
-                            'components': result['scorecard'].get('components', {}),
-                            'weighted_score': result.get('weighted_score', 0)
-                        })
-                if criteria_results:
-                    sheets_client.update_criteria_matrix(criteria_results)
+            # Authoritative re-check: does anything STILL need analysis? This drives
+            # the "click Run Analysis again" guidance so the user isn't left guessing
+            # whether a partial/failed run needs another pass.
+            remaining = max(0, total - analyzed)
+            try:
+                remaining = len(sheets_client.get_apartments_needing_analysis())
+            except Exception as e:
+                print(f"needs-analysis re-check failed: {e}")
 
-                # Small delay to let Google Sheets API propagate writes
-                time.sleep(1.5)
-
-            failed_count = total - len(results)
-            if total == 0:
-                message = "Everything is already up to date — no apartments needed analysis."
-            elif failed_count == 0:
-                message = f"Successfully analyzed {len(results)} apartment(s)."
-            else:
-                message = (f"Analyzed {len(results)} of {total} apartment(s); "
-                           f"{failed_count} could not be analyzed.")
-
-            yield event({
-                "type": "complete",
-                "analyzed": len(results),
-                "total": total,
-                "message": message,
-                "elapsed": round(time.time() - start_time, 1),
-            })
-
+            q.put(("complete", {"analyzed": analyzed, "total": total, "remaining": remaining}))
         except Exception as e:
-            import traceback
             traceback.print_exc()
-            yield event({"type": "error", "message": str(e), "fatal": True})
+            q.put(("error", {"message": str(e), "fatal": True}))
         finally:
-            # Restore whatever user context was in effect before the stream.
-            set_current_user(previous_user)
+            set_current_user(None)
+            q.put(SENTINEL)
+
+    @stream_with_context
+    def generate():
+        start_time = time.time()
+        total = 0
+        completed_apartments = 0   # fully-finished apartments
+        current_apt_number = 0     # 1-based index of the apartment in progress
+        current_step_i = 0         # step index within the in-progress apartment
+
+        def weight_done():
+            # Fully-finished apartments + steps completed within the current one.
+            partial = CUM_BEFORE[min(current_step_i, STEP_TOTAL - 1)]
+            return completed_apartments * APT_WEIGHT + partial
+
+        def overall():
+            tw = max(total, 1) * APT_WEIGHT
+            wd = min(weight_done(), tw)
+            frac = wd / tw if tw else 0.0
+            elapsed = time.time() - start_time
+            eta = None
+            # Only estimate once we have a little signal, and never after we're done.
+            if wd > 3 and frac < 1.0:
+                sec_per_weight = elapsed / wd
+                eta = round(sec_per_weight * (tw - wd), 1)
+            return round(frac * 100, 1), eta, round(elapsed, 1)
+
+        worker_thread = threading.Thread(target=worker, daemon=True)
+        worker_thread.start()
+
+        try:
+            while True:
+                try:
+                    item = q.get(timeout=8)
+                except queue.Empty:
+                    pct, eta, elapsed = overall()
+                    yield event({"type": "heartbeat", "percent": pct, "eta": eta, "elapsed": elapsed})
+                    continue
+
+                if item is SENTINEL:
+                    break
+
+                kind, data = item
+
+                if kind == "start":
+                    total = data["total"]
+                    yield event({"type": "start", "total": total,
+                                 "steps": data["steps"], "step_labels": data["step_labels"]})
+
+                elif kind == "apartment":
+                    current_apt_number = data["index"] + 1
+                    current_step_i = 0
+                    pct, eta, elapsed = overall()
+                    yield event({"type": "apartment", "index": data["index"], "number": current_apt_number,
+                                 "total": data["total"], "address": data["address"],
+                                 "percent": pct, "eta": eta, "elapsed": elapsed})
+
+                elif kind == "step":
+                    sk = data["step_key"]
+                    if sk in STEP_INDEX:
+                        current_step_i = max(current_step_i, STEP_INDEX[sk])
+                    pct, eta, elapsed = overall()
+                    label = STEP_PLAN[STEP_INDEX[sk]][1] if sk in STEP_INDEX else sk
+                    yield event({"type": "step", "apartment_number": current_apt_number, "total": total,
+                                 "address": data["address"], "step_key": sk,
+                                 "step_number": STEP_INDEX.get(sk, 0) + 1, "step_total": STEP_TOTAL,
+                                 "step_label": label, "percent": pct, "eta": eta, "elapsed": elapsed})
+
+                elif kind == "item_done":
+                    completed_apartments = data["index"] + 1
+                    current_step_i = 0  # next apartment hasn't started; avoids double-count
+                    pct, eta, elapsed = overall()
+                    yield event({"type": "item_done", "index": data["index"], "total": data["total"],
+                                 "address": data["address"], "success": data["success"],
+                                 "percent": pct, "eta": eta, "elapsed": elapsed})
+
+                elif kind == "note":
+                    yield event({"type": "note", "message": data["message"]})
+
+                elif kind == "error":
+                    yield event({"type": "error", "message": data["message"], "fatal": data.get("fatal", False)})
+
+                elif kind == "complete":
+                    analyzed = data["analyzed"]
+                    total = data["total"]
+                    remaining = data["remaining"]
+                    if total == 0:
+                        message = "Everything is already up to date — no apartments needed analysis."
+                    elif remaining > 0:
+                        message = (f"Analyzed {analyzed} of {total}. {remaining} still "
+                                   f"need analysis — click Run Analysis again.")
+                    else:
+                        message = f"Done — analyzed {analyzed} apartment(s)."
+                    yield event({"type": "complete", "analyzed": analyzed, "total": total,
+                                 "remaining": remaining, "needs_rerun": remaining > 0,
+                                 "message": message, "elapsed": round(time.time() - start_time, 1)})
+        finally:
+            worker_thread.join(timeout=1)
 
     return Response(
         generate(),
