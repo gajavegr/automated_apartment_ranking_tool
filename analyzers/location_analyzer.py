@@ -103,22 +103,32 @@ class LocationAnalyzer:
             print(f"  ⚠️  Places API request failed ({service}): {e}")
             return {'status': 'ERROR', 'error': str(e)}
     
-    def analyze_location(self, address: str, analyze_commute: bool = True, analyze_safety: bool = True, analyze_amenities: bool = True) -> Dict[str, Any]:
+    def analyze_location(self, address: str, analyze_commute: bool = True, analyze_safety: bool = True, analyze_amenities: bool = True, progress_callback=None) -> Dict[str, Any]:
         """
         Complete location analysis for an apartment
-        
+
         Args:
             address: Apartment address
             analyze_commute: Whether to analyze commute times (default: True)
             analyze_safety: Whether to analyze safety/crime data (default: True)
             analyze_amenities: Whether to analyze nearby amenities/restaurants (default: True)
-            
+            progress_callback: Optional callable(step_key) for real-time progress
+                               reporting. Exceptions from it are swallowed.
+
         Returns:
             Dictionary with all location analysis results
         """
+        def _report(step_key: str) -> None:
+            if progress_callback:
+                try:
+                    progress_callback(step_key)
+                except Exception:
+                    pass
+
         result = {}
-        
+
         # Get coordinates
+        _report("geocode")
         coords = self.geocode_address(address)
         if coords:
             result['latitude'] = coords[0]
@@ -132,6 +142,7 @@ class LocationAnalyzer:
         
         # Commute analysis
         if analyze_commute:
+            _report("commute")
             print(f"\n📍 Analyzing commutes from: {address}")
             print(f"  Your work: {config.YOUR_WORK_ADDRESS}")
             print(f"  Partner work: {config.PARTNER_WORK_ADDRESS}")
@@ -183,6 +194,7 @@ class LocationAnalyzer:
         
         # Safety analysis
         if analyze_safety:
+            _report("safety")
             safety_data = self.get_safety_score(coords[0], coords[1])
             result['safety_score_opendata'] = safety_data.get('safety_score', 5.0)
             result['crime_incidents'] = safety_data.get('incident_count', 0)

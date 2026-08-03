@@ -731,6 +731,10 @@
 
                         <div id="analysisProgressCurrent" class="analysis-progress-current"></div>
 
+                        <div id="analysisProgressStep" class="analysis-progress-step"></div>
+
+                        <div id="analysisProgressBanner" class="analysis-progress-banner" style="display: none;"></div>
+
                         <ul id="analysisProgressLog" class="analysis-progress-log"></ul>
                     </div>
                 </div>
@@ -3075,19 +3079,54 @@
             return `~${hrs}h ${mins % 60}m left`;
         }
 
+        // Local countdown ticker: the server sends a fresh ETA with each event;
+        // between events we decrement it every second so the user sees a live
+        // countdown rather than a number that freezes for 60s on a slow step.
+        let _analysisEtaDeadline = null;
+        let _analysisEtaTicker = null;
+        function _renderAnalysisEta() {
+            const etaEl = document.getElementById('analysisProgressEta');
+            if (!etaEl) return;
+            if (_analysisEtaDeadline === null) { etaEl.textContent = ''; return; }
+            const remain = Math.max(0, (_analysisEtaDeadline - Date.now()) / 1000);
+            etaEl.textContent = formatEta(remain);
+        }
+        function setAnalysisEta(seconds) {
+            if (seconds === null || seconds === undefined || !isFinite(seconds)) {
+                _analysisEtaDeadline = null;
+            } else {
+                _analysisEtaDeadline = Date.now() + Math.max(0, seconds) * 1000;
+            }
+            _renderAnalysisEta();
+        }
+        function startAnalysisEtaTicker() {
+            stopAnalysisEtaTicker();
+            _analysisEtaTicker = setInterval(_renderAnalysisEta, 1000);
+        }
+        function stopAnalysisEtaTicker() {
+            if (_analysisEtaTicker) { clearInterval(_analysisEtaTicker); _analysisEtaTicker = null; }
+        }
+
         function resetAnalysisProgressUI() {
             const bar = document.getElementById('analysisProgressBar');
             const title = document.getElementById('analysisProgressTitle');
             const count = document.getElementById('analysisProgressCount');
             const eta = document.getElementById('analysisProgressEta');
             const current = document.getElementById('analysisProgressCurrent');
+            const step = document.getElementById('analysisProgressStep');
+            const banner = document.getElementById('analysisProgressBanner');
             const log = document.getElementById('analysisProgressLog');
+            const spinner = document.querySelector('#analysisLoading .analysis-progress-spinner');
             if (bar) bar.style.width = '0%';
             if (title) title.textContent = 'Starting analysis…';
             if (count) count.textContent = 'Preparing…';
             if (eta) eta.textContent = '';
             if (current) current.textContent = '';
+            if (step) step.textContent = '';
+            if (banner) { banner.style.display = 'none'; banner.textContent = ''; }
             if (log) log.innerHTML = '';
+            if (spinner) spinner.style.display = '';
+            setAnalysisEta(null);
         }
 
         async function runAnalysis() {
@@ -3098,9 +3137,11 @@
             const bar = document.getElementById('analysisProgressBar');
             const title = document.getElementById('analysisProgressTitle');
             const countEl = document.getElementById('analysisProgressCount');
-            const etaEl = document.getElementById('analysisProgressEta');
             const currentEl = document.getElementById('analysisProgressCurrent');
+            const stepEl = document.getElementById('analysisProgressStep');
+            const bannerEl = document.getElementById('analysisProgressBanner');
             const logEl = document.getElementById('analysisProgressLog');
+            const spinnerEl = document.querySelector('#analysisLoading .analysis-progress-spinner');
 
             btn.disabled = true;
             btn.textContent = 'Running…';
@@ -3108,15 +3149,23 @@
             loading.style.display = 'block';
             results.classList.add('hidden');
             results.classList.remove('detail-shown');
+            startAnalysisEtaTicker();
 
             let total = 0;
-            let analyzedOk = 0;
             let completedPayload = null;
-            let sawError = false;
+            let sawFatal = false;
 
-            const setProgress = (done, tot) => {
-                const pct = tot > 0 ? Math.round((done / tot) * 100) : 0;
-                if (bar) bar.style.width = pct + '%';
+            const applyPercent = (p) => {
+                if (typeof p === 'number' && isFinite(p) && bar) {
+                    bar.style.width = Math.max(0, Math.min(100, p)) + '%';
+                }
+            };
+            const addLog = (html, cls) => {
+                const li = document.createElement('li');
+                if (cls) li.className = cls;
+                li.innerHTML = html;
+                logEl.appendChild(li);
+                logEl.scrollTop = logEl.scrollHeight;
             };
 
             const handleEvent = (evt) => {
@@ -3126,50 +3175,64 @@
                         if (total === 0) {
                             title.textContent = 'Nothing to analyze';
                             countEl.textContent = 'All apartments are already up to date.';
-                            if (bar) bar.style.width = '100%';
+                            applyPercent(100);
+                            setAnalysisEta(null);
                         } else {
-                            title.textContent = 'Analyzing apartments…';
+                            title.textContent = `Analyzing ${total} apartment${total === 1 ? '' : 's'}…`;
                             countEl.textContent = `0 of ${total} complete`;
                         }
                         break;
-                    case 'analyzing':
-                        title.textContent = 'Analyzing apartments…';
-                        countEl.textContent = `${evt.index - 1} of ${evt.total} complete`;
-                        etaEl.textContent = formatEta(evt.eta);
-                        currentEl.innerHTML = `<span class="analysis-progress-dot">●</span> Now analyzing: <strong>${escapeHtml(evt.address || 'Unknown')}</strong>`;
+                    case 'apartment':
+                        title.textContent = `Analyzing apartment ${evt.number} of ${evt.total}…`;
+                        countEl.textContent = `${evt.number - 1} of ${evt.total} complete`;
+                        currentEl.innerHTML = `<span class="analysis-progress-dot">●</span> <strong>${escapeHtml(evt.address || 'Unknown')}</strong>`;
+                        stepEl.textContent = '';
+                        applyPercent(evt.percent);
+                        setAnalysisEta(evt.eta);
                         break;
-                    case 'item_done': {
-                        if (evt.success) analyzedOk++;
-                        setProgress(evt.index, evt.total);
-                        countEl.textContent = `${evt.index} of ${evt.total} complete`;
-                        etaEl.textContent = evt.index < evt.total ? formatEta(evt.eta) : '';
-                        const li = document.createElement('li');
-                        li.className = evt.success ? 'ok' : 'fail';
-                        li.innerHTML = `${evt.success ? '✅' : '⚠️'} ${escapeHtml(evt.address || 'Unknown')}`;
-                        logEl.appendChild(li);
-                        logEl.scrollTop = logEl.scrollHeight;
+                    case 'step':
+                        stepEl.innerHTML = `<span class="analysis-progress-stepnum">Step ${evt.step_number}/${evt.step_total}</span> · ${escapeHtml(evt.step_label || evt.step_key)}`;
+                        applyPercent(evt.percent);
+                        setAnalysisEta(evt.eta);
                         break;
-                    }
+                    case 'item_done':
+                        countEl.textContent = `${evt.index + 1} of ${evt.total} complete`;
+                        applyPercent(evt.percent);
+                        setAnalysisEta(evt.eta);
+                        addLog(`${evt.success ? '✅' : '⚠️'} ${escapeHtml(evt.address || 'Unknown')}`,
+                               evt.success ? 'ok' : 'fail');
+                        break;
+                    case 'note':
+                        addLog(`<span class="analysis-progress-note">ℹ️ ${escapeHtml(evt.message || '')}</span>`, 'note');
+                        break;
+                    case 'heartbeat':
+                        applyPercent(evt.percent);
+                        setAnalysisEta(evt.eta);
+                        break;
                     case 'error':
-                        sawError = true;
                         if (evt.fatal) {
+                            sawFatal = true;
                             title.textContent = 'Analysis failed';
+                            stepEl.textContent = '';
                             currentEl.innerHTML = `<span class="error">❌ ${escapeHtml(evt.message || 'Unknown error')}</span>`;
                         } else {
-                            const li = document.createElement('li');
-                            li.className = 'fail';
-                            li.innerHTML = `⚠️ ${escapeHtml(evt.message || 'Error')}`;
-                            logEl.appendChild(li);
+                            addLog(`⚠️ ${escapeHtml(evt.message || 'Error')}`, 'fail');
                         }
                         break;
                     case 'complete':
                         completedPayload = evt;
-                        analyzedOk = evt.analyzed;
-                        setProgress(1, 1);
-                        title.textContent = evt.total === 0 ? 'Nothing to analyze' : 'Analysis complete';
-                        countEl.textContent = evt.message || `${evt.analyzed} of ${evt.total} complete`;
-                        etaEl.textContent = '';
+                        applyPercent(100);
+                        stopAnalysisEtaTicker();
+                        setAnalysisEta(null);
+                        stepEl.textContent = '';
                         currentEl.textContent = '';
+                        if (spinnerEl) spinnerEl.style.display = 'none';
+                        title.textContent = evt.total === 0 ? 'Nothing to analyze' : 'Analysis complete';
+                        countEl.textContent = `${evt.analyzed} of ${evt.total} analyzed`;
+                        if (evt.needs_rerun) {
+                            bannerEl.innerHTML = `⚠️ ${escapeHtml(evt.message)}`;
+                            bannerEl.style.display = 'block';
+                        }
                         break;
                 }
             };
@@ -3202,33 +3265,34 @@
                         }
                     }
                 }
-                // Flush any trailing buffered line.
                 const tail = buffer.trim();
                 if (tail) {
                     try { handleEvent(JSON.parse(tail)); } catch (e) { /* ignore */ }
                 }
 
-                // Give the user a moment to read the final state, then load results.
-                if (completedPayload && completedPayload.total > 0) {
-                    await new Promise(r => setTimeout(r, 900));
-                    loadAnalysisData();
-                } else if (!completedPayload && sawError) {
-                    // Fatal error already shown in the progress card; keep it visible.
-                } else {
-                    // Nothing to analyze — still refresh so any existing results show.
+                // Refresh the plot/rankings so any freshly-scored apartments appear.
+                // (Even a partial run may have landed some dots.)
+                if (completedPayload) {
+                    if (completedPayload.total > 0) {
+                        await new Promise(r => setTimeout(r, 900));
+                    }
                     loadAnalysisData();
                 }
             } catch (error) {
                 console.error('Error running analysis:', error);
                 title.textContent = 'Analysis failed';
+                if (spinnerEl) spinnerEl.style.display = 'none';
                 currentEl.innerHTML = `<span class="error">❌ ${escapeHtml(error.message || 'Error running analysis')}</span>`;
-                sawError = true;
+                sawFatal = true;
             } finally {
+                stopAnalysisEtaTicker();
                 btn.disabled = false;
-                btn.textContent = 'Run Analysis';
-                // Only auto-hide the progress card on a clean run; on error, keep it
-                // visible so the user can read what went wrong.
-                if (!sawError) {
+                const needsRerun = completedPayload && completedPayload.needs_rerun;
+                btn.textContent = needsRerun ? 'Run Analysis again' : 'Run Analysis';
+                // Keep the progress card visible when there's something to read
+                // (a fatal error, or apartments that still need another run);
+                // otherwise hide it once results are shown.
+                if (!sawFatal && !needsRerun) {
                     loading.style.display = 'none';
                 }
             }
