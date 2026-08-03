@@ -62,6 +62,12 @@ header p {
     border-left: 4px solid #c41e3a;
 }
 
+.alert-info {
+    background: #e0f0ff;
+    color: #0a4a80;
+    border-left: 4px solid #0a6ecf;
+}
+
 /* Main content split layout */
 .main-content {
     width: 100%;
