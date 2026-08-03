@@ -22,6 +22,8 @@ from threading import Timer
 import config
 from utils.google_sheets import GoogleSheetsClient, set_current_user
 from analyzers.location_analyzer import LocationAnalyzer
+from utils import zillow_client
+from utils import datasf_client
 
 # Global flag for graceful shutdown
 shutdown_requested = False
@@ -1021,6 +1023,38 @@ def get_laundromats():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/get_assessor_record', methods=['POST'])
+def get_assessor_record():
+    """
+    Look up authoritative SF property facts (year built, units, property type)
+    from the DataSF assessor roll for a given address. Free/official; best
+    first-choice source for SF before falling back to /get_building_year.
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        address = (payload.get('address') or '').strip()
+        apn = (payload.get('apn') or '').strip()
+        if not address and not apn:
+            return jsonify({'error': 'Address or APN required'}), 400
+
+        if apn:
+            record = datasf_client.lookup_by_parcel(apn)
+        else:
+            record = datasf_client.lookup_by_address(address)
+
+        if record is None:
+            return jsonify({
+                'success': False,
+                'record': None,
+                'message': 'No matching assessor record found',
+            })
+        return jsonify({'success': True, 'record': record.to_dict()})
+    except datasf_client.DataSFError as e:
+        return jsonify({'success': False, 'error': str(e)}), 502
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/get_building_year', methods=['POST'])
 def get_building_year():
     """Attempt to automatically detect building year"""
@@ -1048,6 +1082,196 @@ def get_building_year():
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+def persist_apartment(data, row_number_str=''):
+    """
+    Write an apartment ``data`` dict to Google Sheets (create or update).
+
+    Shared by the manual /add form and the automated Zillow import path so both
+    produce identical rows that flow through the same enrichment + scoring
+    pipeline. The caller is responsible for building ``data`` and for any
+    form-specific side effects (e.g. approved-gym handling).
+
+    Args:
+        data: Column-keyed apartment data (see /add for the full key set).
+        row_number_str: Sheet row number as a string to update an existing row,
+            or '' to append a new row.
+
+    Returns:
+        (row_number, action) where action is 'Added' or 'Updated'.
+    """
+    if not data.get('address'):
+        raise ValueError('Address is required')
+
+    is_update = bool(row_number_str)
+
+    # Add to or update Google Sheet
+    sheet = sheets_client.spreadsheet.worksheet(sheets_client.MAIN_SHEET_NAME)
+    records = sheets_client.read_main_sheet()
+
+    if is_update:
+        row_number = int(row_number_str)
+    else:
+        row_number = len(records) + 2
+
+    headers = sheet.row_values(1)
+
+    # Build row data
+    updates = []
+
+    # Column A: Manual Safety Rating (zillow_url column was removed)
+    manual_safety_col_name = config.SHEET_COLUMNS['manual_safety']
+    if manual_safety_col_name in headers:
+        col_idx = headers.index(manual_safety_col_name)
+        col_letter = col_index_to_letter(col_idx)
+        updates.append({
+            'range': f'{col_letter}{row_number}',
+            'values': [[data.get('manual_safety_rating', 5.0)]]
+        })
+
+    # Column B: Address as hyperlink (if Zillow URL provided)
+    # We'll handle this separately with a formula
+    address_col_name = config.SHEET_COLUMNS['address']
+    if address_col_name in headers:
+        col_idx = headers.index(address_col_name)
+        col_letter = col_index_to_letter(col_idx)
+
+        # If zillow_url exists, create hyperlink formula, otherwise just address
+        if data.get('zillow_url'):
+            # Use HYPERLINK formula: =HYPERLINK("url", "text")
+            formula = f'=HYPERLINK("{data["zillow_url"]}", "{data["address"]}")'
+            updates.append({
+                'range': f'{col_letter}{row_number}',
+                'values': [[formula]]
+            })
+        else:
+            updates.append({
+                'range': f'{col_letter}{row_number}',
+                'values': [[data['address']]]
+            })
+
+    # Other columns (skip address since we handled it above)
+    column_mapping = {
+        'availability_status': config.SHEET_COLUMNS['availability_status'],
+        'price': config.SHEET_COLUMNS['price'],
+        'bedrooms': config.SHEET_COLUMNS['bedrooms'],
+        'bathrooms': config.SHEET_COLUMNS['bathrooms'],
+        'sqft': config.SHEET_COLUMNS['sqft'],
+        'parking_type': config.SHEET_COLUMNS['parking_type'],
+        'parking_enclosure': config.SHEET_COLUMNS['parking_enclosure'],
+        'parking_cost': config.SHEET_COLUMNS['parking_cost'],
+        'floor_level': config.SHEET_COLUMNS['floor_level'],
+        'street_parking_ease': config.SHEET_COLUMNS['street_parking_ease'],
+        'visitor_parking_ease': config.SHEET_COLUMNS['visitor_parking_ease'],
+        'laundry_type': config.SHEET_COLUMNS['laundry_type'],
+        'neighborhoods': config.SHEET_COLUMNS['neighborhoods'],
+        'neighborhood': config.SHEET_COLUMNS['neighborhood'],
+        'rent_control': config.SHEET_COLUMNS['rent_control'],
+        'tour_questions': config.SHEET_COLUMNS['tour_questions'],
+        'hilliness_manual_override': config.SHEET_COLUMNS['hilliness_manual_override'],
+        'selected_gyms': config.SHEET_COLUMNS['selected_gyms'],
+        'office_gym_only': config.SHEET_COLUMNS['office_gym_only'],
+        'year_built': config.SHEET_COLUMNS.get('year_built', 'Year Built'),
+        'last_updated': config.SHEET_COLUMNS['last_updated'],
+        # WFH fields
+        'natural_light': config.SHEET_COLUMNS.get('natural_light', 'Natural Light'),
+        'desk_space_quality': config.SHEET_COLUMNS.get('desk_space_quality', 'Desk Space Quality'),
+        'work_area_quietness': config.SHEET_COLUMNS.get('quietness_score', 'Quietness Score'),
+        'kitchen_quality': config.SHEET_COLUMNS.get('kitchen_quality', 'Kitchen Quality'),
+        'double_pane_windows': config.SHEET_COLUMNS.get('double_pane_windows', 'Double Pane Windows'),
+        'study_door_type': config.SHEET_COLUMNS.get('study_door_type', 'Study Door Type'),
+        # Luxury amenities
+        'has_double_vanity': config.SHEET_COLUMNS.get('has_double_vanity', 'Has Double Vanity'),
+        'high_end_appliances': config.SHEET_COLUMNS.get('high_end_appliances', 'High-End Appliances'),
+        'walk_in_closet': config.SHEET_COLUMNS.get('walk_in_closet', 'Walk-In Closet'),
+        'has_balcony_patio': config.SHEET_COLUMNS.get('has_balcony_patio', 'Has Balcony/Patio'),
+        'has_fireplace': config.SHEET_COLUMNS.get('has_fireplace', 'Has Fireplace'),
+    }
+
+    for data_key, column_name in column_mapping.items():
+        if data_key in data and column_name in headers:
+            col_idx = headers.index(column_name)
+            col_letter = col_index_to_letter(col_idx)
+            updates.append({
+                'range': f'{col_letter}{row_number}',
+                'values': [[data[data_key]]]
+            })
+
+    # Batch update
+    # Use valueInputOption='USER_ENTERED' to allow formulas to be evaluated
+    sheet.batch_update(updates, value_input_option='USER_ENTERED')
+
+    # Format the row: auto-resize first, then apply text wrapping
+    try:
+        # Multi-select columns that need auto-width adjustment
+        multi_select_column_names = [
+            config.SHEET_COLUMNS["parking_type"],
+            config.SHEET_COLUMNS["parking_enclosure"],
+            config.SHEET_COLUMNS["laundry_type"],
+            config.SHEET_COLUMNS["neighborhoods"],
+            config.SHEET_COLUMNS["tour_questions"]
+        ]
+
+        # Build batch update request for sizing
+        resize_requests = []
+
+        # Set minimum widths for multi-select columns to prevent text cutoff
+        # Use fixed widths that are wide enough for the longest expected values
+        min_widths = {
+            config.SHEET_COLUMNS["parking_type"]: 280,  # Wide enough for "dedicated_spot_car_and_motorcycle"
+            config.SHEET_COLUMNS["parking_enclosure"]: 120,
+            config.SHEET_COLUMNS["laundry_type"]: 150,
+            config.SHEET_COLUMNS["neighborhoods"]: 200,
+            config.SHEET_COLUMNS["tour_questions"]: 180
+        }
+
+        for col_name, min_width in min_widths.items():
+            if col_name in headers:
+                col_idx = headers.index(col_name)
+                resize_requests.append({
+                    'updateDimensionProperties': {
+                        'range': {
+                            'sheetId': sheet.id,
+                            'dimension': 'COLUMNS',
+                            'startIndex': col_idx,
+                            'endIndex': col_idx + 1
+                        },
+                        'properties': {
+                            'pixelSize': min_width
+                        },
+                        'fields': 'pixelSize'
+                    }
+                })
+
+        # Execute column width updates first
+        if resize_requests:
+            sheets_client.spreadsheet.batch_update({'requests': resize_requests})
+
+        # Apply text wrapping to the entire row
+        sheet.format(f'A{row_number}:{col_index_to_letter(len(headers)-1)}{row_number}', {
+            'wrapStrategy': 'WRAP',
+            'verticalAlignment': 'TOP'
+        })
+
+        # Auto-resize row height to fit wrapped content (do this AFTER wrapping)
+        sheets_client.spreadsheet.batch_update({
+            'requests': [{
+                'autoResizeDimensions': {
+                    'dimensions': {
+                        'sheetId': sheet.id,
+                        'dimension': 'ROWS',
+                        'startIndex': row_number - 1,  # 0-indexed
+                        'endIndex': row_number
+                    }
+                }
+            }]
+        })
+    except Exception as format_error:
+        print(f"Warning: Could not format row {row_number}: {format_error}")
+
+    action = 'Updated' if is_update else 'Added'
+    return row_number, action
 
 
 @app.route('/add', methods=['POST'])
@@ -1237,182 +1461,144 @@ def add_apartment():
         if not data['address']:
             flash('Address is required', 'error')
             return redirect(url_for('index'))
-        
-        # Check if this is an update or new apartment
+
+        # Persist to Google Sheets (shared with the automated Zillow import path)
         row_number_str = request.form.get('row_number', '').strip()
-        is_update = bool(row_number_str)
-        
-        # Add to or update Google Sheet
-        sheet = sheets_client.spreadsheet.worksheet(sheets_client.MAIN_SHEET_NAME)
-        records = sheets_client.read_main_sheet()
-        
-        if is_update:
-            row_number = int(row_number_str)
-        else:
-            row_number = len(records) + 2
-        
-        headers = sheet.row_values(1)
-        
-        # Build row data
-        updates = []
-        
-        # Column A: Manual Safety Rating (zillow_url column was removed)
-        manual_safety_col_name = config.SHEET_COLUMNS['manual_safety']
-        if manual_safety_col_name in headers:
-            col_idx = headers.index(manual_safety_col_name)
-            col_letter = col_index_to_letter(col_idx)
-            updates.append({
-                'range': f'{col_letter}{row_number}',
-                'values': [[data.get('manual_safety_rating', 5.0)]]
-            })
-        
-        # Column B: Address as hyperlink (if Zillow URL provided)
-        # We'll handle this separately with a formula
-        address_col_name = config.SHEET_COLUMNS['address']
-        if address_col_name in headers:
-            col_idx = headers.index(address_col_name)
-            col_letter = col_index_to_letter(col_idx)
-            
-            # If zillow_url exists, create hyperlink formula, otherwise just address
-            if data.get('zillow_url'):
-                # Use HYPERLINK formula: =HYPERLINK("url", "text")
-                formula = f'=HYPERLINK("{data["zillow_url"]}", "{data["address"]}")'
-                updates.append({
-                    'range': f'{col_letter}{row_number}',
-                    'values': [[formula]]
-                })
-            else:
-                updates.append({
-                    'range': f'{col_letter}{row_number}',
-                    'values': [[data['address']]]
-                })
-        
-        # Other columns (skip address since we handled it above)
-        column_mapping = {
-            'availability_status': config.SHEET_COLUMNS['availability_status'],
-            'price': config.SHEET_COLUMNS['price'],
-            'bedrooms': config.SHEET_COLUMNS['bedrooms'],
-            'bathrooms': config.SHEET_COLUMNS['bathrooms'],
-            'sqft': config.SHEET_COLUMNS['sqft'],
-            'parking_type': config.SHEET_COLUMNS['parking_type'],
-            'parking_enclosure': config.SHEET_COLUMNS['parking_enclosure'],
-            'parking_cost': config.SHEET_COLUMNS['parking_cost'],
-            'floor_level': config.SHEET_COLUMNS['floor_level'],
-            'street_parking_ease': config.SHEET_COLUMNS['street_parking_ease'],
-            'visitor_parking_ease': config.SHEET_COLUMNS['visitor_parking_ease'],
-            'laundry_type': config.SHEET_COLUMNS['laundry_type'],
-            'neighborhoods': config.SHEET_COLUMNS['neighborhoods'],
-            'neighborhood': config.SHEET_COLUMNS['neighborhood'],
-            'rent_control': config.SHEET_COLUMNS['rent_control'],
-            'tour_questions': config.SHEET_COLUMNS['tour_questions'],
-            'hilliness_manual_override': config.SHEET_COLUMNS['hilliness_manual_override'],
-            'selected_gyms': config.SHEET_COLUMNS['selected_gyms'],
-            'office_gym_only': config.SHEET_COLUMNS['office_gym_only'],
-            'year_built': config.SHEET_COLUMNS.get('year_built', 'Year Built'),
-            'last_updated': config.SHEET_COLUMNS['last_updated'],
-            # WFH fields
-            'natural_light': config.SHEET_COLUMNS.get('natural_light', 'Natural Light'),
-            'desk_space_quality': config.SHEET_COLUMNS.get('desk_space_quality', 'Desk Space Quality'),
-            'work_area_quietness': config.SHEET_COLUMNS.get('quietness_score', 'Quietness Score'),
-            'kitchen_quality': config.SHEET_COLUMNS.get('kitchen_quality', 'Kitchen Quality'),
-            'double_pane_windows': config.SHEET_COLUMNS.get('double_pane_windows', 'Double Pane Windows'),
-            'study_door_type': config.SHEET_COLUMNS.get('study_door_type', 'Study Door Type'),
-            # Luxury amenities
-            'has_double_vanity': config.SHEET_COLUMNS.get('has_double_vanity', 'Has Double Vanity'),
-            'high_end_appliances': config.SHEET_COLUMNS.get('high_end_appliances', 'High-End Appliances'),
-            'walk_in_closet': config.SHEET_COLUMNS.get('walk_in_closet', 'Walk-In Closet'),
-            'has_balcony_patio': config.SHEET_COLUMNS.get('has_balcony_patio', 'Has Balcony/Patio'),
-            'has_fireplace': config.SHEET_COLUMNS.get('has_fireplace', 'Has Fireplace'),
-        }
-        
-        for data_key, column_name in column_mapping.items():
-            if data_key in data and column_name in headers:
-                col_idx = headers.index(column_name)
-                col_letter = col_index_to_letter(col_idx)
-                updates.append({
-                    'range': f'{col_letter}{row_number}',
-                    'values': [[data[data_key]]]
-                })
-        
-        # Batch update
-        # Use valueInputOption='USER_ENTERED' to allow formulas to be evaluated
-        sheet.batch_update(updates, value_input_option='USER_ENTERED')
-        
-        # Format the row: auto-resize first, then apply text wrapping
-        try:
-            # Multi-select columns that need auto-width adjustment
-            multi_select_column_names = [
-                config.SHEET_COLUMNS["parking_type"],
-                config.SHEET_COLUMNS["parking_enclosure"],
-                config.SHEET_COLUMNS["laundry_type"],
-                config.SHEET_COLUMNS["neighborhoods"],
-                config.SHEET_COLUMNS["tour_questions"]
-            ]
-            
-            # Build batch update request for sizing
-            resize_requests = []
-            
-            # Set minimum widths for multi-select columns to prevent text cutoff
-            # Use fixed widths that are wide enough for the longest expected values
-            min_widths = {
-                config.SHEET_COLUMNS["parking_type"]: 280,  # Wide enough for "dedicated_spot_car_and_motorcycle"
-                config.SHEET_COLUMNS["parking_enclosure"]: 120,
-                config.SHEET_COLUMNS["laundry_type"]: 150,
-                config.SHEET_COLUMNS["neighborhoods"]: 200,
-                config.SHEET_COLUMNS["tour_questions"]: 180
-            }
-            
-            for col_name, min_width in min_widths.items():
-                if col_name in headers:
-                    col_idx = headers.index(col_name)
-                    resize_requests.append({
-                        'updateDimensionProperties': {
-                            'range': {
-                                'sheetId': sheet.id,
-                                'dimension': 'COLUMNS',
-                                'startIndex': col_idx,
-                                'endIndex': col_idx + 1
-                            },
-                            'properties': {
-                                'pixelSize': min_width
-                            },
-                            'fields': 'pixelSize'
-                        }
-                    })
-            
-            # Execute column width updates first
-            if resize_requests:
-                sheets_client.spreadsheet.batch_update({'requests': resize_requests})
-            
-            # Apply text wrapping to the entire row
-            sheet.format(f'A{row_number}:{col_index_to_letter(len(headers)-1)}{row_number}', {
-                'wrapStrategy': 'WRAP',
-                'verticalAlignment': 'TOP'
-            })
-            
-            # Auto-resize row height to fit wrapped content (do this AFTER wrapping)
-            sheets_client.spreadsheet.batch_update({
-                'requests': [{
-                    'autoResizeDimensions': {
-                        'dimensions': {
-                            'sheetId': sheet.id,
-                            'dimension': 'ROWS',
-                            'startIndex': row_number - 1,  # 0-indexed
-                            'endIndex': row_number
-                        }
-                    }
-                }]
-            })
-        except Exception as format_error:
-            print(f"Warning: Could not format row {row_number}: {format_error}")
-        
-        action = 'Updated' if is_update else 'Added'
+        row_number, action = persist_apartment(data, row_number_str)
+
         flash(f'✓ {action} apartment: {data["address"]} (Row {row_number})', 'success')
         return redirect(url_for('index'))
     
     except Exception as e:
         flash(f'Error adding apartment: {str(e)}', 'error')
         return redirect(url_for('index'))
+
+
+def _threshold_value(criterion, field_name, tiers=('veto', 'acceptable', 'ideal')):
+    """Return the first threshold value for ``field_name`` across the given
+    tiers (veto first = loosest bound), or None if the criterion has none."""
+    if not criterion:
+        return None
+    for tier in tiers:
+        for threshold in getattr(criterion, tier, None) or []:
+            if threshold.field == field_name:
+                return threshold.value
+    return None
+
+
+def _search_params_from_profile(profile):
+    """
+    Derive Zillow search filters from a preference profile's thresholds.
+
+    Maps the profile's price ceiling and sqft floor to search bounds. Beds and
+    location are not part of the profile schema today, so callers supply those
+    (see /search_zillow). Uses the loosest (veto-tier) bound so the search is
+    inclusive — scoring later narrows it down.
+    """
+    params = {}
+    max_rent = _threshold_value(profile.get_criterion('price'), 'monthly_cost')
+    if max_rent is not None:
+        try:
+            params['max_rent'] = int(float(max_rent))
+        except (TypeError, ValueError):
+            pass
+    min_sqft = _threshold_value(profile.get_criterion('space_luxury'), 'sqft')
+    if min_sqft is not None:
+        try:
+            params['min_sqft'] = int(float(min_sqft))
+        except (TypeError, ValueError):
+            pass
+    return params
+
+
+def _existing_street_addresses():
+    """Best-effort set of street addresses (portion before first comma,
+    lowercased) already in the sheet, for deduping search results."""
+    streets = set()
+    try:
+        address_col = config.SHEET_COLUMNS['address']
+        for row in sheets_client.read_main_sheet():
+            value = str(row.get(address_col, '')).strip()
+            if value:
+                streets.add(value.split(',')[0].strip().lower())
+    except Exception as e:
+        print(f"Warning: could not read existing apartments for dedupe: {e}")
+    return streets
+
+
+@app.route('/search_zillow', methods=['POST'])
+def search_zillow():
+    """
+    Preview Zillow listings matching a preference profile (no import yet).
+
+    Body (JSON): {profile?, location?, min_beds?, max_rent?, min_sqft?, limit?}.
+    Filters default from the named profile's thresholds; any provided field
+    overrides the derived value. Returns candidates flagged for whether they
+    already exist in the sheet — the review UI decides what to import.
+    """
+    if not zillow_client.is_enabled():
+        return jsonify({
+            'enabled': False,
+            'listings': [],
+            'message': ('Zillow search is not configured. Set '
+                        'ZILLOW_SEARCH_ENABLED=true and ZILLOW_RAPIDAPI_KEY '
+                        '(see env.example).'),
+        })
+
+    payload = request.get_json(silent=True) or {}
+    profile_name = (payload.get('profile') or '').strip()
+
+    # Explicit overrides win; otherwise derive from the profile.
+    max_rent = payload.get('max_rent')
+    min_sqft = payload.get('min_sqft')
+    min_beds = payload.get('min_beds')
+    location = (payload.get('location') or '').strip()
+
+    if profile_name:
+        try:
+            from preferences.integration import PreferenceIntegration
+            profile = PreferenceIntegration().get_profile(profile_name)
+        except Exception as e:
+            return jsonify({'enabled': True, 'listings': [],
+                            'error': f'Could not load profiles: {e}'}), 500
+        if profile is None:
+            return jsonify({'enabled': True, 'listings': [],
+                            'error': f'Profile "{profile_name}" not found'}), 404
+        derived = _search_params_from_profile(profile)
+        if max_rent is None:
+            max_rent = derived.get('max_rent')
+        if min_sqft is None:
+            min_sqft = derived.get('min_sqft')
+
+    if not location:
+        location = config.ZILLOW_DEFAULT_LOCATION
+
+    try:
+        listings = zillow_client.search_listings(
+            location=location,
+            max_rent=max_rent,
+            min_beds=min_beds,
+            min_sqft=min_sqft,
+            limit=int(payload.get('limit', 40)),
+        )
+    except zillow_client.ZillowSearchError as e:
+        return jsonify({'enabled': True, 'listings': [], 'error': str(e)}), 502
+
+    existing_streets = _existing_street_addresses()
+    results = []
+    for listing in listings:
+        item = listing.to_dict()
+        street = listing.address.split(',')[0].strip().lower()
+        item['already_in_sheet'] = street in existing_streets
+        results.append(item)
+
+    return jsonify({
+        'enabled': True,
+        'location': location,
+        'filters': {'max_rent': max_rent, 'min_sqft': min_sqft, 'min_beds': min_beds},
+        'count': len(results),
+        'listings': results,
+    })
 
 
 @app.route('/delete/<int:row_number>', methods=['POST'])
