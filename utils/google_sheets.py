@@ -170,6 +170,46 @@ class GoogleSheetsClient:
                         f"Error: {str(e)}"
                     ) from e
     
+    # Base (un-namespaced) tab names, keyed by a stable identifier. Used by the
+    # cross-environment sync to translate between the base ↔ per-user tab-naming
+    # schemes when reading a *peer* spreadsheet.
+    @property
+    def BASE_TAB_NAMES(self) -> Dict[str, str]:
+        return {
+            "main": self._BASE_MAIN_SHEET_NAME,
+            "scatter_plot": self._BASE_SCATTER_PLOT_SHEET_NAME,
+            "criteria_matrix": self._BASE_CRITERIA_MATRIX_SHEET_NAME,
+            "places_of_interest": self._BASE_PLACES_OF_INTEREST_SHEET_NAME,
+            "excluded_places": self._BASE_EXCLUDED_PLACES_SHEET_NAME,
+            "user_edits_log": self._BASE_USER_EDITS_LOG_SHEET_NAME,
+            "settings": self._BASE_SETTINGS_SHEET_NAME,
+        }
+
+    @staticmethod
+    def scoped_tab_name(base_name: str, username: Optional[str]) -> str:
+        """Return the namespaced tab name for a base name and an explicit user.
+
+        Unlike ``_scoped_name`` (which reads the active request context), this
+        resolves against a caller-supplied username so it can be used to address
+        a *peer* environment's tabs regardless of who is logged in here. A blank
+        username yields the base (single-user) tab name.
+        """
+        if username and str(username).strip():
+            return f"{str(username).strip()} - {base_name}"
+        return base_name
+
+    def open_spreadsheet(self, sheet_id: str) -> gspread.Spreadsheet:
+        """Open an arbitrary spreadsheet by ID using the existing credentials.
+
+        The shared service account is an Editor on both the prod and staging
+        sheets, so this lets a single deployment read/write the *peer*
+        environment's spreadsheet without any new credentials. The default
+        ``self.spreadsheet`` remains bound to this deployment's own sheet.
+        """
+        if not sheet_id:
+            raise ValueError("sheet_id is required to open a peer spreadsheet")
+        return self.client.open_by_key(sheet_id)
+
     def _get_or_create_worksheet(self, name: str, rows: int = 1000, cols: int = 50) -> gspread.Worksheet:
         """Get worksheet by name or create if doesn't exist"""
         try:

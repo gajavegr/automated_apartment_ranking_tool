@@ -39,6 +39,26 @@ else:
 
 # API Configuration
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
+
+# Cross-environment data sync (prod <-> staging).
+#
+# The prod and staging deployments each own a *separate* Google Sheet but share
+# the same service account (Editor on both). Point PEER_GOOGLE_SHEET_ID at the
+# *other* environment's sheet to enable the sync feature (detect + import data
+# that already exists in the other environment). The feature is a no-op / hidden
+# when this is unset.
+PEER_GOOGLE_SHEET_ID = os.getenv("PEER_GOOGLE_SHEET_ID", "")
+# Whether the peer sheet uses the multi-user, per-user namespaced tab scheme
+# ("<username> - Apartment Data") vs. the single-user base tab names
+# ("Apartment Data"). Staging is multi-user; prod is single-user. So on staging
+# (peer = prod) leave this false; on prod (peer = staging) set it true.
+PEER_IS_MULTI_USER = os.getenv("PEER_IS_MULTI_USER", "false").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+# Human-friendly label for the peer environment, used in the UI (e.g.
+# "production" or "staging").
+PEER_ENV_LABEL = os.getenv("PEER_ENV_LABEL", "the other environment")
+
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
 

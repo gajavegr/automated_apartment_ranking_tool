@@ -38,6 +38,18 @@
             {% endif %}
         {% endwith %}
 
+        {% if sync_enabled %}
+        <!-- Cross-environment import prompt (shown when the peer env has data
+             this user doesn't have yet). Populated by checkForPeerData(). -->
+        <div id="syncImportBanner" class="alert alert-info" style="display: none; align-items: center; justify-content: space-between; gap: 12px;">
+            <span id="syncImportBannerText"></span>
+            <span style="display: flex; gap: 8px; white-space: nowrap;">
+                <button type="button" class="btn btn-primary" style="padding: 6px 14px; font-size: 0.85rem;" onclick="document.getElementById('syncImportBanner').style.display='none'; openSyncIntro();">Show me how</button>
+                <button type="button" class="btn btn-secondary" style="padding: 6px 14px; font-size: 0.85rem;" onclick="document.getElementById('syncImportBanner').style.display='none';">Dismiss</button>
+            </span>
+        </div>
+        {% endif %}
+
         <div class="main-content">
             <!-- Left side: Form -->
             <div id="entryTab" class="tab-content active">
@@ -1427,6 +1439,27 @@
                         </div>
                     </div>
                     
+                    {% if sync_enabled %}
+                    <!-- Cross-Environment Data Sync -->
+                    <div class="admin-section" id="syncSection">
+                        <h3>🔁 Cross-Environment Sync</h3>
+                        <p>Check whether <strong>{{ peer_env_label }}</strong> has apartment data
+                        you don't have here yet, and import it into your own tabs. Imports are
+                        <strong>additive</strong> (nothing here is deleted) and safe to re-run.</p>
+
+                        <div class="admin-actions">
+                            <button id="syncCheckBtn" class="btn btn-secondary" onclick="loadSyncDiff()">
+                                Check for data in {{ peer_env_label }}
+                            </button>
+                            <button class="btn btn-secondary" onclick="openSyncIntro()" title="How cross-environment sync works">❔ How it works</button>
+                        </div>
+
+                        <div id="syncStatus" class="schema-status" style="display: none; margin-top: 15px;">
+                            <div id="syncDetails"></div>
+                        </div>
+                    </div>
+                    {% endif %}
+
                     <!-- Danger Zone: delete account -->
                     <div class="admin-section danger-zone">
                         <h3>⚠️ Danger Zone — Delete Account</h3>
@@ -1493,10 +1526,36 @@
         </div>
     </div>
 
+    {% if sync_enabled %}
+    <!-- ============== Cross-environment sync walkthrough ============== -->
+    <div id="syncIntroModal" class="modal onboarding-modal" style="display: none;">
+        <div class="modal-content onboarding-content">
+            <button type="button" class="modal-close onboarding-close" onclick="closeSyncIntro()" aria-label="Close">&times;</button>
+            <div class="onboarding-body">
+                <div class="onboarding-icon" id="syncIntroIcon">📦</div>
+                <h2 class="onboarding-title" id="syncIntroTitle">Import your existing data</h2>
+                <div class="onboarding-text" id="syncIntroText"></div>
+            </div>
+            <div class="onboarding-footer">
+                <div class="onboarding-dots" id="syncIntroDots"></div>
+                <div class="onboarding-actions">
+                    <button type="button" class="btn btn-secondary" id="syncIntroSkipBtn" onclick="closeSyncIntro()">Not now</button>
+                    <button type="button" class="btn btn-secondary" id="syncIntroBackBtn" onclick="syncIntroPrev()" style="display: none;">Back</button>
+                    <button type="button" class="btn btn-primary" id="syncIntroNextBtn" onclick="syncIntroNext()">Next</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="{{ url_for('static', filename='preferences.js') }}?v=20251208v7"></script>
     <script>
+        // ===================== Cross-environment sync =====================
+        const SYNC_ENABLED = {{ 'true' if sync_enabled else 'false' }};
+        const PEER_ENV_LABEL = {{ (peer_env_label or 'the other environment') | tojson }};
+
         // ===================== Onboarding walkthrough =====================
         // Server tells us whether this user has already finished/dismissed it.
         const ONBOARDING_COMPLETED = {{ 'true' if onboarding_completed else 'false' }};
@@ -5030,6 +5089,9 @@ Score = 10 × (1 - ${parseFloat(gymWalkTime).toFixed(1)} / ${maxTime}) = ${gymSc
             if (!ONBOARDING_COMPLETED) {
                 openOnboarding();
             }
+
+            // Offer to import existing data from the peer environment, if any.
+            checkForPeerData();
             
             // Setup collapsible sections
             document.querySelectorAll('.collapsible-section').forEach(button => {
@@ -5467,6 +5529,304 @@ Score = 10 × (1 - ${parseFloat(gymWalkTime).toFixed(1)} / ${maxTime}) = ${gymSc
         }
 
         // Schema Management Functions
+        // ===================== Cross-environment sync UI =====================
+        function escapeHtml(str) {
+            return String(str == null ? '' : str)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        // Latest diff, kept so the import handler knows the full plan candidates.
+        let lastSyncDiff = null;
+        // How many importable apartments we last detected (drives the walkthrough copy).
+        let syncPeerCount = 0;
+
+        // ---- Guided walkthrough (mirrors the onboarding "Getting started" tool) ----
+        let syncIntroStep = 0;
+
+        function syncIntroSteps() {
+            const n = syncPeerCount;
+            const noun = n === 1 ? 'apartment' : 'apartments';
+            const foundLine = n > 0
+                ? `<p>We spotted <strong>${n}</strong> ${noun} in <strong>${escapeHtml(PEER_ENV_LABEL)}</strong>
+                   that ${n === 1 ? "isn't" : "aren't"} in your list here yet.</p>`
+                : `<p>This checks <strong>${escapeHtml(PEER_ENV_LABEL)}</strong> for apartments you may have
+                   entered there but not here.</p>`;
+            return [
+                {
+                    icon: '📦',
+                    title: 'Bring over your existing data',
+                    html: foundLine +
+                        `<p>If you've used this tool in <strong>${escapeHtml(PEER_ENV_LABEL)}</strong> before, you don't
+                        have to re-enter anything — you can import it straight into your own tabs here.</p>`
+                },
+                {
+                    icon: '🔍',
+                    title: 'How we match apartments',
+                    html: `<p>Each listing is matched by its <strong>Zillow link</strong> when available, otherwise by a
+                        <strong>normalized address</strong> — so "123 Main St." and "123 main street" count as the same place.</p>
+                        <p>You'll see three groups: <strong>available to import</strong>, <strong>only here</strong>, and
+                        <strong>present in both but different</strong>. Only the details you enter (price, beds, parking…)
+                        are compared — computed scores are ignored so there's no false noise.</p>`
+                },
+                {
+                    icon: '🛡️',
+                    title: 'Safe by design',
+                    html: `<ul class="onboarding-steps">
+                        <li><strong>Additive</strong> — importing never deletes anything you already have.</li>
+                        <li><strong>Preview first</strong> — you see the full diff and pick exactly what to bring over.</li>
+                        <li><strong>Conflicts are yours to resolve</strong> — keep yours or take ${escapeHtml(PEER_ENV_LABEL)}'s, per apartment.</li>
+                        <li><strong>Re-runnable</strong> — running it again with nothing new does nothing.</li>
+                        <li><strong>Optional backup</strong> — snapshot your tab before merging.</li>
+                        </ul>`
+                },
+                {
+                    icon: '✅',
+                    title: 'Ready when you are',
+                    html: `<p>Click below to compare your data with <strong>${escapeHtml(PEER_ENV_LABEL)}</strong>. Nothing is
+                        written until you review the diff and choose <em>Import selected</em>.</p>
+                        <p style="color:#6e6e73; font-size:0.85rem;">💡 You can reopen this anytime from
+                        <strong>Admin → Cross-Environment Sync → ❔ How it works</strong>.</p>`
+                }
+            ];
+        }
+
+        function renderSyncIntroStep() {
+            const steps = syncIntroSteps();
+            const step = steps[syncIntroStep];
+            document.getElementById('syncIntroIcon').textContent = step.icon;
+            document.getElementById('syncIntroTitle').textContent = step.title;
+            document.getElementById('syncIntroText').innerHTML = step.html;
+
+            document.getElementById('syncIntroDots').innerHTML = steps.map((_, i) =>
+                `<span class="ob-dot${i === syncIntroStep ? ' active' : ''}"></span>`).join('');
+
+            const isFirst = syncIntroStep === 0;
+            const isLast = syncIntroStep === steps.length - 1;
+            document.getElementById('syncIntroBackBtn').style.display = isFirst ? 'none' : '';
+            document.getElementById('syncIntroSkipBtn').style.display = isLast ? 'none' : '';
+            document.getElementById('syncIntroNextBtn').textContent =
+                isLast ? ('Check ' + PEER_ENV_LABEL + ' →') : 'Next';
+        }
+
+        function openSyncIntro() {
+            if (!SYNC_ENABLED) return;
+            syncIntroStep = 0;
+            renderSyncIntroStep();
+            document.getElementById('syncIntroModal').style.display = 'flex';
+        }
+
+        function closeSyncIntro() {
+            const modal = document.getElementById('syncIntroModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function syncIntroPrev() {
+            if (syncIntroStep > 0) { syncIntroStep--; renderSyncIntroStep(); }
+        }
+
+        function syncIntroNext() {
+            const steps = syncIntroSteps();
+            if (syncIntroStep < steps.length - 1) {
+                syncIntroStep++;
+                renderSyncIntroStep();
+            } else {
+                // Finished: drop the user into the Admin sync section and run the check.
+                closeSyncIntro();
+                showTab('admin');
+                const section = document.getElementById('syncSection');
+                if (section) section.scrollIntoView({behavior: 'smooth', block: 'start'});
+                loadSyncDiff();
+            }
+        }
+
+        // On first load, quietly check whether the peer env has data to import
+        // and surface a dismissible banner if so (onboarding integration).
+        async function checkForPeerData() {
+            if (!SYNC_ENABLED) return;
+            try {
+                const resp = await fetch('/sync/diff');
+                const data = await resp.json();
+                if (!data || !data.enabled || !data.success) return;
+                lastSyncDiff = data;
+                const n = (data.summary && data.summary.only_in_peer) || 0;
+                syncPeerCount = n;
+                if (n > 0) {
+                    const banner = document.getElementById('syncImportBanner');
+                    const text = document.getElementById('syncImportBannerText');
+                    if (banner && text) {
+                        text.innerHTML = `📦 We found <strong>${n}</strong> apartment${n === 1 ? '' : 's'} in `
+                            + `<strong>${escapeHtml(data.peer_label || PEER_ENV_LABEL)}</strong> that you don't have here yet. `
+                            + `Want to import ${n === 1 ? 'it' : 'them'}?`;
+                        banner.style.display = 'flex';
+                    }
+                }
+            } catch (err) {
+                console.warn('Peer data check failed:', err);
+            }
+        }
+
+        async function loadSyncDiff() {
+            const btn = document.getElementById('syncCheckBtn');
+            const statusDiv = document.getElementById('syncStatus');
+            const detailsDiv = document.getElementById('syncDetails');
+            if (!statusDiv || !detailsDiv) return;
+
+            if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+            statusDiv.style.display = 'block';
+            detailsDiv.innerHTML = '<p>Comparing your data with ' + escapeHtml(PEER_ENV_LABEL) + '…</p>';
+
+            try {
+                const resp = await fetch('/sync/diff');
+                const data = await resp.json();
+
+                if (!data.enabled) {
+                    detailsDiv.innerHTML = '<p>Cross-environment sync is not configured.</p>';
+                    return;
+                }
+                if (!data.success) {
+                    detailsDiv.innerHTML = `<p class="error">Error: ${escapeHtml(data.error)}</p>`;
+                    return;
+                }
+
+                lastSyncDiff = data;
+                syncPeerCount = (data.summary && data.summary.only_in_peer) || 0;
+                renderSyncDiff(data);
+            } catch (error) {
+                console.error('Error loading sync diff:', error);
+                detailsDiv.innerHTML = `<p class="error">Error: ${escapeHtml(error.message)}</p>`;
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = 'Check for data in ' + PEER_ENV_LABEL; }
+            }
+        }
+
+        function renderSyncDiff(data) {
+            const detailsDiv = document.getElementById('syncDetails');
+            const s = data.summary || {};
+            let html = '<div class="schema-results">';
+            html += '<div class="schema-summary">';
+            html += `<p><strong>Only in ${escapeHtml(data.peer_label)}:</strong> ${s.only_in_peer || 0}`
+                 + ` &nbsp;|&nbsp; <strong>Only here:</strong> ${s.only_here || 0}`
+                 + ` &nbsp;|&nbsp; <strong>Differ:</strong> ${s.differ || 0}`
+                 + ` &nbsp;|&nbsp; <strong>Identical:</strong> ${s.identical || 0}</p>`;
+            html += '</div>';
+
+            // --- Importable (only in peer) ---
+            if (data.only_in_peer && data.only_in_peer.length) {
+                html += '<div class="schema-issue missing">';
+                html += `<h5>📦 Available to import (${data.only_in_peer.length})</h5>`;
+                html += '<label style="display:block; margin:6px 0;"><input type="checkbox" id="syncSelectAllNew" checked onchange="document.querySelectorAll(\'.sync-new-item\').forEach(c=>c.checked=this.checked)"> Select all</label>';
+                html += '<ul style="list-style:none; padding-left:0;">';
+                data.only_in_peer.forEach(item => {
+                    html += `<li><label style="display:flex; gap:8px; align-items:center;">`
+                        + `<input type="checkbox" class="sync-new-item" value="${escapeHtml(item.key)}" checked>`
+                        + `<span>${escapeHtml(item.address)}`
+                        + (item.price ? ` <small>(${escapeHtml(item.price)})</small>` : '')
+                        + `</span></label></li>`;
+                });
+                html += '</ul></div>';
+            }
+
+            // --- Conflicts (differ) ---
+            if (data.differ && data.differ.length) {
+                html += '<div class="schema-issue misplaced">';
+                html += `<h5>⚠️ Present in both, but different (${data.differ.length})</h5>`;
+                html += '<p>Choose which version to keep for each. Default keeps your data.</p>';
+                data.differ.forEach(item => {
+                    html += `<div style="border:1px solid #e0e0e0; border-radius:6px; padding:10px; margin-bottom:10px;">`;
+                    html += `<strong>${escapeHtml(item.address)}</strong>`;
+                    html += '<table style="width:100%; font-size:0.85em; margin:6px 0; border-collapse:collapse;">';
+                    html += '<tr><th style="text-align:left;">Field</th><th style="text-align:left;">Yours</th><th style="text-align:left;">' + escapeHtml(data.peer_label) + '</th></tr>';
+                    item.fields.forEach(f => {
+                        html += `<tr><td>${escapeHtml(f.column)}</td>`
+                            + `<td>${escapeHtml(f.mine)}</td>`
+                            + `<td>${escapeHtml(f.peer)}</td></tr>`;
+                    });
+                    html += '</table>';
+                    const kf = escapeHtml(item.key);
+                    html += `<label style="margin-right:12px;"><input type="radio" name="conflict_${kf}" value="mine" checked> Keep mine</label>`;
+                    html += `<label class="sync-conflict-item" data-key="${kf}"><input type="radio" name="conflict_${kf}" value="peer"> Use ${escapeHtml(data.peer_label)}</label>`;
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+
+            if ((!data.only_in_peer || !data.only_in_peer.length) && (!data.differ || !data.differ.length)) {
+                html += '<div class="schema-success"><h5>✅ You\'re in sync</h5>'
+                    + `<p>Nothing to import from ${escapeHtml(data.peer_label)}.</p></div>`;
+            } else {
+                html += '<div style="margin-top:12px; display:flex; gap:10px; align-items:center;">';
+                html += '<label><input type="checkbox" id="syncSnapshot" checked> Back up my sheet first</label>';
+                html += '<button class="btn btn-primary" id="syncApplyBtn" onclick="applySync()">Import selected</button>';
+                html += '</div>';
+            }
+
+            html += '</div>';
+            detailsDiv.innerHTML = html;
+        }
+
+        async function applySync() {
+            const importNew = Array.from(document.querySelectorAll('.sync-new-item:checked')).map(c => c.value);
+            const conflicts = {};
+            document.querySelectorAll('.sync-conflict-item').forEach(el => {
+                const key = el.getAttribute('data-key');
+                const sel = document.querySelector(`input[name="conflict_${CSS.escape(key)}"]:checked`);
+                if (sel) conflicts[key] = sel.value;
+            });
+
+            if (importNew.length === 0 && !Object.values(conflicts).some(v => v === 'peer')) {
+                alert('Nothing selected to import.');
+                return;
+            }
+
+            const snapshot = document.getElementById('syncSnapshot');
+            const plan = {
+                direction: 'import',
+                snapshot: snapshot ? snapshot.checked : true,
+                import_new: importNew,
+                conflicts: conflicts,
+            };
+
+            const btn = document.getElementById('syncApplyBtn');
+            if (!confirm(`Import ${importNew.length} new apartment(s)`
+                + (Object.values(conflicts).some(v => v === 'peer') ? ' and apply the selected updates' : '')
+                + ' into your tabs?')) {
+                return;
+            }
+            if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
+
+            try {
+                const resp = await fetch('/sync/apply', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(plan),
+                });
+                const result = await resp.json();
+                const detailsDiv = document.getElementById('syncDetails');
+
+                if (!result.success) {
+                    detailsDiv.innerHTML = `<p class="error">Error: ${escapeHtml(result.error)}</p>`;
+                    return;
+                }
+
+                const sum = result.summary || {};
+                let html = '<div class="schema-success">';
+                html += `<h5>✅ Sync complete</h5>`;
+                html += `<p>Added <strong>${sum.added || 0}</strong>, updated <strong>${sum.updated || 0}</strong>, skipped <strong>${sum.skipped || 0}</strong>.</p>`;
+                if (result.snapshot) {
+                    html += `<p><small>Backup created: ${escapeHtml(result.snapshot)}</small></p>`;
+                }
+                html += '<p><button class="btn btn-secondary" onclick="loadSyncDiff()">Re-check</button></p>';
+                html += '</div>';
+                detailsDiv.innerHTML = html;
+            } catch (error) {
+                console.error('Error applying sync:', error);
+                alert('Error applying sync: ' + error.message);
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = 'Import selected'; }
+            }
+        }
+
         async function checkSchema() {
             const btn = document.getElementById('checkSchemaBtn');
             const statusDiv = document.getElementById('schemaStatus');

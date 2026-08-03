@@ -21,6 +21,7 @@ from threading import Timer
 
 import config
 from utils.google_sheets import GoogleSheetsClient, set_current_user
+from utils.env_sync import EnvSyncManager
 from analyzers.location_analyzer import LocationAnalyzer
 
 # Global flag for graceful shutdown
@@ -494,7 +495,9 @@ def index():
     return render_template('entry_form.html',
                          google_maps_api_key=config.GOOGLE_MAPS_API_KEY,
                          sf_neighborhoods=config.SF_NEIGHBORHOODS,
-                         onboarding_completed=onboarding_completed)
+                         onboarding_completed=onboarding_completed,
+                         sync_enabled=bool(config.PEER_GOOGLE_SHEET_ID),
+                         peer_env_label=config.PEER_ENV_LABEL)
 
 
 @app.route('/onboarding/complete', methods=['POST'])
@@ -2511,6 +2514,63 @@ def admin_sync_schema():
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e), 'success': False}), 500
+
+
+# ---------------------------------------------------------------------------
+# Cross-environment data sync (prod <-> staging)
+#
+# Detect data that already exists in the *other* environment's Google Sheet and
+# help the current user import/reconcile it. See utils/env_sync.py and issue #8.
+# ---------------------------------------------------------------------------
+
+def get_sync_manager():
+    """Build an EnvSyncManager bound to the shared sheets client, or None if the
+    feature is not configured / backend not ready."""
+    if sheets_client is None or not config.PEER_GOOGLE_SHEET_ID:
+        return None
+    return EnvSyncManager(sheets_client)
+
+
+@app.route('/sync/diff', methods=['GET'])
+def sync_diff():
+    """Return the diff between the current user's data and the peer sheet.
+
+    Doubles as the dry-run preview for /sync/apply. Returns {enabled: false}
+    when the feature isn't configured so the UI can hide itself gracefully.
+    """
+    manager = get_sync_manager()
+    if manager is None:
+        return jsonify({'enabled': False})
+    try:
+        diff = manager.compute_diff(my_username=session.get('username'))
+        diff['success'] = True
+        return jsonify(diff)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'enabled': True, 'error': str(e)}), 500
+
+
+@app.route('/sync/apply', methods=['POST'])
+def sync_apply():
+    """Apply a submitted sync plan; returns a summary of what changed.
+
+    Additive by default (never deletes target rows), previewable (via
+    /sync/diff), and idempotent (re-applying is a no-op).
+    """
+    manager = get_sync_manager()
+    if manager is None:
+        return jsonify({'success': False,
+                        'error': 'Cross-environment sync is not configured.'}), 400
+    try:
+        plan = request.get_json(silent=True) or {}
+        result = manager.apply_plan(plan, my_username=session.get('username'))
+        status = 200 if result.get('success') else 400
+        return jsonify(result), status
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/clear_wfh/<int:row_number>', methods=['POST'])
