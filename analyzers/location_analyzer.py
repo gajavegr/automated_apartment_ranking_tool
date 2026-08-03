@@ -1538,13 +1538,14 @@ Respond with ONLY the word "YES" or "NO" (nothing else)."""
         Attempt to find the year a building was built
         
         Uses multiple strategies:
+        0. DataSF assessor roll (SF first-choice: authoritative, free, official)
         1. Google Places API (sometimes has this data)
         2. Claude AI web search and extraction (most reliable)
         3. Street View metadata (earliest available image as fallback)
-        
+
         Args:
             address: Full address string (may include apartment number)
-            
+
         Returns:
             Year as integer, or None if not found
         """
@@ -1552,7 +1553,21 @@ Respond with ONLY the word "YES" or "NO" (nothing else)."""
         cached = self.cache.get(cache_key)
         if cached:
             return cached
-        
+
+        # Strategy 0 — SF first-choice: the Assessor's secured property tax roll
+        # via DataSF is authoritative and free. It falls through for non-SF
+        # addresses (no match) or any DataSF hiccup, so the strategies below
+        # still run as fallbacks.
+        try:
+            from utils import datasf_client
+            record = datasf_client.lookup_by_address(address)
+            if record and record.year_built:
+                print(f"  🏛️  Building year from SF assessor roll: {record.year_built}")
+                self.cache.set(cache_key, record.year_built)
+                return record.year_built
+        except Exception as e:
+            print(f"  ⚠️  DataSF assessor lookup failed, using fallbacks: {e}")
+
         # Strip apartment number for better Claude search results
         # (Building records typically don't include apartment numbers)
         building_address = self._strip_apartment_number(address)

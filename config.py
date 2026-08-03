@@ -60,6 +60,25 @@ SF_OPENDATA_APP_TOKEN = os.getenv("SF_OPENDATA_APP_TOKEN")  # Get your token at:
 CACHE_DIR = os.getenv("CACHE_DIR", ".cache")
 CACHE_EXPIRE_HOURS = int(os.getenv("CACHE_EXPIRE_HOURS", "168"))  # 1 week default
 
+# Zillow Listing Search (automated candidate import)
+# Zillow has no official public search API and blocks scraping, so automated
+# search goes through a third-party scraper API (RapidAPI by default) using a
+# server-side key. Optional: if disabled/unconfigured, the /search_zillow
+# endpoint returns a clear "not configured" message instead of failing.
+ZILLOW_SEARCH_ENABLED = os.getenv("ZILLOW_SEARCH_ENABLED", "false").lower() == "true"
+ZILLOW_RAPIDAPI_KEY = os.getenv("ZILLOW_RAPIDAPI_KEY", "")
+ZILLOW_RAPIDAPI_HOST = os.getenv("ZILLOW_RAPIDAPI_HOST", "zillow-com1.p.rapidapi.com")
+ZILLOW_DEFAULT_LOCATION = os.getenv("ZILLOW_DEFAULT_LOCATION", "San Francisco, CA")
+
+# DataSF property enrichment (San Francisco Assessor secured property tax roll)
+# Authoritative, free, official source for year built / units / property type.
+# Public dataset (wv5m-vpq2); no key required. An optional Socrata app token
+# raises anonymous rate limits.
+DATASF_ASSESSOR_ENDPOINT = os.getenv(
+    "DATASF_ASSESSOR_ENDPOINT", "https://data.sfgov.org/resource/wv5m-vpq2.json"
+)
+DATASF_APP_TOKEN = os.getenv("DATASF_APP_TOKEN", "")
+
 # Google Sheet Column Names
 SHEET_COLUMNS = {
     # Input columns
