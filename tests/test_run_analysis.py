@@ -211,6 +211,69 @@ def test_run_analysis_never_zero_without_reason(client):
 
 
 # --------------------------------------------------------------------------- #
+# /run_analysis_stream (NDJSON) — the path the Analysis tab actually uses
+# --------------------------------------------------------------------------- #
+def _stream_events(test_client):
+    """POST /run_analysis_stream and parse the NDJSON body into event dicts."""
+    import json as _json
+    resp = test_client.post('/run_analysis_stream')
+    assert resp.status_code == 200
+    events = []
+    for line in resp.get_data(as_text=True).splitlines():
+        line = line.strip()
+        if line:
+            events.append(_json.loads(line))
+    return events
+
+
+def test_stream_surfaces_analysis_error(client):
+    """A returned {'error': ...} (not a raised exception) must still emit an
+    `error` event carrying the reason — the streaming variant of the bug."""
+    test_client, configure = client
+    configure(FakeSheetsClient(apartments=[apt(2, '456 Oak Ave')]), 'error')
+
+    events = _stream_events(test_client)
+    by_type = lambda t: [e for e in events if e['type'] == t]
+
+    errors = by_type('error')
+    assert len(errors) == 1
+    assert errors[0]['fatal'] is False
+    assert 'geocode' in errors[0]['message'].lower()
+
+    complete = by_type('complete')[0]
+    assert complete['analyzed'] == 0
+    assert complete['total'] == 1
+    assert 'could not be analyzed' in complete['message'].lower()
+    # item marked unsuccessful
+    assert by_type('item_done')[0]['success'] is False
+
+
+def test_stream_success_no_error_events(client):
+    test_client, configure = client
+    configure(FakeSheetsClient(apartments=[apt(2, '123 Main St')]), 'ok')
+
+    events = _stream_events(test_client)
+    assert [e for e in events if e['type'] == 'error'] == []
+    complete = [e for e in events if e['type'] == 'complete'][0]
+    assert complete['analyzed'] == 1
+    assert 'successfully' in complete['message'].lower()
+
+
+def test_stream_write_failure_surfaces_error(client):
+    test_client, configure = client
+    configure(
+        FakeSheetsClient(apartments=[apt(2, '789 Pine St')],
+                         write_error=Exception('Sheets 500: backend error')),
+        'ok',
+    )
+    events = _stream_events(test_client)
+    errors = [e for e in events if e['type'] == 'error']
+    assert len(errors) == 1
+    assert 'backend error' in errors[0]['message']
+    assert [e for e in events if e['type'] == 'complete'][0]['analyzed'] == 0
+
+
+# --------------------------------------------------------------------------- #
 # /reanalyze — already surfaces errors (guard that it stays that way)
 # --------------------------------------------------------------------------- #
 def test_reanalyze_reports_analysis_error(client):

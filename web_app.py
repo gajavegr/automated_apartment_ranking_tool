@@ -14,7 +14,8 @@ import webbrowser
 from datetime import datetime
 from functools import wraps
 from flask import (
-    Flask, render_template, request, jsonify, redirect, url_for, flash, session, g
+    Flask, render_template, request, jsonify, redirect, url_for, flash, session, g,
+    Response, stream_with_context
 )
 from threading import Timer
 
@@ -1742,6 +1743,199 @@ def run_analysis():
         })
     except Exception as e:
         return jsonify({'error': str(e), 'success': False}), 500
+
+
+@app.route('/run_analysis_stream', methods=['POST'])
+def run_analysis_stream():
+    """Run analysis on all apartments, streaming real-time progress to the client.
+
+    Emits newline-delimited JSON (NDJSON) events so the Analysis tab can show a
+    live progress view (which apartment is being processed, how many are left,
+    and an estimated time remaining) instead of a static spinner.
+
+    Event shapes (one JSON object per line):
+      {"type": "start", "total": N}
+      {"type": "analyzing", "index": i, "total": N, "address": "...", "elapsed": s, "eta": s}
+      {"type": "item_done", "index": i, "total": N, "address": "...", "success": bool, "elapsed": s, "eta": s}
+      {"type": "complete", "analyzed": k, "total": N, "message": "...", "elapsed": s}
+      {"type": "error", "message": "...", "fatal": bool}
+    """
+    import time
+    from utils.google_sheets import get_current_user, set_current_user
+
+    # Capture the active user NOW, while the request context is intact. The
+    # streaming body runs after Flask's @after_request has already reset the
+    # per-user context to None, so we must re-establish it inside the generator
+    # (otherwise per-user sheet scoping would be lost mid-stream).
+    stream_username = getattr(g, 'username', None) or session.get('username')
+
+    def event(payload):
+        return json.dumps(payload) + "\n"
+
+    @stream_with_context
+    def generate():
+        import sys
+        import traceback
+        from main import ApartmentAnalyzer
+
+        # Re-apply the per-user sheet context for the duration of the stream.
+        previous_user = get_current_user()
+        set_current_user(stream_username)
+
+        start_time = time.time()
+
+        def eta_for(completed, total):
+            """Estimate seconds remaining based on average time per completed item."""
+            if completed <= 0:
+                return None
+            elapsed = time.time() - start_time
+            avg = elapsed / completed
+            remaining = max(0, total - completed)
+            return round(avg * remaining, 1)
+
+        try:
+            sys.stdout.flush()
+            print("\n" + "=" * 70)
+            print("RUNNING ANALYSIS (streaming)")
+            print("=" * 70)
+            sys.stdout.flush()
+
+            analyzer = ApartmentAnalyzer()
+            apartments_to_analyze = sheets_client.get_apartments_needing_analysis()
+            total = len(apartments_to_analyze)
+
+            print(f"\nFound {total} apartments to analyze")
+            sys.stdout.flush()
+
+            yield event({"type": "start", "total": total})
+
+            results = []
+            for i, apartment in enumerate(apartments_to_analyze, start=1):
+                address = apartment.get(config.SHEET_COLUMNS['address'], 'Unknown')
+
+                yield event({
+                    "type": "analyzing",
+                    "index": i,
+                    "total": total,
+                    "address": address,
+                    "elapsed": round(time.time() - start_time, 1),
+                    "eta": eta_for(i - 1, total),
+                })
+
+                item_success = False
+                try:
+                    result = analyzer.analyze_apartment(apartment)
+                    if not result or 'error' in result:
+                        # analyze_apartment reports failures by returning
+                        # {'error': ...} rather than raising — surface the reason
+                        # instead of silently marking the item unsuccessful.
+                        reason = (result or {}).get('error', 'analysis returned no result')
+                        print(f"  ✗ Analysis failed for {address}: {reason}")
+                        yield event({
+                            "type": "error",
+                            "message": f"Could not analyze {address}: {reason}",
+                            "fatal": False,
+                        })
+                    else:
+                        row_number = apartment.get('_row_number')
+                        if row_number:
+                            print(f"Writing analysis results to row {row_number}")
+                            # Rate limiting: sleep between writes to avoid API limits
+                            time.sleep(1.2)
+
+                            # Retry logic with exponential backoff
+                            max_retries = 3
+                            retry_delay = 5
+                            for attempt in range(max_retries):
+                                try:
+                                    sheets_client.write_apartment_data(row_number, result)
+                                    break
+                                except Exception as write_error:
+                                    error_str = str(write_error)
+                                    if 'RATE_LIMIT_EXCEEDED' in error_str or '429' in error_str:
+                                        if attempt < max_retries - 1:
+                                            wait_time = retry_delay * (2 ** attempt)
+                                            print(f"  ⏳ Rate limit hit, waiting {wait_time}s before retry {attempt + 1}/{max_retries}...")
+                                            time.sleep(wait_time)
+                                        else:
+                                            print(f"  ❌ Failed to write after {max_retries} attempts")
+                                            raise
+                                    else:
+                                        raise
+                        else:
+                            print(f"⚠️  Warning: No row number found for apartment: {apartment.get('address')}")
+                        results.append(result)
+                        item_success = True
+                except Exception as e:
+                    print(f"Error analyzing apartment: {e}")
+                    traceback.print_exc()
+                    yield event({
+                        "type": "error",
+                        "message": f"Error analyzing {address}: {e}",
+                        "fatal": False,
+                    })
+
+                yield event({
+                    "type": "item_done",
+                    "index": i,
+                    "total": total,
+                    "address": address,
+                    "success": item_success,
+                    "elapsed": round(time.time() - start_time, 1),
+                    "eta": eta_for(i, total),
+                })
+
+            # Update visualizations
+            if results:
+                sheets_client.update_scatter_plot_data()
+
+                criteria_results = []
+                for result in results:
+                    if result.get('scorecard'):
+                        criteria_results.append({
+                            'address': result.get('address', ''),
+                            'components': result['scorecard'].get('components', {}),
+                            'weighted_score': result.get('weighted_score', 0)
+                        })
+                if criteria_results:
+                    sheets_client.update_criteria_matrix(criteria_results)
+
+                # Small delay to let Google Sheets API propagate writes
+                time.sleep(1.5)
+
+            failed_count = total - len(results)
+            if total == 0:
+                message = "Everything is already up to date — no apartments needed analysis."
+            elif failed_count == 0:
+                message = f"Successfully analyzed {len(results)} apartment(s)."
+            else:
+                message = (f"Analyzed {len(results)} of {total} apartment(s); "
+                           f"{failed_count} could not be analyzed.")
+
+            yield event({
+                "type": "complete",
+                "analyzed": len(results),
+                "total": total,
+                "message": message,
+                "elapsed": round(time.time() - start_time, 1),
+            })
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield event({"type": "error", "message": str(e), "fatal": True})
+        finally:
+            # Restore whatever user context was in effect before the stream.
+            set_current_user(previous_user)
+
+    return Response(
+        generate(),
+        mimetype='application/x-ndjson',
+        headers={
+            'Cache-Control': 'no-cache, no-transform',
+            'X-Accel-Buffering': 'no',  # disable proxy buffering so events flush live
+        },
+    )
 
 
 @app.route('/reanalyze/<int:row_number>', methods=['POST'])

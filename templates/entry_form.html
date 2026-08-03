@@ -713,8 +713,26 @@
                     </button>
                 </div>
 
-                <div id="analysisLoading" class="loading-spinner" style="display: none;">
-                    <p>⏳ Analyzing apartments... This may take a few minutes.</p>
+                <div id="analysisLoading" class="analysis-progress" style="display: none;">
+                    <div class="analysis-progress-card">
+                        <div class="analysis-progress-header">
+                            <span class="analysis-progress-spinner" aria-hidden="true"></span>
+                            <h3 id="analysisProgressTitle">Starting analysis…</h3>
+                        </div>
+
+                        <div class="analysis-progress-bar-track">
+                            <div id="analysisProgressBar" class="analysis-progress-bar-fill" style="width: 0%;"></div>
+                        </div>
+
+                        <div class="analysis-progress-meta">
+                            <span id="analysisProgressCount">Preparing…</span>
+                            <span id="analysisProgressEta"></span>
+                        </div>
+
+                        <div id="analysisProgressCurrent" class="analysis-progress-current"></div>
+
+                        <ul id="analysisProgressLog" class="analysis-progress-log"></ul>
+                    </div>
                 </div>
 
                 <div id="analysisResults" class="analysis-grid hidden">
@@ -2185,8 +2203,19 @@
 
         function onPlaceChanged() {
             const place = autocomplete.getPlace();
-            
+
             if (!place.geometry) {
+                // The user pressed Enter or blurred without picking a prediction from
+                // the dropdown. In that case the Autocomplete widget fires this event
+                // with an unresolved stub (no geometry / address_components), so the
+                // client-side neighborhood detection below would be skipped entirely.
+                // Fall back to geocoding the typed address on the backend, which both
+                // updates the maps and auto-populates neighborhoods via /get_neighborhoods.
+                const typedAddress = document.getElementById('address').value.trim();
+                if (typedAddress) {
+                    populateNeighborhoodsForAddress(typedAddress);
+                    geocodeAndUpdateMaps(typedAddress);
+                }
                 return;
             }
 
@@ -2231,6 +2260,26 @@
                 label.appendChild(document.createTextNode(' ' + neighborhood));
                 container.appendChild(label);
             });
+        }
+
+        // Fallback neighborhood detection used when the Autocomplete widget fires
+        // without a resolved place (e.g. the user typed the full address and pressed
+        // Enter instead of clicking a prediction). Uses the backend geocoder so the
+        // neighborhood is populated regardless of how the address was entered.
+        async function populateNeighborhoodsForAddress(address) {
+            try {
+                const response = await fetch('/get_neighborhoods', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address })
+                });
+                const data = await response.json();
+                if (data.success && Array.isArray(data.neighborhoods) && data.neighborhoods.length) {
+                    updateNeighborhoodCheckboxes(data.neighborhoods);
+                }
+            } catch (error) {
+                console.error('Error fetching neighborhoods:', error);
+            }
         }
 
         function updateNeighborhoodCheckboxes(neighborhoods) {
@@ -3007,49 +3056,181 @@
         }
 
         // Run analysis
+        // Escape user/sheet-derived text before inserting into innerHTML.
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str == null ? '' : String(str);
+            return div.innerHTML;
+        }
+
+        // Format a number of seconds as a friendly "time left" string.
+        function formatEta(seconds) {
+            if (seconds === null || seconds === undefined || !isFinite(seconds)) return '';
+            seconds = Math.max(0, Math.round(seconds));
+            if (seconds < 60) return `~${seconds}s left`;
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            if (mins < 60) return secs ? `~${mins}m ${secs}s left` : `~${mins}m left`;
+            const hrs = Math.floor(mins / 60);
+            return `~${hrs}h ${mins % 60}m left`;
+        }
+
+        function resetAnalysisProgressUI() {
+            const bar = document.getElementById('analysisProgressBar');
+            const title = document.getElementById('analysisProgressTitle');
+            const count = document.getElementById('analysisProgressCount');
+            const eta = document.getElementById('analysisProgressEta');
+            const current = document.getElementById('analysisProgressCurrent');
+            const log = document.getElementById('analysisProgressLog');
+            if (bar) bar.style.width = '0%';
+            if (title) title.textContent = 'Starting analysis…';
+            if (count) count.textContent = 'Preparing…';
+            if (eta) eta.textContent = '';
+            if (current) current.textContent = '';
+            if (log) log.innerHTML = '';
+        }
+
         async function runAnalysis() {
             const btn = document.getElementById('runAnalysisBtn');
             const loading = document.getElementById('analysisLoading');
             const results = document.getElementById('analysisResults');
-            
+
+            const bar = document.getElementById('analysisProgressBar');
+            const title = document.getElementById('analysisProgressTitle');
+            const countEl = document.getElementById('analysisProgressCount');
+            const etaEl = document.getElementById('analysisProgressEta');
+            const currentEl = document.getElementById('analysisProgressCurrent');
+            const logEl = document.getElementById('analysisProgressLog');
+
             btn.disabled = true;
-            btn.textContent = 'Running...';
+            btn.textContent = 'Running…';
+            resetAnalysisProgressUI();
             loading.style.display = 'block';
             results.classList.add('hidden');
             results.classList.remove('detail-shown');
-            
-            try {
-                const response = await fetch('/run_analysis', {
-                    method: 'POST'
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    // Prefer the server's human-readable summary; fall back for
-                    // older responses that only sent `analyzed`.
-                    let msg = data.message || `Analysis complete! Analyzed ${data.analyzed} apartments.`;
-                    const failed = data.failed || [];
-                    if (failed.length > 0) {
-                        const lines = failed.map(f => {
-                            const where = f.row ? `row ${f.row}` : 'unsaved row';
-                            return `• ${f.address || 'Unknown'} (${where}) — ${f.reason || 'unknown error'}`;
-                        });
-                        msg += `\n\nCould not analyze:\n${lines.join('\n')}` +
-                               `\n\nThese are usually transient (a Maps/Sheets hiccup or rate limit). Try Run Analysis again.`;
+
+            let total = 0;
+            let analyzedOk = 0;
+            let completedPayload = null;
+            let sawError = false;
+
+            const setProgress = (done, tot) => {
+                const pct = tot > 0 ? Math.round((done / tot) * 100) : 0;
+                if (bar) bar.style.width = pct + '%';
+            };
+
+            const handleEvent = (evt) => {
+                switch (evt.type) {
+                    case 'start':
+                        total = evt.total || 0;
+                        if (total === 0) {
+                            title.textContent = 'Nothing to analyze';
+                            countEl.textContent = 'All apartments are already up to date.';
+                            if (bar) bar.style.width = '100%';
+                        } else {
+                            title.textContent = 'Analyzing apartments…';
+                            countEl.textContent = `0 of ${total} complete`;
+                        }
+                        break;
+                    case 'analyzing':
+                        title.textContent = 'Analyzing apartments…';
+                        countEl.textContent = `${evt.index - 1} of ${evt.total} complete`;
+                        etaEl.textContent = formatEta(evt.eta);
+                        currentEl.innerHTML = `<span class="analysis-progress-dot">●</span> Now analyzing: <strong>${escapeHtml(evt.address || 'Unknown')}</strong>`;
+                        break;
+                    case 'item_done': {
+                        if (evt.success) analyzedOk++;
+                        setProgress(evt.index, evt.total);
+                        countEl.textContent = `${evt.index} of ${evt.total} complete`;
+                        etaEl.textContent = evt.index < evt.total ? formatEta(evt.eta) : '';
+                        const li = document.createElement('li');
+                        li.className = evt.success ? 'ok' : 'fail';
+                        li.innerHTML = `${evt.success ? '✅' : '⚠️'} ${escapeHtml(evt.address || 'Unknown')}`;
+                        logEl.appendChild(li);
+                        logEl.scrollTop = logEl.scrollHeight;
+                        break;
                     }
-                    alert(msg);
+                    case 'error':
+                        sawError = true;
+                        if (evt.fatal) {
+                            title.textContent = 'Analysis failed';
+                            currentEl.innerHTML = `<span class="error">❌ ${escapeHtml(evt.message || 'Unknown error')}</span>`;
+                        } else {
+                            const li = document.createElement('li');
+                            li.className = 'fail';
+                            li.innerHTML = `⚠️ ${escapeHtml(evt.message || 'Error')}`;
+                            logEl.appendChild(li);
+                        }
+                        break;
+                    case 'complete':
+                        completedPayload = evt;
+                        analyzedOk = evt.analyzed;
+                        setProgress(1, 1);
+                        title.textContent = evt.total === 0 ? 'Nothing to analyze' : 'Analysis complete';
+                        countEl.textContent = evt.message || `${evt.analyzed} of ${evt.total} complete`;
+                        etaEl.textContent = '';
+                        currentEl.textContent = '';
+                        break;
+                }
+            };
+
+            try {
+                const response = await fetch('/run_analysis_stream', { method: 'POST' });
+                if (!response.ok || !response.body) {
+                    throw new Error(`Server returned ${response.status}`);
+                }
+
+                // Read the NDJSON stream line-by-line as it arrives.
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+
+                    let newlineIndex;
+                    while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
+                        const line = buffer.slice(0, newlineIndex).trim();
+                        buffer = buffer.slice(newlineIndex + 1);
+                        if (!line) continue;
+                        try {
+                            handleEvent(JSON.parse(line));
+                        } catch (parseErr) {
+                            console.warn('Could not parse progress line:', line, parseErr);
+                        }
+                    }
+                }
+                // Flush any trailing buffered line.
+                const tail = buffer.trim();
+                if (tail) {
+                    try { handleEvent(JSON.parse(tail)); } catch (e) { /* ignore */ }
+                }
+
+                // Give the user a moment to read the final state, then load results.
+                if (completedPayload && completedPayload.total > 0) {
+                    await new Promise(r => setTimeout(r, 900));
                     loadAnalysisData();
+                } else if (!completedPayload && sawError) {
+                    // Fatal error already shown in the progress card; keep it visible.
                 } else {
-                    alert('Error running analysis: ' + (data.error || 'Unknown error'));
+                    // Nothing to analyze — still refresh so any existing results show.
+                    loadAnalysisData();
                 }
             } catch (error) {
                 console.error('Error running analysis:', error);
-                alert('Error running analysis');
+                title.textContent = 'Analysis failed';
+                currentEl.innerHTML = `<span class="error">❌ ${escapeHtml(error.message || 'Error running analysis')}</span>`;
+                sawError = true;
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Run Analysis';
-                loading.style.display = 'none';
+                // Only auto-hide the progress card on a clean run; on error, keep it
+                // visible so the user can read what went wrong.
+                if (!sawError) {
+                    loading.style.display = 'none';
+                }
             }
         }
 
