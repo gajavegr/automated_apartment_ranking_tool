@@ -1409,6 +1409,52 @@
                         </div>
                     </div>
                     
+                    <!-- Cross-Environment Sync (issue #8) -->
+                    <div class="admin-section" id="syncSection" style="display: none;">
+                        <h3>🔄 Cross-Environment Sync</h3>
+                        <p>Detect and reconcile data differences between this environment and the other one
+                           (e.g. import listings you previously entered in the production app).</p>
+
+                        <div class="admin-actions">
+                            <label style="display: flex; align-items: center; gap: 8px; margin-right: 16px;">
+                                <span>Direction:</span>
+                                <select id="syncDirection" onchange="onSyncDirectionChange()" style="padding: 6px;">
+                                    <option value="import">Import (peer → me)</option>
+                                    <option value="push">Push (me → peer)</option>
+                                </select>
+                            </label>
+                            <button id="syncDetectBtn" class="btn btn-secondary" onclick="detectSync()">
+                                Detect Differences
+                            </button>
+                        </div>
+
+                        <div id="syncStatus" class="schema-status" style="display: none; margin-top: 15px;">
+                            <div id="syncDetails"></div>
+                            <div id="syncApplyBar" style="display: none; margin-top: 16px; padding-top: 12px; border-top: 1px solid #e0e0e0;">
+                                <label id="syncDeleteLabel" style="display: none; align-items: center; gap: 8px; margin-bottom: 10px; color: #b00;">
+                                    <input type="checkbox" id="syncAllowDelete">
+                                    <span>Also delete apartments that exist only on the target (destructive)</span>
+                                </label>
+                                <button id="syncApplyBtn" class="btn btn-primary" onclick="applySync()">
+                                    Apply Selected Changes
+                                </button>
+                                <span id="syncPushWarning" style="display: none; color: #b00; margin-left: 12px;">
+                                    ⚠️ Push overwrites the shared peer dataset — you'll be asked to confirm.
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="admin-note">
+                            <strong>💡 How it works:</strong>
+                            <ul style="font-size: 0.9em;">
+                                <li><strong>Import</strong> brings apartments from the other environment into your data. This is the common case.</li>
+                                <li><strong>Push</strong> sends your data to the shared peer environment and requires an extra confirmation.</li>
+                                <li>Syncing is <strong>additive</strong> by default — nothing is deleted unless you opt in.</li>
+                                <li>Re-running with no changes does nothing (safe to repeat).</li>
+                            </ul>
+                        </div>
+                    </div>
+
                     <!-- Other Admin Tools -->
                     <div class="admin-section">
                         <h3>🔧 Other Tools</h3>
@@ -1416,7 +1462,6 @@
                         <ul>
                             <li>Bulk data operations</li>
                             <li>Data validation & cleanup</li>
-                            <li>Export/import functionality</li>
                             <li>API key management</li>
                         </ul>
                     </div>
@@ -1440,6 +1485,29 @@
                     <button type="button" class="btn btn-secondary" id="onboardingSkipBtn" onclick="closeOnboarding()">Skip</button>
                     <button type="button" class="btn btn-secondary" id="onboardingBackBtn" onclick="onboardingPrev()" style="display: none;">Back</button>
                     <button type="button" class="btn btn-primary" id="onboardingNextBtn" onclick="onboardingNext()">Next</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===================== Import existing data (onboarding, issue #8) ===================== -->
+    <div id="importOfferModal" class="modal onboarding-modal" style="display: none;">
+        <div class="modal-content onboarding-content">
+            <button type="button" class="modal-close onboarding-close" onclick="dismissImportOffer()" aria-label="Close">&times;</button>
+            <div class="onboarding-body">
+                <div class="onboarding-icon">📦</div>
+                <h2 class="onboarding-title">We found your existing data</h2>
+                <div class="onboarding-text">
+                    <p>It looks like you already have apartments in the other environment.
+                       Want to import them into your account so you don't start from scratch?</p>
+                    <div id="importOfferList" style="max-height: 240px; overflow:auto; text-align:left; margin-top:12px;"></div>
+                </div>
+            </div>
+            <div class="onboarding-footer">
+                <div class="onboarding-dots"></div>
+                <div class="onboarding-actions">
+                    <button type="button" class="btn btn-secondary" onclick="dismissImportOffer()">Not now</button>
+                    <button type="button" class="btn btn-primary" id="importOfferBtn" onclick="runImportOffer()">Import my data</button>
                 </div>
             </div>
         </div>
@@ -1562,6 +1630,9 @@
         function closeOnboarding() {
             document.getElementById('onboardingModal').style.display = 'none';
             markOnboardingComplete();
+            // After the walkthrough, offer to import existing data from the peer
+            // environment (no-op unless there's data to bring over).
+            maybeOfferImport();
         }
 
         function markOnboardingComplete() {
@@ -1571,6 +1642,73 @@
                 // Non-fatal: worst case the guide auto-opens again next visit.
                 console.warn('Could not save onboarding state:', err);
             });
+        }
+
+        // ---- First-run "import your existing data" offer (issue #8) ----
+        // Only offered once, to new users, and only if the peer environment has
+        // apartments they don't have yet.
+        let syncOfferPending = !ONBOARDING_COMPLETED;
+        let importOfferKeys = [];
+
+        async function maybeOfferImport() {
+            if (!syncOfferPending) return;
+            syncOfferPending = false;  // one-shot
+            try {
+                const resp = await fetch('/sync/diff?extras=0');
+                const data = await resp.json();
+                if (!data || data.enabled === false || !data.success) return;
+                const onlyPeer = (data.apartments && data.apartments.only_in_peer) || [];
+                if (onlyPeer.length === 0) return;
+
+                importOfferKeys = onlyPeer.map(a => a.key).filter(Boolean);
+                const list = onlyPeer.slice(0, 25).map(a => {
+                    const addr = a.address || a.zillow_url || '(no address)';
+                    return `<div style="padding:3px 0;">• ${syncEsc(addr)}</div>`;
+                }).join('');
+                const more = onlyPeer.length > 25 ? `<div><small>…and ${onlyPeer.length - 25} more</small></div>` : '';
+                document.getElementById('importOfferList').innerHTML =
+                    `<p><strong>${onlyPeer.length}</strong> apartment(s) available to import:</p>` + list + more;
+                document.getElementById('importOfferBtn').textContent = `Import ${onlyPeer.length} apartment(s)`;
+                document.getElementById('importOfferModal').style.display = 'flex';
+            } catch (e) {
+                console.debug('Import offer check failed:', e);
+            }
+        }
+
+        function dismissImportOffer() {
+            document.getElementById('importOfferModal').style.display = 'none';
+        }
+
+        async function runImportOffer() {
+            const btn = document.getElementById('importOfferBtn');
+            btn.disabled = true;
+            btn.textContent = 'Importing…';
+            try {
+                const resp = await fetch('/sync/apply', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        direction: 'import',
+                        add_keys: importOfferKeys,
+                        conflict_resolutions: {},
+                        allow_delete: false,
+                        snapshot: false,
+                    })
+                });
+                const data = await resp.json();
+                dismissImportOffer();
+                if (data.success) {
+                    alert(`Imported ${data.summary.added.length} apartment(s). They're now in your Entry list.`);
+                    if (typeof loadApartmentsList === 'function') { try { loadApartmentsList(); } catch (e) {} }
+                } else {
+                    alert('Import failed: ' + (data.error || 'unknown error'));
+                }
+            } catch (e) {
+                console.error('Import failed:', e);
+                alert('Import failed: ' + e.message);
+            } finally {
+                btn.disabled = false;
+            }
         }
 
         let map;
@@ -4815,6 +4953,9 @@ Score = 10 × (1 - ${parseFloat(gymWalkTime).toFixed(1)} / ${maxTime}) = ${gymSc
             setupClearWfhButton();
             updatePhotoSelectorHelper();
 
+            // Reveal the cross-environment sync tools if a peer sheet is configured.
+            initSyncFeature();
+
             // First-run: auto-open the onboarding walkthrough for new users.
             if (!ONBOARDING_COMPLETED) {
                 openOnboarding();
@@ -5256,6 +5397,254 @@ Score = 10 × (1 - ${parseFloat(gymWalkTime).toFixed(1)} / ${maxTime}) = ${gymSc
         }
 
         // Schema Management Functions
+        // ===================== Cross-environment sync (issue #8) =====================
+        let syncLastDiff = null;
+
+        function syncEsc(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        async function initSyncFeature() {
+            try {
+                const resp = await fetch('/sync/status');
+                const data = await resp.json();
+                if (data && data.enabled) {
+                    const section = document.getElementById('syncSection');
+                    if (section) section.style.display = '';
+                }
+            } catch (e) {
+                // Sync feature stays hidden if we can't reach the status endpoint.
+                console.debug('Sync status check failed:', e);
+            }
+        }
+
+        function onSyncDirectionChange() {
+            const direction = document.getElementById('syncDirection').value;
+            document.getElementById('syncPushWarning').style.display = direction === 'push' ? '' : 'none';
+            // Re-render with the current diff (labels/pools depend on direction).
+            if (syncLastDiff) renderSyncDiff(syncLastDiff, direction);
+        }
+
+        function syncAptLabel(apt) {
+            const addr = apt.address || apt.zillow_url || '(no address)';
+            const bits = [];
+            if (apt.price) bits.push('$' + apt.price);
+            if (apt.bedrooms) bits.push(apt.bedrooms + 'bd');
+            if (apt.weighted_score) bits.push('score ' + apt.weighted_score);
+            const meta = bits.length ? ` <small style="color:#666;">(${syncEsc(bits.join(' · '))})</small>` : '';
+            return `<strong>${syncEsc(addr)}</strong>${meta}`;
+        }
+
+        async function detectSync() {
+            const btn = document.getElementById('syncDetectBtn');
+            const statusDiv = document.getElementById('syncStatus');
+            const detailsDiv = document.getElementById('syncDetails');
+            btn.disabled = true;
+            btn.textContent = 'Detecting...';
+            statusDiv.style.display = 'block';
+            detailsDiv.innerHTML = '<p>Comparing environments…</p>';
+            document.getElementById('syncApplyBar').style.display = 'none';
+            try {
+                const resp = await fetch('/sync/diff');
+                const data = await resp.json();
+                if (data.enabled === false) {
+                    detailsDiv.innerHTML = '<p>Sync is disabled (no peer environment configured).</p>';
+                    return;
+                }
+                if (!data.success) {
+                    detailsDiv.innerHTML = `<p class="error">Error: ${syncEsc(data.error)}</p>`;
+                    return;
+                }
+                syncLastDiff = data;
+                renderSyncDiff(data, document.getElementById('syncDirection').value);
+            } catch (error) {
+                console.error('Error detecting sync differences:', error);
+                detailsDiv.innerHTML = `<p class="error">Error: ${syncEsc(error.message)}</p>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Detect Differences';
+            }
+        }
+
+        function renderSyncDiff(data, direction) {
+            const detailsDiv = document.getElementById('syncDetails');
+            const apts = data.apartments || {only_in_peer: [], only_here: [], differ: [], in_sync_count: 0};
+
+            // Which list is "bring over" vs "target-only" depends on direction.
+            const additions = direction === 'import' ? apts.only_in_peer : apts.only_here;
+            const targetOnly = direction === 'import' ? apts.only_here : apts.only_in_peer;
+            const addVerb = direction === 'import' ? 'Import' : 'Push';
+            const sourceName = direction === 'import' ? 'the other environment' : 'your data';
+            const targetName = direction === 'import' ? 'your data' : 'the peer environment';
+
+            let html = '<div class="schema-results">';
+            html += `<div class="schema-summary"><p>`
+                + `<strong>${additions.length}</strong> only in source · `
+                + `<strong>${apts.differ.length}</strong> differ · `
+                + `<strong>${targetOnly.length}</strong> only in target · `
+                + `<strong>${apts.in_sync_count}</strong> already in sync`
+                + `</p></div>`;
+
+            // Additions
+            html += '<div class="schema-issue" style="margin-top:12px;">';
+            html += `<h5>⬇️ ${addVerb} into ${syncEsc(targetName)} (${additions.length})</h5>`;
+            if (additions.length === 0) {
+                html += '<p><small>Nothing new to bring over.</small></p>';
+            } else {
+                html += '<ul style="list-style:none; padding-left:0;">';
+                additions.forEach(apt => {
+                    if (!apt.key) return;
+                    html += `<li style="margin:4px 0;"><label style="display:flex; gap:8px; align-items:center;">`
+                        + `<input type="checkbox" class="sync-add" data-key="${syncEsc(apt.key)}" checked> `
+                        + syncAptLabel(apt) + `</label></li>`;
+                });
+                html += '</ul>';
+            }
+            html += '</div>';
+
+            // Conflicts
+            html += '<div class="schema-issue misplaced" style="margin-top:12px;">';
+            html += `<h5>⚠️ Conflicts — same apartment, different fields (${apts.differ.length})</h5>`;
+            if (apts.differ.length === 0) {
+                html += '<p><small>No conflicts.</small></p>';
+            } else {
+                apts.differ.forEach(apt => {
+                    if (!apt.key) return;
+                    const k = syncEsc(apt.key);
+                    html += `<div style="margin:10px 0; padding:8px; background:#f8f9fa; border-radius:4px;">`;
+                    html += `<div>${syncAptLabel(apt)}</div>`;
+                    if (apt.fields && apt.fields.length) {
+                        html += '<div style="font-size:0.85em; color:#555; margin:6px 0;">';
+                        apt.fields.slice(0, 8).forEach(f => {
+                            html += `<div><strong>${syncEsc(f.field)}:</strong> `
+                                + `mine=<code>${syncEsc(f.here) || '∅'}</code> · `
+                                + `peer=<code>${syncEsc(f.peer) || '∅'}</code></div>`;
+                        });
+                        if (apt.fields.length > 8) html += `<div><small>…and ${apt.fields.length - 8} more</small></div>`;
+                        html += '</div>';
+                    }
+                    html += `<div style="font-size:0.9em;">`
+                        + `<label style="margin-right:12px;"><input type="radio" name="conf-${k}" class="sync-conf" data-key="${k}" value="skip" checked> Skip</label>`
+                        + `<label style="margin-right:12px;"><input type="radio" name="conf-${k}" class="sync-conf" data-key="${k}" value="mine"> Keep mine</label>`
+                        + `<label><input type="radio" name="conf-${k}" class="sync-conf" data-key="${k}" value="peer"> Keep peer</label>`
+                        + `</div>`;
+                    html += '</div>';
+                });
+            }
+            html += '</div>';
+
+            // Target-only (deletable, opt-in)
+            html += '<div class="schema-issue extra" style="margin-top:12px;">';
+            html += `<h5>ℹ️ Only in ${syncEsc(targetName)} (${targetOnly.length})</h5>`;
+            if (targetOnly.length === 0) {
+                html += '<p><small>None.</small></p>';
+            } else {
+                html += '<ul style="list-style:none; padding-left:0;">';
+                targetOnly.forEach(apt => {
+                    if (!apt.key) return;
+                    html += `<li style="margin:4px 0;"><label style="display:flex; gap:8px; align-items:center;">`
+                        + `<input type="checkbox" class="sync-del" data-key="${syncEsc(apt.key)}" disabled> `
+                        + syncAptLabel(apt) + `</label></li>`;
+                });
+                html += '</ul>';
+            }
+            html += '</div>';
+
+            // Settings/weights diff (informational)
+            if (data.settings && !data.settings.error) {
+                const s = data.settings;
+                const nChanges = (s.only_in_peer.length + s.only_here.length + s.differ.length);
+                html += `<div class="schema-issue" style="margin-top:12px;"><h5>⚙️ Weights / Settings</h5>`;
+                html += nChanges === 0
+                    ? '<p><small>Settings match.</small></p>'
+                    : `<p><small>${nChanges} setting difference(s). (Apartment sync only for now — settings shown for awareness.)</small></p>`;
+                html += '</div>';
+            }
+
+            html += '</div>';
+            detailsDiv.innerHTML = html;
+
+            // Wire up the delete opt-in toggle.
+            const delLabel = document.getElementById('syncDeleteLabel');
+            delLabel.style.display = targetOnly.length ? 'flex' : 'none';
+            const allowDel = document.getElementById('syncAllowDelete');
+            allowDel.checked = false;
+            allowDel.onchange = () => {
+                document.querySelectorAll('.sync-del').forEach(cb => { cb.disabled = !allowDel.checked; if (!allowDel.checked) cb.checked = false; });
+            };
+
+            document.getElementById('syncApplyBar').style.display = 'block';
+        }
+
+        async function applySync() {
+            if (!syncLastDiff) return;
+            const direction = document.getElementById('syncDirection').value;
+            const addKeys = Array.from(document.querySelectorAll('.sync-add:checked')).map(cb => cb.dataset.key);
+            const resolutions = {};
+            document.querySelectorAll('.sync-conf:checked').forEach(r => { resolutions[r.dataset.key] = r.value; });
+            const allowDelete = document.getElementById('syncAllowDelete').checked;
+            const deleteKeys = allowDelete
+                ? Array.from(document.querySelectorAll('.sync-del:checked')).map(cb => cb.dataset.key)
+                : [];
+
+            const overwrites = Object.values(resolutions).filter(v => v !== 'skip').length;
+            if (addKeys.length === 0 && overwrites === 0 && deleteKeys.length === 0) {
+                alert('Nothing selected to apply.');
+                return;
+            }
+
+            let confirmPush = false;
+            if (direction === 'push') {
+                const msg = `You are about to PUSH your data into the shared peer environment:\n`
+                    + `• ${addKeys.length} apartment(s) added\n`
+                    + `• ${overwrites} conflict overwrite(s)\n`
+                    + `• ${deleteKeys.length} deletion(s)\n\n`
+                    + `This modifies the other environment's dataset. Continue?`;
+                if (!confirm(msg)) return;
+                confirmPush = true;
+            } else if (deleteKeys.length > 0) {
+                if (!confirm(`This will delete ${deleteKeys.length} apartment(s) from your data. Continue?`)) return;
+            }
+
+            const btn = document.getElementById('syncApplyBtn');
+            btn.disabled = true;
+            btn.textContent = 'Applying…';
+            try {
+                const resp = await fetch('/sync/apply', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        direction,
+                        add_keys: addKeys,
+                        conflict_resolutions: resolutions,
+                        delete_keys: deleteKeys,
+                        allow_delete: allowDelete,
+                        snapshot: true,
+                        confirm_push: confirmPush,
+                    })
+                });
+                const data = await resp.json();
+                if (!data.success) {
+                    alert('Sync failed: ' + (data.error || 'unknown error'));
+                    return;
+                }
+                const s = data.summary;
+                let msg = `Sync complete:\n• ${s.added.length} added\n• ${s.overwritten.length} updated\n• ${s.deleted.length} deleted\n• ${s.skipped} skipped`;
+                if (s.snapshot) msg += `\n\nA backup tab "${s.snapshot}" was created before changes.`;
+                alert(msg);
+                // Refresh the diff to reflect the new state.
+                await detectSync();
+            } catch (error) {
+                console.error('Error applying sync:', error);
+                alert('Error applying sync: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Apply Selected Changes';
+            }
+        }
+
         async function checkSchema() {
             const btn = document.getElementById('checkSchemaBtn');
             const statusDiv = document.getElementById('schemaStatus');

@@ -265,6 +265,42 @@ in the top-right. Whether a user has completed or dismissed it is tracked
 per-user in the `Users` tab (an `Onboarded At` column), so returning users
 aren't shown it again automatically.
 
+### Cross-Environment Data Sync
+
+Production and the multi-user staging deployment are deliberately isolated: they
+run against **different** Google Sheets. If you already entered apartments in one
+environment, you can detect and import them into the other instead of starting
+from scratch.
+
+**Enable it** by setting `PEER_GOOGLE_SHEET_ID` to the *other* environment's
+Google Sheet ID (e.g. on staging, point it at the production sheet). The shared
+service account is already an Editor on both sheets, so no extra credentials are
+needed. When it's unset, the feature is completely hidden and the endpoints are a
+no-op.
+
+**How it works:**
+
+- Open the **Admin** tab → **Cross-Environment Sync**, pick a direction, and
+  click **Detect Differences**. You get a preview (dry run) categorizing
+  apartments as *only in the other environment*, *only in yours*, *differing*, or
+  *already in sync*. Apartments are matched by embedded **Zillow URL**, falling
+  back to **normalized address**.
+- **Import** (peer → you) is the common case: bring over apartments you don't
+  have yet, and resolve any field conflicts per-item (keep peer / keep mine /
+  skip).
+- **Push** (you → the shared peer) is also supported but requires an extra
+  confirmation, since it writes into the other environment's dataset.
+- Syncing is **additive by default** — nothing is deleted unless you explicitly
+  opt in. Before any overwrite or deletion, the target tab is snapshotted to a
+  timestamped backup tab. Re-running with no changes does nothing (idempotent).
+- **New users** are offered a one-click "we found your existing data — import it?"
+  prompt right after the onboarding walkthrough, when the peer sheet has data
+  they don't have yet.
+
+> ⚠️ Because staging has no real authentication, anyone logged in as a username
+> can import the peer environment's data into that username's tabs. That's
+> acceptable for this convenience layer, but keep it in mind.
+
 ### Alternative: Terminal Interface
 
 If you prefer the terminal (though the web interface is recommended):

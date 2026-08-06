@@ -440,6 +440,68 @@ def onboarding_complete():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ---------------------------------------------------------------------------
+# Cross-environment data sync (issue #8)
+#
+# Detect data mismatches between this deployment and a configured peer
+# environment's Google Sheet (PEER_GOOGLE_SHEET_ID) and reconcile them. Hidden /
+# no-op when no peer is configured. See utils/sheet_sync.py.
+# ---------------------------------------------------------------------------
+
+@app.route('/sync/status', methods=['GET'])
+def sync_status():
+    """Lightweight check of whether the sync feature is available (peer set)."""
+    return jsonify({'enabled': bool(getattr(config, 'PEER_GOOGLE_SHEET_ID', ''))})
+
+
+@app.route('/sync/diff', methods=['GET'])
+def sync_diff():
+    """Return the computed diff for the current user vs. the peer sheet.
+
+    Doubles as the dry-run preview before applying. Returns {enabled: False}
+    (200) when no peer is configured so callers can hide the UI gracefully.
+    """
+    if sheets_client is None:
+        return jsonify({'error': 'Backend not ready'}), 503
+    if not getattr(config, 'PEER_GOOGLE_SHEET_ID', ''):
+        return jsonify({'enabled': False}), 200
+    try:
+        from utils.sheet_sync import CrossEnvSync
+        include_extras = request.args.get('extras', '1') not in ('0', 'false', 'no')
+        diff = CrossEnvSync(sheets_client).diff(include_extras=include_extras)
+        return jsonify({'success': True, **diff})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/sync/apply', methods=['POST'])
+def sync_apply():
+    """Apply a submitted reconciliation plan; return a summary of what changed.
+
+    Plan is JSON (see CrossEnvSync.apply). Additive by default; the "push"
+    direction (this user -> peer) requires confirm_push=true.
+    """
+    if sheets_client is None:
+        return jsonify({'error': 'Backend not ready'}), 503
+    if not getattr(config, 'PEER_GOOGLE_SHEET_ID', ''):
+        return jsonify({'success': False, 'error': 'Sync is disabled (no peer configured).'}), 400
+    plan = request.get_json(silent=True) or {}
+    try:
+        from utils.sheet_sync import CrossEnvSync, SyncDisabledError
+        summary = CrossEnvSync(sheets_client).apply(plan)
+        return jsonify({'success': True, 'summary': summary})
+    except PermissionError as e:
+        return jsonify({'success': False, 'error': str(e), 'needs_confirmation': True}), 403
+    except (ValueError, SyncDisabledError) as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/health')
 def health_check():
     """Health check endpoint for Railway and monitoring"""
