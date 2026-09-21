@@ -2771,6 +2771,20 @@ def get_sync_manager():
     return EnvSyncManager(sheets_client)
 
 
+@app.route('/sync/status', methods=['GET'])
+def sync_status():
+    """Lightweight check of whether cross-environment sync is available.
+
+    Ported from the staging implementation so the UI can decide whether to show
+    the sync affordances without paying for a full diff (which reads both
+    spreadsheets). Also returns the peer's friendly label for use in copy.
+    """
+    return jsonify({
+        'enabled': get_sync_manager() is not None,
+        'peer_env_label': getattr(config, 'PEER_ENV_LABEL', 'the other environment'),
+    })
+
+
 @app.route('/sync/diff', methods=['GET'])
 def sync_diff():
     """Return the diff between the current user's data and the peer sheet.

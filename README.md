@@ -302,6 +302,11 @@ intentionally disabled to avoid clobbering its data. Apartments are matched by
 Zillow listing id (zpid) when available, otherwise by normalized address. Leave
 `PEER_GOOGLE_SHEET_ID` unset to hide the feature entirely.
 
+> ⚠️ The username login is a convenience layer, not real authentication.
+> Anyone who can reach a deployment can log in as any username and import the
+> peer environment's data into that username's tabs. Keep that in mind when
+> pointing `PEER_GOOGLE_SHEET_ID` at a sheet with data you care about.
+
 ### Alternative: Terminal Interface
 
 If you prefer the terminal (though the web interface is recommended):

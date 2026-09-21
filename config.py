@@ -50,8 +50,14 @@ GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
 PEER_GOOGLE_SHEET_ID = os.getenv("PEER_GOOGLE_SHEET_ID", "")
 # Whether the peer sheet uses the multi-user, per-user namespaced tab scheme
 # ("<username> - Apartment Data") vs. the single-user base tab names
-# ("Apartment Data"). Staging is multi-user; prod is single-user. So on staging
-# (peer = prod) leave this false; on prod (peer = staging) set it true.
+# ("Apartment Data").
+#
+# Since dev, staging and prod were unified onto one codebase, ALL deployments
+# run the multi-user layer, so this should be "true" everywhere. It stays
+# configurable for one case: a peer sheet created before the unification, whose
+# tabs are still un-namespaced ("Apartment Data"). Point at such a sheet and set
+# this to false, otherwise the sync reads tabs that do not exist and reports the
+# peer as empty.
 PEER_IS_MULTI_USER = os.getenv("PEER_IS_MULTI_USER", "false").strip().lower() in (
     "1", "true", "yes", "on"
 )

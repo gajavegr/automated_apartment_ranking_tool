@@ -130,7 +130,10 @@ class GoogleSheetsClient:
         """
         self.credentials_path = credentials_path or config.GOOGLE_SHEETS_CREDENTIALS_PATH
         self.sheet_id = sheet_id or config.GOOGLE_SHEET_ID
-        
+        # Cache of peer (other-environment) spreadsheets opened by ID, keyed by
+        # sheet_id, so cross-environment sync doesn't re-open on every request.
+        self._peer_spreadsheet_cache: Dict[str, Any] = {}
+
         if not os.path.exists(self.credentials_path):
             raise FileNotFoundError(
                 f"Google Sheets credentials not found at {self.credentials_path}. "
@@ -199,16 +202,48 @@ class GoogleSheetsClient:
         return base_name
 
     def open_spreadsheet(self, sheet_id: str) -> gspread.Spreadsheet:
-        """Open an arbitrary spreadsheet by ID using the existing credentials.
+        """Open an arbitrary spreadsheet by ID using the existing service-account
+        credentials.
 
-        The shared service account is an Editor on both the prod and staging
-        sheets, so this lets a single deployment read/write the *peer*
-        environment's spreadsheet without any new credentials. The default
-        ``self.spreadsheet`` remains bound to this deployment's own sheet.
+        The single shared service account is already an Editor on both the
+        production and staging sheets, so no new credentials are needed to reach
+        another environment's sheet — only its ID. Opened spreadsheets are cached
+        per ID. Raises ValueError if sheet_id is blank.
         """
         if not sheet_id:
             raise ValueError("sheet_id is required to open a peer spreadsheet")
-        return self.client.open_by_key(sheet_id)
+
+        if sheet_id == self.sheet_id:
+            return self.spreadsheet
+
+        if sheet_id in self._peer_spreadsheet_cache:
+            return self._peer_spreadsheet_cache[sheet_id]
+
+        max_retries = 3
+        retry_delay = 2
+        for attempt in range(max_retries):
+            try:
+                spreadsheet = self.client.open_by_key(sheet_id)
+                self._peer_spreadsheet_cache[sheet_id] = spreadsheet
+                return spreadsheet
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"⚠️  Peer sheet connection attempt {attempt + 1} failed, retrying in {retry_delay}s...")
+                    import time
+                    time.sleep(retry_delay)
+                else:
+                    raise ConnectionError(
+                        f"Failed to open peer spreadsheet '{sheet_id}' after {max_retries} attempts. "
+                        f"Check the ID and that the service account has access. Error: {str(e)}"
+                    ) from e
+
+    def get_peer_spreadsheet(self):
+        """Open the configured peer (other-environment) spreadsheet, or return
+        None if PEER_GOOGLE_SHEET_ID is unset (sync feature disabled)."""
+        peer_id = getattr(config, "PEER_GOOGLE_SHEET_ID", "")
+        if not peer_id:
+            return None
+        return self.open_spreadsheet(peer_id)
 
     def _get_or_create_worksheet(self, name: str, rows: int = 1000, cols: int = 50) -> gspread.Worksheet:
         """Get worksheet by name or create if doesn't exist"""
@@ -284,10 +319,13 @@ class GoogleSheetsClient:
     
     def _initialize_main_sheet(self, sheet: gspread.Worksheet) -> None:
         """Initialize main data sheet with headers"""
-        # Check if already initialized
+        # Check if already initialized. The first written header is
+        # "Manual Safety Rating" (zillow_url is stored but not a displayed column),
+        # so compare against that — comparing to zillow_url never matched and
+        # caused headers to be rewritten on every init.
         if sheet.row_count > 0 and sheet.col_count > 0:
             first_row = sheet.row_values(1)
-            if first_row and first_row[0] == config.SHEET_COLUMNS["zillow_url"]:
+            if first_row and first_row[0] == config.SHEET_COLUMNS["manual_safety"]:
                 return  # Already initialized
         
         # Create headers
@@ -381,7 +419,7 @@ class GoogleSheetsClient:
             'textFormat': {'bold': True},
             'backgroundColor': {'red': 0.8, 'green': 0.8, 'blue': 0.8}
         })
-        
+
         # Freeze header row
         sheet.freeze(rows=1)
     

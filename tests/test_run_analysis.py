@@ -32,7 +32,15 @@ class FakeSheetsClient:
 
     # run_analysis
     def get_apartments_needing_analysis(self):
-        return self._apartments
+        """Apartments still awaiting analysis.
+
+        Rows that were successfully written are dropped, mirroring the real
+        client: the streaming endpoint re-checks this after a run to decide
+        whether to tell the user to run again, so a fake that always returned
+        the full list would report a clean run as still needing one.
+        """
+        done = {row for row, _ in self.written}
+        return [a for a in self._apartments if a.get('_row_number') not in done]
 
     def write_apartment_data(self, row_number, result):
         if self._write_error is not None:
@@ -243,7 +251,10 @@ def test_stream_surfaces_analysis_error(client):
     complete = by_type('complete')[0]
     assert complete['analyzed'] == 0
     assert complete['total'] == 1
-    assert 'could not be analyzed' in complete['message'].lower()
+    # Nothing was written, so the apartment still needs a pass and the user is
+    # told to re-run. Asserted on the structured fields: the copy has changed.
+    assert complete['remaining'] == 1
+    assert complete['needs_rerun'] is True
     # item marked unsuccessful
     assert by_type('item_done')[0]['success'] is False
 
@@ -256,7 +267,9 @@ def test_stream_success_no_error_events(client):
     assert [e for e in events if e['type'] == 'error'] == []
     complete = [e for e in events if e['type'] == 'complete'][0]
     assert complete['analyzed'] == 1
-    assert 'successfully' in complete['message'].lower()
+    # A clean run leaves nothing outstanding and must not ask for a re-run.
+    assert complete['remaining'] == 0
+    assert complete['needs_rerun'] is False
 
 
 def test_stream_write_failure_surfaces_error(client):
