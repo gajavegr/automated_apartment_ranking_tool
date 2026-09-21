@@ -38,6 +38,31 @@ These files must stay at the project root for Railway/Python:
 - `.railwayignore` - Deployment exclusions
 - `railway.toml` - Railway configuration
 
+## 👥 Multi-User Environment (parallel deployment)
+
+The multi-user build (username login + per-user Google Sheet tabs) is meant to
+run as a **separate Railway environment/service**, leaving the existing
+single-user prod deployment untouched. It reuses the same `Procfile`,
+`railway.toml`, and `/health` check.
+
+To stand it up alongside prod:
+
+1. **Create a new service** (or a new environment) in the same Railway project,
+   pointing at this branch/repo. Do **not** modify the existing prod service.
+2. **Set environment variables** from [`railway/env.railway.template`](railway/env.railway.template).
+   In addition to the existing prod vars, the multi-user build **requires**:
+   - `FLASK_SECRET_KEY` — a stable random value (signs the login session cookie;
+     required so sessions survive restarts and are shared across gunicorn
+     workers). Generate with `python -c "import secrets; print(secrets.token_hex(32))"`.
+3. **Use a fresh Google Sheet** (a new `GOOGLE_SHEET_ID`) for this environment so
+   multi-user tabs (`<username> - ...`, plus the `Users` registry) don't mix with
+   prod's single-user tabs. The service account still needs edit access to it.
+4. **Add the persistent volume** for `CACHE_DIR` just like prod.
+5. Deploy. Visiting the new URL lands on the **login page**.
+
+> ⚠️ Username login identifies users but does **not** authenticate them (no
+> passwords). See the "Multi-User Mode" section of the main [README](README.md).
+
 ## 💰 Cost
 
 - **Light usage:** $3-6/month

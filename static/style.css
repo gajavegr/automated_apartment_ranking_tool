@@ -62,6 +62,12 @@ header p {
     border-left: 4px solid #c41e3a;
 }
 
+.alert-info {
+    background: #e0f0ff;
+    color: #0a4a80;
+    border-left: 4px solid #0a6ecf;
+}
+
 /* Main content split layout */
 .main-content {
     width: 100%;
@@ -644,6 +650,152 @@ input[type="range"]::-moz-range-thumb {
     padding: 40px;
     font-size: 18px;
     color: #666;
+}
+
+/* ---- Real-time analysis progress card ---- */
+.analysis-progress {
+    padding: 24px 0;
+}
+
+.analysis-progress-card {
+    background: white;
+    border-radius: 12px;
+    padding: 24px 28px;
+    max-width: 640px;
+    margin: 0 auto;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+}
+
+.analysis-progress-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 18px;
+}
+
+.analysis-progress-header h3 {
+    margin: 0;
+    font-size: 1.15rem;
+    color: #1d1d1f;
+}
+
+.analysis-progress-spinner {
+    width: 20px;
+    height: 20px;
+    border: 3px solid #e5e5ea;
+    border-top-color: #0071e3;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+    flex-shrink: 0;
+}
+
+.analysis-progress-bar-track {
+    width: 100%;
+    height: 10px;
+    background: #e5e5ea;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.analysis-progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #0071e3, #34c759);
+    border-radius: 6px;
+    width: 0;
+    transition: width 0.4s ease;
+}
+
+.analysis-progress-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 10px;
+    font-size: 0.9rem;
+    color: #6e6e73;
+}
+
+.analysis-progress-eta,
+#analysisProgressEta {
+    font-variant-numeric: tabular-nums;
+    color: #0071e3;
+    font-weight: 500;
+}
+
+.analysis-progress-current {
+    margin-top: 14px;
+    font-size: 0.95rem;
+    color: #1d1d1f;
+    min-height: 1.2em;
+}
+
+.analysis-progress-current .analysis-progress-dot {
+    color: #0071e3;
+    animation: analysisPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes analysisPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
+}
+
+.analysis-progress-log {
+    list-style: none;
+    margin: 16px 0 0;
+    padding: 0;
+    max-height: 180px;
+    overflow-y: auto;
+    border-top: 1px solid #f0f0f2;
+}
+
+.analysis-progress-log li {
+    padding: 6px 2px;
+    font-size: 0.88rem;
+    color: #3a3a3c;
+    border-bottom: 1px solid #f5f5f7;
+}
+
+.analysis-progress-log li.fail {
+    color: #b26a00;
+}
+
+.analysis-progress-current .error {
+    color: #d70015;
+}
+
+.analysis-progress-step {
+    margin-top: 8px;
+    font-size: 0.9rem;
+    color: #3a3a3c;
+    min-height: 1.1em;
+}
+
+.analysis-progress-step .analysis-progress-stepnum {
+    display: inline-block;
+    background: #eef4ff;
+    color: #0071e3;
+    font-weight: 600;
+    font-size: 0.8rem;
+    padding: 1px 8px;
+    border-radius: 10px;
+    margin-right: 4px;
+}
+
+.analysis-progress-banner {
+    margin-top: 16px;
+    padding: 12px 14px;
+    background: #fff8e6;
+    border: 1px solid #ffd980;
+    border-left: 4px solid #f5a623;
+    border-radius: 8px;
+    color: #7a5300;
+    font-size: 0.92rem;
+    font-weight: 500;
+}
+
+.analysis-progress-log li.note,
+.analysis-progress-note {
+    color: #6e6e73;
+    font-style: italic;
 }
 
 .analysis-section {
@@ -1505,6 +1657,15 @@ input[type="range"]::-moz-range-thumb {
     margin: 20px 0;
     display: flex;
     gap: 10px;
+}
+
+.admin-section.danger-zone {
+    border: 1px solid #f3c2c2;
+    background: #fdf6f6;
+}
+
+.admin-section.danger-zone h3 {
+    color: #b00020;
 }
 
 .admin-note {
@@ -2650,6 +2811,141 @@ input[type="range"]::-moz-range-thumb {
     
     .profile-slider {
         height: 28px;
+    }
+}
+
+/* ===================== Onboarding walkthrough ===================== */
+.onboarding-content {
+    position: relative;
+    max-width: 540px;
+    width: 90%;
+    text-align: center;
+    padding: 0;
+    overflow: hidden;
+}
+
+.onboarding-close {
+    position: absolute;
+    top: 14px;
+    right: 18px;
+    z-index: 2;
+}
+
+.onboarding-body {
+    padding: 48px 40px 24px;
+}
+
+.onboarding-icon {
+    font-size: 3.4rem;
+    line-height: 1;
+    margin-bottom: 14px;
+}
+
+.onboarding-title {
+    font-size: 1.5rem;
+    margin: 0 0 14px;
+    color: #1d1d1f;
+}
+
+.onboarding-text {
+    color: #4a4a4f;
+    font-size: 1rem;
+    line-height: 1.55;
+    text-align: left;
+}
+
+.onboarding-text p {
+    margin: 0 0 12px;
+}
+
+/* Numbered workflow list shown on the welcome step */
+.onboarding-steps {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    counter-reset: ob-step;
+}
+
+.onboarding-steps li {
+    position: relative;
+    padding: 10px 0 10px 44px;
+    border-top: 1px solid #f0f0f2;
+    counter-increment: ob-step;
+}
+
+.onboarding-steps li:first-child {
+    border-top: none;
+}
+
+.onboarding-steps li::before {
+    content: counter(ob-step);
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #0071e3;
+    color: #fff;
+    font-size: 0.85rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.onboarding-steps li strong {
+    color: #1d1d1f;
+}
+
+.onboarding-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 32px 28px;
+    border-top: 1px solid #f0f0f2;
+    background: #fbfbfd;
+}
+
+.onboarding-dots {
+    display: flex;
+    gap: 8px;
+}
+
+.onboarding-dots .ob-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #d2d2d7;
+    transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.onboarding-dots .ob-dot.active {
+    background: #0071e3;
+    transform: scale(1.25);
+}
+
+.onboarding-actions {
+    display: flex;
+    gap: 10px;
+}
+
+@media (max-width: 600px) {
+    .onboarding-body {
+        padding: 40px 22px 20px;
+    }
+    .onboarding-footer {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 16px 22px 22px;
+    }
+    .onboarding-dots {
+        justify-content: center;
+    }
+    .onboarding-actions {
+        justify-content: center;
     }
 }
 

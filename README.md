@@ -152,6 +152,11 @@ GOOGLE_MAPS_API_KEY=<your-google-maps-api-key>
 # Work addresses (edit these!)
 YOUR_WORK_ADDRESS=4100 E 3rd Ave, Foster City, CA 94404
 PARTNER_WORK_ADDRESS=1355 Market St, San Francisco, CA 94103
+
+# Optional: cross-environment data sync (see "Cross-environment data sync" below)
+PEER_GOOGLE_SHEET_ID=
+PEER_IS_MULTI_USER=false
+PEER_ENV_LABEL=production
 ```
 
 **Finding your Google Sheet ID:**
@@ -211,6 +216,91 @@ python main.py --analyze-new
 ```
 
 This will calculate commute times, safety scores, nearby amenities, and final rankings.
+
+### Multi-User Mode (username login)
+
+The web app supports lightweight multi-user usage so several people can keep
+their apartment lists, weights, and settings separate on one deployment.
+
+**How it works:**
+
+- Visiting the app lands on a **login page**. Enter a username to continue.
+- **New users** register on the **Create User** page. Usernames must be unique
+  (the check is case-insensitive).
+- Once logged in, the app remembers you via a Flask session cookie, and every
+  screen operates on *your* data only.
+- Each user's data lives in its own set of Google Sheet tabs, namespaced as
+  `<username> - Apartment Data`, `<username> - Settings`, etc. A global `Users`
+  tab holds the registry of usernames. Shared reference data (the `Approved
+  Gyms` cache) stays global so expensive lookups aren't duplicated per user.
+- Use the **Log out** link in the header (next to your username) to switch users.
+
+> ⚠️ **This is identification, not authentication.** There are no passwords —
+> anyone who knows a username can access that user's data. It's a
+> convenience/personalization layer, **not** a security boundary. Don't store
+> anything sensitive.
+
+**Session secret key:** set `FLASK_SECRET_KEY` to a stable random value in any
+production / multi-worker deployment (see `env.example`). Without it, sessions
+don't survive restarts and won't be shared across gunicorn workers, so users get
+logged out unexpectedly. Generate one with:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+For local single-process development the app falls back to a random key if
+`FLASK_SECRET_KEY` is unset.
+
+### Getting started walkthrough (onboarding)
+
+The first time a user logs in, a short **Getting started** walkthrough opens
+automatically. It introduces the main features and the recommended workflow:
+
+1. **Set your preferences** (Preferences tab) — weight what matters to you.
+2. **Add apartments** (Entry tab) — with Google Maps assist and optional AI
+   photo analysis.
+3. **Run analysis** (Analysis tab) — score every candidate.
+4. **Review results** — price-vs-score scatter plot and criteria matrix.
+5. **Adjust weights and iterate.**
+
+Users can step through it, **Skip** it, or finish and jump straight to the
+Preferences tab. It can be reopened anytime via the **❔ Getting started** button
+in the top-right. Whether a user has completed or dismissed it is tracked
+per-user in the `Users` tab (an `Onboarded At` column), so returning users
+aren't shown it again automatically.
+
+### Cross-environment data sync (prod ↔ staging)
+
+If you run more than one deployment (e.g. a single-user **production** app and a
+multi-user **staging** app), each has its *own* Google Sheet. A user who already
+entered apartments in one environment can import them into the other without a
+manual script.
+
+Set `PEER_GOOGLE_SHEET_ID` to the **other** environment's sheet ID (the shared
+service account is already an Editor on both, so no new credentials are needed):
+
+```bash
+PEER_GOOGLE_SHEET_ID=<the-other-environments-sheet-id>
+PEER_IS_MULTI_USER=false   # true if the peer uses per-user namespaced tabs
+PEER_ENV_LABEL=production   # friendly name shown in the UI
+```
+
+With this configured:
+
+- On first load, if the peer environment has apartments you don't have yet, a
+  banner offers to **import your existing data**.
+- The **Admin → Cross-Environment Sync** section lets you re-check anytime. It
+  shows a diff (only in peer / only here / present-in-both-but-different), lets
+  you pick which apartments to import and resolve conflicts, then applies it.
+
+Sync is **additive by default** (nothing here is deleted), **previewable** (the
+diff is a dry run), and **idempotent** (re-running with no changes is a no-op).
+Optionally it backs up your target tab before merging. Importing *from* the peer
+into your own tabs is the supported direction; pushing into the peer is
+intentionally disabled to avoid clobbering its data. Apartments are matched by
+Zillow listing id (zpid) when available, otherwise by normalized address. Leave
+`PEER_GOOGLE_SHEET_ID` unset to hide the feature entirely.
 
 ### Alternative: Terminal Interface
 
