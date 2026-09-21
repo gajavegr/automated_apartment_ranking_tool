@@ -12,12 +12,19 @@ import json
 import signal
 import webbrowser
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from functools import wraps
+from flask import (
+    Flask, render_template, request, jsonify, redirect, url_for, flash, session, g,
+    Response, stream_with_context
+)
 from threading import Timer
 
 import config
-from utils.google_sheets import GoogleSheetsClient
+from utils.google_sheets import GoogleSheetsClient, set_current_user
+from utils.env_sync import EnvSyncManager
 from analyzers.location_analyzer import LocationAnalyzer
+from utils import zillow_client
+from utils import datasf_client
 
 # Global flag for graceful shutdown
 shutdown_requested = False
@@ -37,7 +44,10 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+# Use a stable secret key so Flask sessions survive across gunicorn workers and
+# restarts. In production (e.g. Railway) set FLASK_SECRET_KEY; the random
+# fallback is only suitable for a single-process local dev server.
+app.secret_key = os.environ.get('FLASK_SECRET_KEY') or os.urandom(24)
 
 # Register preference routes
 try:
@@ -258,12 +268,255 @@ def _normalize_sheet_row_for_scoring(row):
     return data
 
 
+# ---------------------------------------------------------------------------
+# Authentication (username-only, no password)
+#
+# This is a lightweight personalization layer, NOT a security boundary:
+# knowing a username is enough to access that user's data. See README.
+# ---------------------------------------------------------------------------
+
+# Endpoints reachable without a logged-in user.
+PUBLIC_ENDPOINTS = {'login', 'create_user', 'logout', 'health_check', 'static'}
+
+
+def _wants_json_response() -> bool:
+    """Heuristic: does the current request expect a JSON (API) response?
+
+    The only HTML page in this app is the entry form at '/'. Every other route
+    returns JSON and is called via fetch/XHR. So the one case that should get an
+    HTML redirect is a top-level browser navigation: a GET that asks for HTML.
+    Everything else (fetch calls, XHR, POSTs) gets a JSON 401.
+    """
+    if request.method in ('GET', 'HEAD') and 'text/html' in request.headers.get('Accept', ''):
+        return False
+    return True
+
+
+@app.before_request
+def require_login():
+    """Gate all routes behind a selected user and set the per-request context."""
+    # Resolve the active user for this request (drives per-user sheet scoping).
+    username = session.get('username')
+    g.username = username
+    set_current_user(username)
+
+    endpoint = request.endpoint
+    if endpoint in PUBLIC_ENDPOINTS or endpoint is None:
+        return None
+
+    if not username:
+        if _wants_json_response():
+            return jsonify({'error': 'Not logged in', 'login_required': True}), 401
+        return redirect(url_for('login'))
+
+    return None
+
+
+@app.after_request
+def _clear_user_context(response):
+    """Reset the per-request user context after the response is built."""
+    set_current_user(None)
+    return response
+
+
+@app.context_processor
+def inject_current_user():
+    """Make the current username available to all templates."""
+    return {'current_user': session.get('username')}
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Username-only login page (the app entry point)."""
+    # Already logged in? Go straight to the app.
+    if session.get('username'):
+        return redirect(url_for('index'))
+
+    if request.method == 'POST':
+        username = (request.form.get('username') or '').strip()
+        if not username:
+            flash('Please enter a username.', 'error')
+            return redirect(url_for('login'))
+
+        if sheets_client is None:
+            flash('Backend not ready. Please try again in a moment.', 'error')
+            return redirect(url_for('login'))
+
+        try:
+            canonical = sheets_client.get_canonical_username(username)
+        except Exception as e:
+            print(f"Error checking username during login: {e}")
+            flash('Could not reach the user registry. Please try again.', 'error')
+            return redirect(url_for('login'))
+
+        if not canonical:
+            flash(f'No user named "{username}" exists. Create one first.', 'error')
+            return redirect(url_for('create_user', username=username))
+
+        session['username'] = canonical
+        flash(f'Welcome back, {canonical}!', 'success')
+        return redirect(url_for('index'))
+
+    return render_template('login.html')
+
+
+@app.route('/create_user', methods=['GET', 'POST'])
+def create_user():
+    """Register a new username."""
+    if request.method == 'POST':
+        username = (request.form.get('username') or '').strip()
+
+        if not username:
+            flash('Please enter a username.', 'error')
+            return redirect(url_for('create_user'))
+
+        if len(username) > 60:
+            flash('Username is too long (max 60 characters).', 'error')
+            return redirect(url_for('create_user'))
+
+        if sheets_client is None:
+            flash('Backend not ready. Please try again in a moment.', 'error')
+            return redirect(url_for('create_user'))
+
+        try:
+            created = sheets_client.create_user(username)
+        except Exception as e:
+            print(f"Error creating user: {e}")
+            import traceback
+            traceback.print_exc()
+            flash('Could not create the user. Please try again.', 'error')
+            return redirect(url_for('create_user'))
+
+        if not created:
+            flash(f'Username "{username}" is already taken. Choose another.', 'error')
+            return redirect(url_for('create_user'))
+
+        session['username'] = username
+        flash(f'Account "{username}" created. Welcome!', 'success')
+        return redirect(url_for('index'))
+
+    # Pre-fill the username if we were redirected here from a failed login.
+    prefill = (request.args.get('username') or '').strip()
+    return render_template('create_user.html', prefill=prefill)
+
+
+@app.route('/logout', methods=['GET', 'POST'])
+def logout():
+    """Log out the current user."""
+    session.pop('username', None)
+    set_current_user(None)
+    flash('You have been logged out.', 'success')
+    return redirect(url_for('login'))
+
+
+@app.route('/admin/delete_user', methods=['POST'])
+def admin_delete_user():
+    """Delete a user and all of their per-user data.
+
+    This is destructive and hard to reverse: the user's per-user worksheet
+    tabs ("<username> - *") and their Users-registry row are permanently
+    removed. Global tabs and other users' data are never touched.
+
+    Because the app has no real authentication (see README), this is not a
+    security boundary — any logged-in user can call it. To guard against
+    *accidental* deletion it requires a typed confirmation: the request must
+    echo the exact target username.
+
+    Request JSON:
+        {
+            "username": "<user to delete>",
+            "confirm":  "<must exactly match username>"
+        }
+
+    If the deleted user is the currently logged-in user, their session is
+    cleared so they're logged out.
+    """
+    if sheets_client is None:
+        return jsonify({'success': False, 'error': 'Backend not ready. Please try again in a moment.'}), 503
+
+    data = request.get_json(silent=True) or {}
+    username = (data.get('username') or '').strip()
+    confirm = (data.get('confirm') or '').strip()
+
+    if not username:
+        return jsonify({'success': False, 'error': 'A username is required.'}), 400
+
+    # Typed-confirmation guard: the client must send back the exact username.
+    if confirm != username:
+        return jsonify({
+            'success': False,
+            'error': 'Confirmation did not match. Type the exact username to confirm deletion.',
+        }), 400
+
+    try:
+        result = sheets_client.delete_user(username)
+    except Exception as e:
+        print(f"Error deleting user '{username}': {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': 'Could not delete the user. Please try again.'}), 500
+
+    if not result.get('existed'):
+        return jsonify({
+            'success': False,
+            'existed': False,
+            'error': f'No user named "{username}" exists.',
+        }), 404
+
+    # If the user deleted themselves (or an admin deleted the active user),
+    # clear the session so they're logged out.
+    canonical = result.get('username', username)
+    logged_out = False
+    if (session.get('username') or '').strip().lower() == canonical.strip().lower():
+        session.pop('username', None)
+        set_current_user(None)
+        logged_out = True
+
+    return jsonify({
+        'success': True,
+        'existed': True,
+        'username': canonical,
+        'tabs_deleted': result.get('tabs_deleted', []),
+        'registry_row_removed': result.get('registry_row_removed', False),
+        'logged_out': logged_out,
+    })
+
+
 @app.route('/')
 def index():
     """Show the entry form"""
-    return render_template('entry_form.html', 
+    # Whether to auto-open the first-run onboarding walkthrough for this user.
+    onboarding_completed = True
+    username = session.get('username')
+    if username and sheets_client is not None:
+        try:
+            onboarding_completed = sheets_client.has_completed_onboarding(username)
+        except Exception as e:
+            print(f"Error checking onboarding state: {e}")
+
+    return render_template('entry_form.html',
                          google_maps_api_key=config.GOOGLE_MAPS_API_KEY,
-                         sf_neighborhoods=config.SF_NEIGHBORHOODS)
+                         sf_neighborhoods=config.SF_NEIGHBORHOODS,
+                         onboarding_completed=onboarding_completed,
+                         sync_enabled=bool(config.PEER_GOOGLE_SHEET_ID),
+                         peer_env_label=config.PEER_ENV_LABEL)
+
+
+@app.route('/onboarding/complete', methods=['POST'])
+def onboarding_complete():
+    """Mark the current user's onboarding as finished/dismissed so it doesn't
+    auto-open again on future visits. Idempotent."""
+    username = session.get('username')
+    if not username:
+        return jsonify({'error': 'Not logged in', 'login_required': True}), 401
+    if sheets_client is None:
+        return jsonify({'success': False, 'error': 'Backend not ready'}), 503
+    try:
+        sheets_client.mark_onboarding_complete(username)
+        return jsonify({'success': True})
+    except Exception as e:
+        print(f"Error marking onboarding complete: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/health')
@@ -773,6 +1026,38 @@ def get_laundromats():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/get_assessor_record', methods=['POST'])
+def get_assessor_record():
+    """
+    Look up authoritative SF property facts (year built, units, property type)
+    from the DataSF assessor roll for a given address. Free/official; best
+    first-choice source for SF before falling back to /get_building_year.
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        address = (payload.get('address') or '').strip()
+        apn = (payload.get('apn') or '').strip()
+        if not address and not apn:
+            return jsonify({'error': 'Address or APN required'}), 400
+
+        if apn:
+            record = datasf_client.lookup_by_parcel(apn)
+        else:
+            record = datasf_client.lookup_by_address(address)
+
+        if record is None:
+            return jsonify({
+                'success': False,
+                'record': None,
+                'message': 'No matching assessor record found',
+            })
+        return jsonify({'success': True, 'record': record.to_dict()})
+    except datasf_client.DataSFError as e:
+        return jsonify({'success': False, 'error': str(e)}), 502
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/get_building_year', methods=['POST'])
 def get_building_year():
     """Attempt to automatically detect building year"""
@@ -800,6 +1085,196 @@ def get_building_year():
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+def persist_apartment(data, row_number_str=''):
+    """
+    Write an apartment ``data`` dict to Google Sheets (create or update).
+
+    Shared by the manual /add form and the automated Zillow import path so both
+    produce identical rows that flow through the same enrichment + scoring
+    pipeline. The caller is responsible for building ``data`` and for any
+    form-specific side effects (e.g. approved-gym handling).
+
+    Args:
+        data: Column-keyed apartment data (see /add for the full key set).
+        row_number_str: Sheet row number as a string to update an existing row,
+            or '' to append a new row.
+
+    Returns:
+        (row_number, action) where action is 'Added' or 'Updated'.
+    """
+    if not data.get('address'):
+        raise ValueError('Address is required')
+
+    is_update = bool(row_number_str)
+
+    # Add to or update Google Sheet
+    sheet = sheets_client.spreadsheet.worksheet(sheets_client.MAIN_SHEET_NAME)
+    records = sheets_client.read_main_sheet()
+
+    if is_update:
+        row_number = int(row_number_str)
+    else:
+        row_number = len(records) + 2
+
+    headers = sheet.row_values(1)
+
+    # Build row data
+    updates = []
+
+    # Column A: Manual Safety Rating (zillow_url column was removed)
+    manual_safety_col_name = config.SHEET_COLUMNS['manual_safety']
+    if manual_safety_col_name in headers:
+        col_idx = headers.index(manual_safety_col_name)
+        col_letter = col_index_to_letter(col_idx)
+        updates.append({
+            'range': f'{col_letter}{row_number}',
+            'values': [[data.get('manual_safety_rating', 5.0)]]
+        })
+
+    # Column B: Address as hyperlink (if Zillow URL provided)
+    # We'll handle this separately with a formula
+    address_col_name = config.SHEET_COLUMNS['address']
+    if address_col_name in headers:
+        col_idx = headers.index(address_col_name)
+        col_letter = col_index_to_letter(col_idx)
+
+        # If zillow_url exists, create hyperlink formula, otherwise just address
+        if data.get('zillow_url'):
+            # Use HYPERLINK formula: =HYPERLINK("url", "text")
+            formula = f'=HYPERLINK("{data["zillow_url"]}", "{data["address"]}")'
+            updates.append({
+                'range': f'{col_letter}{row_number}',
+                'values': [[formula]]
+            })
+        else:
+            updates.append({
+                'range': f'{col_letter}{row_number}',
+                'values': [[data['address']]]
+            })
+
+    # Other columns (skip address since we handled it above)
+    column_mapping = {
+        'availability_status': config.SHEET_COLUMNS['availability_status'],
+        'price': config.SHEET_COLUMNS['price'],
+        'bedrooms': config.SHEET_COLUMNS['bedrooms'],
+        'bathrooms': config.SHEET_COLUMNS['bathrooms'],
+        'sqft': config.SHEET_COLUMNS['sqft'],
+        'parking_type': config.SHEET_COLUMNS['parking_type'],
+        'parking_enclosure': config.SHEET_COLUMNS['parking_enclosure'],
+        'parking_cost': config.SHEET_COLUMNS['parking_cost'],
+        'floor_level': config.SHEET_COLUMNS['floor_level'],
+        'street_parking_ease': config.SHEET_COLUMNS['street_parking_ease'],
+        'visitor_parking_ease': config.SHEET_COLUMNS['visitor_parking_ease'],
+        'laundry_type': config.SHEET_COLUMNS['laundry_type'],
+        'neighborhoods': config.SHEET_COLUMNS['neighborhoods'],
+        'neighborhood': config.SHEET_COLUMNS['neighborhood'],
+        'rent_control': config.SHEET_COLUMNS['rent_control'],
+        'tour_questions': config.SHEET_COLUMNS['tour_questions'],
+        'hilliness_manual_override': config.SHEET_COLUMNS['hilliness_manual_override'],
+        'selected_gyms': config.SHEET_COLUMNS['selected_gyms'],
+        'office_gym_only': config.SHEET_COLUMNS['office_gym_only'],
+        'year_built': config.SHEET_COLUMNS.get('year_built', 'Year Built'),
+        'last_updated': config.SHEET_COLUMNS['last_updated'],
+        # WFH fields
+        'natural_light': config.SHEET_COLUMNS.get('natural_light', 'Natural Light'),
+        'desk_space_quality': config.SHEET_COLUMNS.get('desk_space_quality', 'Desk Space Quality'),
+        'work_area_quietness': config.SHEET_COLUMNS.get('quietness_score', 'Quietness Score'),
+        'kitchen_quality': config.SHEET_COLUMNS.get('kitchen_quality', 'Kitchen Quality'),
+        'double_pane_windows': config.SHEET_COLUMNS.get('double_pane_windows', 'Double Pane Windows'),
+        'study_door_type': config.SHEET_COLUMNS.get('study_door_type', 'Study Door Type'),
+        # Luxury amenities
+        'has_double_vanity': config.SHEET_COLUMNS.get('has_double_vanity', 'Has Double Vanity'),
+        'high_end_appliances': config.SHEET_COLUMNS.get('high_end_appliances', 'High-End Appliances'),
+        'walk_in_closet': config.SHEET_COLUMNS.get('walk_in_closet', 'Walk-In Closet'),
+        'has_balcony_patio': config.SHEET_COLUMNS.get('has_balcony_patio', 'Has Balcony/Patio'),
+        'has_fireplace': config.SHEET_COLUMNS.get('has_fireplace', 'Has Fireplace'),
+    }
+
+    for data_key, column_name in column_mapping.items():
+        if data_key in data and column_name in headers:
+            col_idx = headers.index(column_name)
+            col_letter = col_index_to_letter(col_idx)
+            updates.append({
+                'range': f'{col_letter}{row_number}',
+                'values': [[data[data_key]]]
+            })
+
+    # Batch update
+    # Use valueInputOption='USER_ENTERED' to allow formulas to be evaluated
+    sheet.batch_update(updates, value_input_option='USER_ENTERED')
+
+    # Format the row: auto-resize first, then apply text wrapping
+    try:
+        # Multi-select columns that need auto-width adjustment
+        multi_select_column_names = [
+            config.SHEET_COLUMNS["parking_type"],
+            config.SHEET_COLUMNS["parking_enclosure"],
+            config.SHEET_COLUMNS["laundry_type"],
+            config.SHEET_COLUMNS["neighborhoods"],
+            config.SHEET_COLUMNS["tour_questions"]
+        ]
+
+        # Build batch update request for sizing
+        resize_requests = []
+
+        # Set minimum widths for multi-select columns to prevent text cutoff
+        # Use fixed widths that are wide enough for the longest expected values
+        min_widths = {
+            config.SHEET_COLUMNS["parking_type"]: 280,  # Wide enough for "dedicated_spot_car_and_motorcycle"
+            config.SHEET_COLUMNS["parking_enclosure"]: 120,
+            config.SHEET_COLUMNS["laundry_type"]: 150,
+            config.SHEET_COLUMNS["neighborhoods"]: 200,
+            config.SHEET_COLUMNS["tour_questions"]: 180
+        }
+
+        for col_name, min_width in min_widths.items():
+            if col_name in headers:
+                col_idx = headers.index(col_name)
+                resize_requests.append({
+                    'updateDimensionProperties': {
+                        'range': {
+                            'sheetId': sheet.id,
+                            'dimension': 'COLUMNS',
+                            'startIndex': col_idx,
+                            'endIndex': col_idx + 1
+                        },
+                        'properties': {
+                            'pixelSize': min_width
+                        },
+                        'fields': 'pixelSize'
+                    }
+                })
+
+        # Execute column width updates first
+        if resize_requests:
+            sheets_client.spreadsheet.batch_update({'requests': resize_requests})
+
+        # Apply text wrapping to the entire row
+        sheet.format(f'A{row_number}:{col_index_to_letter(len(headers)-1)}{row_number}', {
+            'wrapStrategy': 'WRAP',
+            'verticalAlignment': 'TOP'
+        })
+
+        # Auto-resize row height to fit wrapped content (do this AFTER wrapping)
+        sheets_client.spreadsheet.batch_update({
+            'requests': [{
+                'autoResizeDimensions': {
+                    'dimensions': {
+                        'sheetId': sheet.id,
+                        'dimension': 'ROWS',
+                        'startIndex': row_number - 1,  # 0-indexed
+                        'endIndex': row_number
+                    }
+                }
+            }]
+        })
+    except Exception as format_error:
+        print(f"Warning: Could not format row {row_number}: {format_error}")
+
+    action = 'Updated' if is_update else 'Added'
+    return row_number, action
 
 
 @app.route('/add', methods=['POST'])
@@ -989,182 +1464,144 @@ def add_apartment():
         if not data['address']:
             flash('Address is required', 'error')
             return redirect(url_for('index'))
-        
-        # Check if this is an update or new apartment
+
+        # Persist to Google Sheets (shared with the automated Zillow import path)
         row_number_str = request.form.get('row_number', '').strip()
-        is_update = bool(row_number_str)
-        
-        # Add to or update Google Sheet
-        sheet = sheets_client.spreadsheet.worksheet(sheets_client.MAIN_SHEET_NAME)
-        records = sheets_client.read_main_sheet()
-        
-        if is_update:
-            row_number = int(row_number_str)
-        else:
-            row_number = len(records) + 2
-        
-        headers = sheet.row_values(1)
-        
-        # Build row data
-        updates = []
-        
-        # Column A: Manual Safety Rating (zillow_url column was removed)
-        manual_safety_col_name = config.SHEET_COLUMNS['manual_safety']
-        if manual_safety_col_name in headers:
-            col_idx = headers.index(manual_safety_col_name)
-            col_letter = col_index_to_letter(col_idx)
-            updates.append({
-                'range': f'{col_letter}{row_number}',
-                'values': [[data.get('manual_safety_rating', 5.0)]]
-            })
-        
-        # Column B: Address as hyperlink (if Zillow URL provided)
-        # We'll handle this separately with a formula
-        address_col_name = config.SHEET_COLUMNS['address']
-        if address_col_name in headers:
-            col_idx = headers.index(address_col_name)
-            col_letter = col_index_to_letter(col_idx)
-            
-            # If zillow_url exists, create hyperlink formula, otherwise just address
-            if data.get('zillow_url'):
-                # Use HYPERLINK formula: =HYPERLINK("url", "text")
-                formula = f'=HYPERLINK("{data["zillow_url"]}", "{data["address"]}")'
-                updates.append({
-                    'range': f'{col_letter}{row_number}',
-                    'values': [[formula]]
-                })
-            else:
-                updates.append({
-                    'range': f'{col_letter}{row_number}',
-                    'values': [[data['address']]]
-                })
-        
-        # Other columns (skip address since we handled it above)
-        column_mapping = {
-            'availability_status': config.SHEET_COLUMNS['availability_status'],
-            'price': config.SHEET_COLUMNS['price'],
-            'bedrooms': config.SHEET_COLUMNS['bedrooms'],
-            'bathrooms': config.SHEET_COLUMNS['bathrooms'],
-            'sqft': config.SHEET_COLUMNS['sqft'],
-            'parking_type': config.SHEET_COLUMNS['parking_type'],
-            'parking_enclosure': config.SHEET_COLUMNS['parking_enclosure'],
-            'parking_cost': config.SHEET_COLUMNS['parking_cost'],
-            'floor_level': config.SHEET_COLUMNS['floor_level'],
-            'street_parking_ease': config.SHEET_COLUMNS['street_parking_ease'],
-            'visitor_parking_ease': config.SHEET_COLUMNS['visitor_parking_ease'],
-            'laundry_type': config.SHEET_COLUMNS['laundry_type'],
-            'neighborhoods': config.SHEET_COLUMNS['neighborhoods'],
-            'neighborhood': config.SHEET_COLUMNS['neighborhood'],
-            'rent_control': config.SHEET_COLUMNS['rent_control'],
-            'tour_questions': config.SHEET_COLUMNS['tour_questions'],
-            'hilliness_manual_override': config.SHEET_COLUMNS['hilliness_manual_override'],
-            'selected_gyms': config.SHEET_COLUMNS['selected_gyms'],
-            'office_gym_only': config.SHEET_COLUMNS['office_gym_only'],
-            'year_built': config.SHEET_COLUMNS.get('year_built', 'Year Built'),
-            'last_updated': config.SHEET_COLUMNS['last_updated'],
-            # WFH fields
-            'natural_light': config.SHEET_COLUMNS.get('natural_light', 'Natural Light'),
-            'desk_space_quality': config.SHEET_COLUMNS.get('desk_space_quality', 'Desk Space Quality'),
-            'work_area_quietness': config.SHEET_COLUMNS.get('quietness_score', 'Quietness Score'),
-            'kitchen_quality': config.SHEET_COLUMNS.get('kitchen_quality', 'Kitchen Quality'),
-            'double_pane_windows': config.SHEET_COLUMNS.get('double_pane_windows', 'Double Pane Windows'),
-            'study_door_type': config.SHEET_COLUMNS.get('study_door_type', 'Study Door Type'),
-            # Luxury amenities
-            'has_double_vanity': config.SHEET_COLUMNS.get('has_double_vanity', 'Has Double Vanity'),
-            'high_end_appliances': config.SHEET_COLUMNS.get('high_end_appliances', 'High-End Appliances'),
-            'walk_in_closet': config.SHEET_COLUMNS.get('walk_in_closet', 'Walk-In Closet'),
-            'has_balcony_patio': config.SHEET_COLUMNS.get('has_balcony_patio', 'Has Balcony/Patio'),
-            'has_fireplace': config.SHEET_COLUMNS.get('has_fireplace', 'Has Fireplace'),
-        }
-        
-        for data_key, column_name in column_mapping.items():
-            if data_key in data and column_name in headers:
-                col_idx = headers.index(column_name)
-                col_letter = col_index_to_letter(col_idx)
-                updates.append({
-                    'range': f'{col_letter}{row_number}',
-                    'values': [[data[data_key]]]
-                })
-        
-        # Batch update
-        # Use valueInputOption='USER_ENTERED' to allow formulas to be evaluated
-        sheet.batch_update(updates, value_input_option='USER_ENTERED')
-        
-        # Format the row: auto-resize first, then apply text wrapping
-        try:
-            # Multi-select columns that need auto-width adjustment
-            multi_select_column_names = [
-                config.SHEET_COLUMNS["parking_type"],
-                config.SHEET_COLUMNS["parking_enclosure"],
-                config.SHEET_COLUMNS["laundry_type"],
-                config.SHEET_COLUMNS["neighborhoods"],
-                config.SHEET_COLUMNS["tour_questions"]
-            ]
-            
-            # Build batch update request for sizing
-            resize_requests = []
-            
-            # Set minimum widths for multi-select columns to prevent text cutoff
-            # Use fixed widths that are wide enough for the longest expected values
-            min_widths = {
-                config.SHEET_COLUMNS["parking_type"]: 280,  # Wide enough for "dedicated_spot_car_and_motorcycle"
-                config.SHEET_COLUMNS["parking_enclosure"]: 120,
-                config.SHEET_COLUMNS["laundry_type"]: 150,
-                config.SHEET_COLUMNS["neighborhoods"]: 200,
-                config.SHEET_COLUMNS["tour_questions"]: 180
-            }
-            
-            for col_name, min_width in min_widths.items():
-                if col_name in headers:
-                    col_idx = headers.index(col_name)
-                    resize_requests.append({
-                        'updateDimensionProperties': {
-                            'range': {
-                                'sheetId': sheet.id,
-                                'dimension': 'COLUMNS',
-                                'startIndex': col_idx,
-                                'endIndex': col_idx + 1
-                            },
-                            'properties': {
-                                'pixelSize': min_width
-                            },
-                            'fields': 'pixelSize'
-                        }
-                    })
-            
-            # Execute column width updates first
-            if resize_requests:
-                sheets_client.spreadsheet.batch_update({'requests': resize_requests})
-            
-            # Apply text wrapping to the entire row
-            sheet.format(f'A{row_number}:{col_index_to_letter(len(headers)-1)}{row_number}', {
-                'wrapStrategy': 'WRAP',
-                'verticalAlignment': 'TOP'
-            })
-            
-            # Auto-resize row height to fit wrapped content (do this AFTER wrapping)
-            sheets_client.spreadsheet.batch_update({
-                'requests': [{
-                    'autoResizeDimensions': {
-                        'dimensions': {
-                            'sheetId': sheet.id,
-                            'dimension': 'ROWS',
-                            'startIndex': row_number - 1,  # 0-indexed
-                            'endIndex': row_number
-                        }
-                    }
-                }]
-            })
-        except Exception as format_error:
-            print(f"Warning: Could not format row {row_number}: {format_error}")
-        
-        action = 'Updated' if is_update else 'Added'
+        row_number, action = persist_apartment(data, row_number_str)
+
         flash(f'✓ {action} apartment: {data["address"]} (Row {row_number})', 'success')
         return redirect(url_for('index'))
     
     except Exception as e:
         flash(f'Error adding apartment: {str(e)}', 'error')
         return redirect(url_for('index'))
+
+
+def _threshold_value(criterion, field_name, tiers=('veto', 'acceptable', 'ideal')):
+    """Return the first threshold value for ``field_name`` across the given
+    tiers (veto first = loosest bound), or None if the criterion has none."""
+    if not criterion:
+        return None
+    for tier in tiers:
+        for threshold in getattr(criterion, tier, None) or []:
+            if threshold.field == field_name:
+                return threshold.value
+    return None
+
+
+def _search_params_from_profile(profile):
+    """
+    Derive Zillow search filters from a preference profile's thresholds.
+
+    Maps the profile's price ceiling and sqft floor to search bounds. Beds and
+    location are not part of the profile schema today, so callers supply those
+    (see /search_zillow). Uses the loosest (veto-tier) bound so the search is
+    inclusive — scoring later narrows it down.
+    """
+    params = {}
+    max_rent = _threshold_value(profile.get_criterion('price'), 'monthly_cost')
+    if max_rent is not None:
+        try:
+            params['max_rent'] = int(float(max_rent))
+        except (TypeError, ValueError):
+            pass
+    min_sqft = _threshold_value(profile.get_criterion('space_luxury'), 'sqft')
+    if min_sqft is not None:
+        try:
+            params['min_sqft'] = int(float(min_sqft))
+        except (TypeError, ValueError):
+            pass
+    return params
+
+
+def _existing_street_addresses():
+    """Best-effort set of street addresses (portion before first comma,
+    lowercased) already in the sheet, for deduping search results."""
+    streets = set()
+    try:
+        address_col = config.SHEET_COLUMNS['address']
+        for row in sheets_client.read_main_sheet():
+            value = str(row.get(address_col, '')).strip()
+            if value:
+                streets.add(value.split(',')[0].strip().lower())
+    except Exception as e:
+        print(f"Warning: could not read existing apartments for dedupe: {e}")
+    return streets
+
+
+@app.route('/search_zillow', methods=['POST'])
+def search_zillow():
+    """
+    Preview Zillow listings matching a preference profile (no import yet).
+
+    Body (JSON): {profile?, location?, min_beds?, max_rent?, min_sqft?, limit?}.
+    Filters default from the named profile's thresholds; any provided field
+    overrides the derived value. Returns candidates flagged for whether they
+    already exist in the sheet — the review UI decides what to import.
+    """
+    if not zillow_client.is_enabled():
+        return jsonify({
+            'enabled': False,
+            'listings': [],
+            'message': ('Zillow search is not configured. Set '
+                        'ZILLOW_SEARCH_ENABLED=true and ZILLOW_RAPIDAPI_KEY '
+                        '(see env.example).'),
+        })
+
+    payload = request.get_json(silent=True) or {}
+    profile_name = (payload.get('profile') or '').strip()
+
+    # Explicit overrides win; otherwise derive from the profile.
+    max_rent = payload.get('max_rent')
+    min_sqft = payload.get('min_sqft')
+    min_beds = payload.get('min_beds')
+    location = (payload.get('location') or '').strip()
+
+    if profile_name:
+        try:
+            from preferences.integration import PreferenceIntegration
+            profile = PreferenceIntegration().get_profile(profile_name)
+        except Exception as e:
+            return jsonify({'enabled': True, 'listings': [],
+                            'error': f'Could not load profiles: {e}'}), 500
+        if profile is None:
+            return jsonify({'enabled': True, 'listings': [],
+                            'error': f'Profile "{profile_name}" not found'}), 404
+        derived = _search_params_from_profile(profile)
+        if max_rent is None:
+            max_rent = derived.get('max_rent')
+        if min_sqft is None:
+            min_sqft = derived.get('min_sqft')
+
+    if not location:
+        location = config.ZILLOW_DEFAULT_LOCATION
+
+    try:
+        listings = zillow_client.search_listings(
+            location=location,
+            max_rent=max_rent,
+            min_beds=min_beds,
+            min_sqft=min_sqft,
+            limit=int(payload.get('limit', 40)),
+        )
+    except zillow_client.ZillowSearchError as e:
+        return jsonify({'enabled': True, 'listings': [], 'error': str(e)}), 502
+
+    existing_streets = _existing_street_addresses()
+    results = []
+    for listing in listings:
+        item = listing.to_dict()
+        street = listing.address.split(',')[0].strip().lower()
+        item['already_in_sheet'] = street in existing_streets
+        results.append(item)
+
+    return jsonify({
+        'enabled': True,
+        'location': location,
+        'filters': {'max_rent': max_rent, 'min_sqft': min_sqft, 'min_beds': min_beds},
+        'count': len(results),
+        'listings': results,
+    })
 
 
 @app.route('/delete/<int:row_number>', methods=['POST'])
@@ -1378,45 +1815,77 @@ def run_analysis():
         sys.stdout.flush()
         
         results = []
+        # Apartments that were picked up but couldn't be scored or written.
+        # Tracked so we can tell the user *why* instead of silently reporting 0.
+        failures = []
+
+        def _apt_label(apt):
+            addr = apt.get(config.SHEET_COLUMNS['address'], '') or 'Unknown address'
+            return str(addr)[:80]
+
         for apartment in apartments_to_analyze:
+            label = _apt_label(apartment)
+            row_number = apartment.get('_row_number')
             try:
                 result = analyzer.analyze_apartment(apartment)
-                if result and 'error' not in result:
-                    # Write each result back to the sheet
-                    row_number = apartment.get('_row_number')
-                    if row_number:
-                        print(f"Writing analysis results to row {row_number}")
-                        
-                        # Rate limiting: Sleep between writes to avoid hitting API limits
-                        import time
-                        time.sleep(1.2)
-                        
-                        # Retry logic with exponential backoff
-                        max_retries = 3
-                        retry_delay = 5
-                        for attempt in range(max_retries):
-                            try:
-                                sheets_client.write_apartment_data(row_number, result)
-                                break  # Success
-                            except Exception as write_error:
-                                error_str = str(write_error)
-                                if 'RATE_LIMIT_EXCEEDED' in error_str or '429' in error_str:
-                                    if attempt < max_retries - 1:
-                                        wait_time = retry_delay * (2 ** attempt)
-                                        print(f"  ⏳ Rate limit hit, waiting {wait_time}s before retry {attempt + 1}/{max_retries}...")
-                                        time.sleep(wait_time)
-                                    else:
-                                        print(f"  ❌ Failed to write after {max_retries} attempts")
-                                        raise
-                                else:
-                                    raise
-                    else:
-                        print(f"⚠️  Warning: No row number found for apartment: {apartment.get('address')}")
-                    results.append(result)
+
+                # analyze_apartment reports failures by returning {'error': ...}
+                # rather than raising, so check for that explicitly.
+                if not result or 'error' in result:
+                    reason = (result or {}).get('error', 'analysis returned no result')
+                    print(f"  ✗ Analysis failed for row {row_number} ({label}): {reason}")
+                    failures.append({
+                        'row': row_number, 'address': label,
+                        'stage': 'analysis', 'reason': str(reason),
+                    })
+                    continue
+
+                if not row_number:
+                    print(f"⚠️  Warning: No row number found for apartment: {label}")
+                    failures.append({
+                        'row': None, 'address': label,
+                        'stage': 'write', 'reason': 'no row number for apartment',
+                    })
+                    continue
+
+                # Write the result back to the sheet
+                print(f"Writing analysis results to row {row_number}")
+
+                # Rate limiting: Sleep between writes to avoid hitting API limits
+                import time
+                time.sleep(1.2)
+
+                # Retry logic with exponential backoff
+                max_retries = 3
+                retry_delay = 5
+                for attempt in range(max_retries):
+                    try:
+                        sheets_client.write_apartment_data(row_number, result)
+                        break  # Success
+                    except Exception as write_error:
+                        error_str = str(write_error)
+                        if 'RATE_LIMIT_EXCEEDED' in error_str or '429' in error_str:
+                            if attempt < max_retries - 1:
+                                wait_time = retry_delay * (2 ** attempt)
+                                print(f"  ⏳ Rate limit hit, waiting {wait_time}s before retry {attempt + 1}/{max_retries}...")
+                                time.sleep(wait_time)
+                            else:
+                                print(f"  ❌ Failed to write after {max_retries} attempts")
+                                raise
+                        else:
+                            raise
+
+                results.append(result)
             except Exception as e:
-                print(f"Error analyzing apartment: {e}")
+                # Scored but the write (or something after scoring) blew up — the
+                # apartment was NOT persisted, so surface it as a failure.
+                print(f"Error analyzing apartment (row {row_number}, {label}): {e}")
                 import traceback
                 traceback.print_exc()
+                failures.append({
+                    'row': row_number, 'address': label,
+                    'stage': 'write', 'reason': str(e),
+                })
                 continue
         
         # Update visualizations
@@ -1442,14 +1911,274 @@ def run_analysis():
         import time
         time.sleep(1.5)
         
-        message = f"Successfully analyzed {len(results)} apartment(s)"
+        found = len(apartments_to_analyze)
+        analyzed = len(results)
+        failed = len(failures)
+
+        if found == 0:
+            message = "No apartments needed analysis — everything is already up to date."
+        elif failed == 0:
+            message = f"Successfully analyzed {analyzed} apartment(s)."
+        else:
+            message = (f"Analyzed {analyzed} of {found} apartment(s); "
+                       f"{failed} could not be analyzed.")
+
         return jsonify({
-            'success': True, 
-            'analyzed': len(results),
+            'success': True,
+            'found': found,
+            'analyzed': analyzed,
+            'failed': failures,
             'message': message
         })
     except Exception as e:
         return jsonify({'error': str(e), 'success': False}), 500
+
+
+@app.route('/run_analysis_stream', methods=['POST'])
+def run_analysis_stream():
+    """Run analysis on all apartments, streaming real-time progress to the client.
+
+    Emits newline-delimited JSON (NDJSON) events so the Analysis tab can show a
+    live, step-by-step progress view (which apartment, which of the internal
+    analysis steps, a percentage bar, and a whole-run countdown) instead of a
+    static spinner.
+
+    The analysis itself runs in a background worker thread that pushes progress
+    onto a queue; this request drains the queue and streams events. That lets us
+    surface the sub-steps happening deep inside a single (multi-minute) apartment
+    analysis, and keeps bytes flowing (heartbeats) on slow steps.
+
+    Event types (one JSON object per line): start, apartment, step, item_done,
+    note, heartbeat, error, complete.
+    """
+    import time
+    import queue
+    import threading
+    from utils.google_sheets import get_current_user, set_current_user
+
+    # Canonical, ordered analysis steps for ONE apartment, with rough relative
+    # duration weights (in seconds). The weights only seed the countdown — actual
+    # pacing is continuously re-estimated from measured elapsed time as the run
+    # progresses, so the estimate self-corrects.
+    STEP_PLAN = [
+        ("basic",     "Reading listing details",                    2),
+        ("geocode",   "Locating the address",                       3),
+        ("commute",   "Calculating commute times",                 45),
+        ("safety",    "Checking crime & safety data",              25),
+        ("amenities", "Finding nearby restaurants, cafés & parks", 60),
+        ("poi",       "Walk times to your saved places",           20),
+        ("gym",       "Finding & timing your gyms",                30),
+        ("scoring",   "Computing the weighted score",               3),
+        ("save",      "Saving results to your sheet",               6),
+    ]
+    STEP_INDEX = {key: i for i, (key, _label, _w) in enumerate(STEP_PLAN)}
+    STEP_TOTAL = len(STEP_PLAN)
+    STEP_LABELS = [label for _k, label, _w in STEP_PLAN]
+    APT_WEIGHT = sum(w for _k, _l, w in STEP_PLAN)  # total weight of one apartment
+    # Cumulative weight completed BEFORE entering step i (index-aligned to STEP_PLAN).
+    CUM_BEFORE = []
+    _acc = 0
+    for _k, _l, _w in STEP_PLAN:
+        CUM_BEFORE.append(_acc)
+        _acc += _w
+
+    stream_username = getattr(g, 'username', None) or session.get('username')
+
+    def event(payload):
+        return json.dumps(payload) + "\n"
+
+    # Thread-safe channel between the analysis worker and the SSE generator.
+    q = queue.Queue()
+    SENTINEL = object()
+
+    def worker():
+        import sys
+        import traceback
+        from main import ApartmentAnalyzer
+
+        # Re-establish per-user sheet scoping inside the worker thread. contextvars
+        # do NOT propagate across threads, and @after_request has already cleared
+        # the request's — without this, writes would hit the wrong user's sheet.
+        set_current_user(stream_username)
+        try:
+            analyzer = ApartmentAnalyzer()
+            apartments = sheets_client.get_apartments_needing_analysis()
+            total = len(apartments)
+            q.put(("start", {"total": total, "steps": STEP_TOTAL, "step_labels": STEP_LABELS}))
+
+            analyzed = 0
+            for i, apartment in enumerate(apartments):
+                address = apartment.get(config.SHEET_COLUMNS['address'], 'Unknown')
+                q.put(("apartment", {"index": i, "total": total, "address": address}))
+
+                def cb(step_key, _i=i, _addr=address):
+                    q.put(("step", {"index": _i, "address": _addr, "step_key": step_key}))
+
+                success = False
+                try:
+                    result = analyzer.analyze_apartment(apartment, progress_callback=cb)
+                    if result and 'error' not in result:
+                        row_number = apartment.get('_row_number')
+                        if row_number:
+                            cb("save")
+                            time.sleep(1.2)  # rate-limit friendliness between writes
+                            max_retries = 4
+                            retry_delay = 5
+                            for attempt in range(max_retries):
+                                try:
+                                    sheets_client.write_apartment_data(row_number, result)
+                                    break
+                                except Exception as write_error:
+                                    error_str = str(write_error)
+                                    is_rate = 'RATE_LIMIT_EXCEEDED' in error_str or '429' in error_str
+                                    if attempt < max_retries - 1:
+                                        wait_time = retry_delay * (2 ** attempt) if is_rate else retry_delay
+                                        q.put(("note", {"message": f"Save retry {attempt + 1}/{max_retries} in {wait_time}s…"}))
+                                        time.sleep(wait_time)
+                                    else:
+                                        raise
+                            analyzed += 1
+                            success = True
+                        else:
+                            q.put(("error", {"message": f"No row number for {address}", "fatal": False}))
+                    else:
+                        err = result.get('error') if isinstance(result, dict) else 'no result returned'
+                        q.put(("error", {"message": f"Could not analyze {address}: {err}", "fatal": False}))
+                except Exception as e:
+                    traceback.print_exc()
+                    q.put(("error", {"message": f"Error analyzing {address}: {e}", "fatal": False}))
+
+                q.put(("item_done", {"index": i, "total": total, "address": address, "success": success}))
+
+            # Refresh the scatter-plot tab from whatever actually landed.
+            if analyzed:
+                try:
+                    sheets_client.update_scatter_plot_data()
+                except Exception as e:
+                    print(f"scatter update failed: {e}")
+
+            # Authoritative re-check: does anything STILL need analysis? This drives
+            # the "click Run Analysis again" guidance so the user isn't left guessing
+            # whether a partial/failed run needs another pass.
+            remaining = max(0, total - analyzed)
+            try:
+                remaining = len(sheets_client.get_apartments_needing_analysis())
+            except Exception as e:
+                print(f"needs-analysis re-check failed: {e}")
+
+            q.put(("complete", {"analyzed": analyzed, "total": total, "remaining": remaining}))
+        except Exception as e:
+            traceback.print_exc()
+            q.put(("error", {"message": str(e), "fatal": True}))
+        finally:
+            set_current_user(None)
+            q.put(SENTINEL)
+
+    @stream_with_context
+    def generate():
+        start_time = time.time()
+        total = 0
+        completed_apartments = 0   # fully-finished apartments
+        current_apt_number = 0     # 1-based index of the apartment in progress
+        current_step_i = 0         # step index within the in-progress apartment
+
+        def weight_done():
+            # Fully-finished apartments + steps completed within the current one.
+            partial = CUM_BEFORE[min(current_step_i, STEP_TOTAL - 1)]
+            return completed_apartments * APT_WEIGHT + partial
+
+        def overall():
+            tw = max(total, 1) * APT_WEIGHT
+            wd = min(weight_done(), tw)
+            frac = wd / tw if tw else 0.0
+            elapsed = time.time() - start_time
+            eta = None
+            # Only estimate once we have a little signal, and never after we're done.
+            if wd > 3 and frac < 1.0:
+                sec_per_weight = elapsed / wd
+                eta = round(sec_per_weight * (tw - wd), 1)
+            return round(frac * 100, 1), eta, round(elapsed, 1)
+
+        worker_thread = threading.Thread(target=worker, daemon=True)
+        worker_thread.start()
+
+        try:
+            while True:
+                try:
+                    item = q.get(timeout=8)
+                except queue.Empty:
+                    pct, eta, elapsed = overall()
+                    yield event({"type": "heartbeat", "percent": pct, "eta": eta, "elapsed": elapsed})
+                    continue
+
+                if item is SENTINEL:
+                    break
+
+                kind, data = item
+
+                if kind == "start":
+                    total = data["total"]
+                    yield event({"type": "start", "total": total,
+                                 "steps": data["steps"], "step_labels": data["step_labels"]})
+
+                elif kind == "apartment":
+                    current_apt_number = data["index"] + 1
+                    current_step_i = 0
+                    pct, eta, elapsed = overall()
+                    yield event({"type": "apartment", "index": data["index"], "number": current_apt_number,
+                                 "total": data["total"], "address": data["address"],
+                                 "percent": pct, "eta": eta, "elapsed": elapsed})
+
+                elif kind == "step":
+                    sk = data["step_key"]
+                    if sk in STEP_INDEX:
+                        current_step_i = max(current_step_i, STEP_INDEX[sk])
+                    pct, eta, elapsed = overall()
+                    label = STEP_PLAN[STEP_INDEX[sk]][1] if sk in STEP_INDEX else sk
+                    yield event({"type": "step", "apartment_number": current_apt_number, "total": total,
+                                 "address": data["address"], "step_key": sk,
+                                 "step_number": STEP_INDEX.get(sk, 0) + 1, "step_total": STEP_TOTAL,
+                                 "step_label": label, "percent": pct, "eta": eta, "elapsed": elapsed})
+
+                elif kind == "item_done":
+                    completed_apartments = data["index"] + 1
+                    current_step_i = 0  # next apartment hasn't started; avoids double-count
+                    pct, eta, elapsed = overall()
+                    yield event({"type": "item_done", "index": data["index"], "total": data["total"],
+                                 "address": data["address"], "success": data["success"],
+                                 "percent": pct, "eta": eta, "elapsed": elapsed})
+
+                elif kind == "note":
+                    yield event({"type": "note", "message": data["message"]})
+
+                elif kind == "error":
+                    yield event({"type": "error", "message": data["message"], "fatal": data.get("fatal", False)})
+
+                elif kind == "complete":
+                    analyzed = data["analyzed"]
+                    total = data["total"]
+                    remaining = data["remaining"]
+                    if total == 0:
+                        message = "Everything is already up to date — no apartments needed analysis."
+                    elif remaining > 0:
+                        message = (f"Analyzed {analyzed} of {total}. {remaining} still "
+                                   f"need analysis — click Run Analysis again.")
+                    else:
+                        message = f"Done — analyzed {analyzed} apartment(s)."
+                    yield event({"type": "complete", "analyzed": analyzed, "total": total,
+                                 "remaining": remaining, "needs_rerun": remaining > 0,
+                                 "message": message, "elapsed": round(time.time() - start_time, 1)})
+        finally:
+            worker_thread.join(timeout=1)
+
+    return Response(
+        generate(),
+        mimetype='application/x-ndjson',
+        headers={
+            'Cache-Control': 'no-cache, no-transform',
+            'X-Accel-Buffering': 'no',  # disable proxy buffering so events flush live
+        },
+    )
 
 
 @app.route('/reanalyze/<int:row_number>', methods=['POST'])
@@ -2025,6 +2754,77 @@ def admin_sync_schema():
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e), 'success': False}), 500
+
+
+# ---------------------------------------------------------------------------
+# Cross-environment data sync (prod <-> staging)
+#
+# Detect data that already exists in the *other* environment's Google Sheet and
+# help the current user import/reconcile it. See utils/env_sync.py and issue #8.
+# ---------------------------------------------------------------------------
+
+def get_sync_manager():
+    """Build an EnvSyncManager bound to the shared sheets client, or None if the
+    feature is not configured / backend not ready."""
+    if sheets_client is None or not config.PEER_GOOGLE_SHEET_ID:
+        return None
+    return EnvSyncManager(sheets_client)
+
+
+@app.route('/sync/status', methods=['GET'])
+def sync_status():
+    """Lightweight check of whether cross-environment sync is available.
+
+    Ported from the staging implementation so the UI can decide whether to show
+    the sync affordances without paying for a full diff (which reads both
+    spreadsheets). Also returns the peer's friendly label for use in copy.
+    """
+    return jsonify({
+        'enabled': get_sync_manager() is not None,
+        'peer_env_label': getattr(config, 'PEER_ENV_LABEL', 'the other environment'),
+    })
+
+
+@app.route('/sync/diff', methods=['GET'])
+def sync_diff():
+    """Return the diff between the current user's data and the peer sheet.
+
+    Doubles as the dry-run preview for /sync/apply. Returns {enabled: false}
+    when the feature isn't configured so the UI can hide itself gracefully.
+    """
+    manager = get_sync_manager()
+    if manager is None:
+        return jsonify({'enabled': False})
+    try:
+        diff = manager.compute_diff(my_username=session.get('username'))
+        diff['success'] = True
+        return jsonify(diff)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'enabled': True, 'error': str(e)}), 500
+
+
+@app.route('/sync/apply', methods=['POST'])
+def sync_apply():
+    """Apply a submitted sync plan; returns a summary of what changed.
+
+    Additive by default (never deletes target rows), previewable (via
+    /sync/diff), and idempotent (re-applying is a no-op).
+    """
+    manager = get_sync_manager()
+    if manager is None:
+        return jsonify({'success': False,
+                        'error': 'Cross-environment sync is not configured.'}), 400
+    try:
+        plan = request.get_json(silent=True) or {}
+        result = manager.apply_plan(plan, my_username=session.get('username'))
+        status = 200 if result.get('success') else 400
+        return jsonify(result), status
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/clear_wfh/<int:row_number>', methods=['POST'])

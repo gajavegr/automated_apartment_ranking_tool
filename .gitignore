@@ -59,3 +59,9 @@ Thumbs.db
 *.backup
 temp/
 
+
+# Test caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/

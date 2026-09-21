@@ -9,9 +9,16 @@
 </head>
 <body>
     <div class="container">
-        <header>
+        <header style="position: relative;">
             <h1>🏠 Apartment Analyzer</h1>
             <p>Manage your apartment listings and analyze your options</p>
+            <div class="user-chip" style="position: absolute; top: 0; right: 0; display: flex; align-items: center; gap: 10px;">
+                <button type="button" class="btn btn-secondary" onclick="openOnboarding()" style="padding: 6px 14px; font-size: 0.85rem;" title="Getting started guide">❔ Getting started</button>
+                {% if current_user %}
+                <span style="font-size: 0.9rem; color: #6e6e73;">👤 {{ current_user }}</span>
+                <a href="{{ url_for('logout') }}" class="btn btn-secondary" style="padding: 6px 14px; font-size: 0.85rem; text-decoration: none;">Log out</a>
+                {% endif %}
+            </div>
         </header>
 
         <div class="tabs">
@@ -30,6 +37,18 @@
                 {% endfor %}
             {% endif %}
         {% endwith %}
+
+        {% if sync_enabled %}
+        <!-- Cross-environment import prompt (shown when the peer env has data
+             this user doesn't have yet). Populated by checkForPeerData(). -->
+        <div id="syncImportBanner" class="alert alert-info" style="display: none; align-items: center; justify-content: space-between; gap: 12px;">
+            <span id="syncImportBannerText"></span>
+            <span style="display: flex; gap: 8px; white-space: nowrap;">
+                <button type="button" class="btn btn-primary" style="padding: 6px 14px; font-size: 0.85rem;" onclick="document.getElementById('syncImportBanner').style.display='none'; openSyncIntro();">Show me how</button>
+                <button type="button" class="btn btn-secondary" style="padding: 6px 14px; font-size: 0.85rem;" onclick="document.getElementById('syncImportBanner').style.display='none';">Dismiss</button>
+            </span>
+        </div>
+        {% endif %}
 
         <div class="main-content">
             <!-- Left side: Form -->
@@ -706,8 +725,30 @@
                     </button>
                 </div>
 
-                <div id="analysisLoading" class="loading-spinner" style="display: none;">
-                    <p>⏳ Analyzing apartments... This may take a few minutes.</p>
+                <div id="analysisLoading" class="analysis-progress" style="display: none;">
+                    <div class="analysis-progress-card">
+                        <div class="analysis-progress-header">
+                            <span class="analysis-progress-spinner" aria-hidden="true"></span>
+                            <h3 id="analysisProgressTitle">Starting analysis…</h3>
+                        </div>
+
+                        <div class="analysis-progress-bar-track">
+                            <div id="analysisProgressBar" class="analysis-progress-bar-fill" style="width: 0%;"></div>
+                        </div>
+
+                        <div class="analysis-progress-meta">
+                            <span id="analysisProgressCount">Preparing…</span>
+                            <span id="analysisProgressEta"></span>
+                        </div>
+
+                        <div id="analysisProgressCurrent" class="analysis-progress-current"></div>
+
+                        <div id="analysisProgressStep" class="analysis-progress-step"></div>
+
+                        <div id="analysisProgressBanner" class="analysis-progress-banner" style="display: none;"></div>
+
+                        <ul id="analysisProgressLog" class="analysis-progress-log"></ul>
+                    </div>
                 </div>
 
                 <div id="analysisResults" class="analysis-grid hidden">
@@ -1402,6 +1443,57 @@
                         </div>
                     </div>
                     
+                    {% if sync_enabled %}
+                    <!-- Cross-Environment Data Sync -->
+                    <div class="admin-section" id="syncSection">
+                        <h3>🔁 Cross-Environment Sync</h3>
+                        <p>Check whether <strong>{{ peer_env_label }}</strong> has apartment data
+                        you don't have here yet, and import it into your own tabs. Imports are
+                        <strong>additive</strong> (nothing here is deleted) and safe to re-run.</p>
+
+                        <div class="admin-actions">
+                            <button id="syncCheckBtn" class="btn btn-secondary" onclick="loadSyncDiff()">
+                                Check for data in {{ peer_env_label }}
+                            </button>
+                            <button class="btn btn-secondary" onclick="openSyncIntro()" title="How cross-environment sync works">❔ How it works</button>
+                        </div>
+
+                        <div id="syncStatus" class="schema-status" style="display: none; margin-top: 15px;">
+                            <div id="syncDetails"></div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- Danger Zone: delete account -->
+                    <div class="admin-section danger-zone">
+                        <h3>⚠️ Danger Zone — Delete Account</h3>
+                        <p>
+                            Permanently delete <strong>{{ current_user }}</strong> and
+                            <strong>all</strong> of this account's data — every
+                            "{{ current_user }} - *" tab (apartments, criteria, places of
+                            interest, excluded places, edit log, settings) plus the entry in
+                            the Users registry. Other users and shared tabs are not affected.
+                        </p>
+                        <p style="color: #b00020; font-weight: 600;">
+                            This cannot be undone. Export anything you want to keep first.
+                        </p>
+                        <p>
+                            To confirm, type your username
+                            (<code>{{ current_user }}</code>) below:
+                        </p>
+                        <div class="admin-actions" style="align-items: center; gap: 10px;">
+                            <input type="text" id="deleteAccountConfirm"
+                                   placeholder="Type your username to confirm"
+                                   autocomplete="off"
+                                   style="padding: 8px 12px; border: 1px solid #d2d2d7; border-radius: 6px; min-width: 240px;">
+                            <button id="deleteAccountBtn" class="btn btn-danger"
+                                    onclick="deleteMyAccount()">
+                                Delete my account &amp; data
+                            </button>
+                        </div>
+                        <div id="deleteAccountStatus" style="margin-top: 12px;"></div>
+                    </div>
+
                     <!-- Other Admin Tools -->
                     <div class="admin-section">
                         <h3>🔧 Other Tools</h3>
@@ -1409,7 +1501,6 @@
                         <ul>
                             <li>Bulk data operations</li>
                             <li>Data validation & cleanup</li>
-                            <li>Export/import functionality</li>
                             <li>API key management</li>
                         </ul>
                     </div>
@@ -1418,10 +1509,181 @@
         </div>
     </div>
 
+    <!-- ===================== Onboarding walkthrough ===================== -->
+    <div id="onboardingModal" class="modal onboarding-modal" style="display: none;">
+        <div class="modal-content onboarding-content">
+            <button type="button" class="modal-close onboarding-close" onclick="closeOnboarding()" aria-label="Close">&times;</button>
+            <div class="onboarding-body">
+                <div class="onboarding-icon" id="onboardingIcon">👋</div>
+                <h2 class="onboarding-title" id="onboardingTitle">Welcome</h2>
+                <div class="onboarding-text" id="onboardingText"></div>
+            </div>
+            <div class="onboarding-footer">
+                <div class="onboarding-dots" id="onboardingDots"></div>
+                <div class="onboarding-actions">
+                    <button type="button" class="btn btn-secondary" id="onboardingSkipBtn" onclick="closeOnboarding()">Skip</button>
+                    <button type="button" class="btn btn-secondary" id="onboardingBackBtn" onclick="onboardingPrev()" style="display: none;">Back</button>
+                    <button type="button" class="btn btn-primary" id="onboardingNextBtn" onclick="onboardingNext()">Next</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if sync_enabled %}
+    <!-- ============== Cross-environment sync walkthrough ============== -->
+    <div id="syncIntroModal" class="modal onboarding-modal" style="display: none;">
+        <div class="modal-content onboarding-content">
+            <button type="button" class="modal-close onboarding-close" onclick="closeSyncIntro()" aria-label="Close">&times;</button>
+            <div class="onboarding-body">
+                <div class="onboarding-icon" id="syncIntroIcon">📦</div>
+                <h2 class="onboarding-title" id="syncIntroTitle">Import your existing data</h2>
+                <div class="onboarding-text" id="syncIntroText"></div>
+            </div>
+            <div class="onboarding-footer">
+                <div class="onboarding-dots" id="syncIntroDots"></div>
+                <div class="onboarding-actions">
+                    <button type="button" class="btn btn-secondary" id="syncIntroSkipBtn" onclick="closeSyncIntro()">Not now</button>
+                    <button type="button" class="btn btn-secondary" id="syncIntroBackBtn" onclick="syncIntroPrev()" style="display: none;">Back</button>
+                    <button type="button" class="btn btn-primary" id="syncIntroNextBtn" onclick="syncIntroNext()">Next</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="{{ url_for('static', filename='preferences.js') }}?v=20251208v7"></script>
     <script>
+        // ===================== Cross-environment sync =====================
+        const SYNC_ENABLED = {{ 'true' if sync_enabled else 'false' }};
+        const PEER_ENV_LABEL = {{ (peer_env_label or 'the other environment') | tojson }};
+
+        // ===================== Onboarding walkthrough =====================
+        // Server tells us whether this user has already finished/dismissed it.
+        const ONBOARDING_COMPLETED = {{ 'true' if onboarding_completed else 'false' }};
+
+        const ONBOARDING_STEPS = [
+            {
+                icon: '👋',
+                title: 'Welcome to Apartment Analyzer',
+                html: `
+                    <p>This tool helps you compare apartments objectively — scoring each one on
+                    what <em>you</em> care about, from commute and safety to nearby gyms and price.</p>
+                    <p>Here's the recommended workflow:</p>
+                    <ol class="onboarding-steps">
+                        <li><strong>Set your preferences</strong> — tell it what matters to you.</li>
+                        <li><strong>Add apartments</strong> — with Google Maps &amp; optional AI photo analysis.</li>
+                        <li><strong>Run analysis</strong> — score every candidate.</li>
+                        <li><strong>Review results</strong> — scatter plot &amp; criteria matrix.</li>
+                        <li><strong>Adjust &amp; iterate</strong> — tweak weights and re-analyze.</li>
+                    </ol>`
+            },
+            {
+                icon: '⚖️',
+                title: '1. Set your preferences',
+                html: `
+                    <p>Start in the <strong>Preferences</strong> tab. Create a profile and set
+                    <strong>weights</strong> for what matters most — commute time, neighborhood safety,
+                    nearby amenities (gyms, cafes, restaurants, parks), price, and more.</p>
+                    <p>These weights drive the scoring, so every apartment is judged by your priorities.
+                    You can keep several profiles and compare what each one values.</p>`
+            },
+            {
+                icon: '🏠',
+                title: '2. Add apartments',
+                html: `
+                    <p>In the <strong>Entry</strong> tab, add each listing. Paste a Zillow URL and start
+                    typing the address — Google Maps autocompletes it and pulls in location data.</p>
+                    <p>Enter rent, size and details, and optionally run <strong>AI photo analysis</strong>
+                    to summarize the listing's photos. Load and edit existing apartments here too.</p>`
+            },
+            {
+                icon: '📊',
+                title: '3. Run the analysis',
+                html: `
+                    <p>Open the <strong>Analysis</strong> tab and click <strong>Run Analysis</strong>. The
+                    tool gathers location intelligence for each apartment — commute times, SF-crime-based
+                    safety scoring, and nearby gyms, restaurants, cafes and parks — then scores them
+                    against your weighted preferences.</p>`
+            },
+            {
+                icon: '🔍',
+                title: '4. Review & iterate',
+                html: `
+                    <p>Results appear as two visualizations: a <strong>price-vs-score scatter plot</strong>
+                    to spot the best value, and a <strong>criteria matrix</strong> breaking down how each
+                    apartment scored on every factor.</p>
+                    <p>Not sure about your weights? Head back to <strong>Preferences</strong>, adjust, and
+                    re-analyze. Iterate until the ranking feels right.</p>
+                    <p style="color:#6e6e73; font-size:0.85rem;">💡 You can reopen this guide anytime via
+                    <strong>❔ Getting started</strong> in the top-right.</p>`
+            }
+        ];
+
+        let onboardingStep = 0;
+        // Whether we've already told the server onboarding is done (avoid re-POSTing).
+        let onboardingMarked = ONBOARDING_COMPLETED;
+
+        function renderOnboardingStep() {
+            const step = ONBOARDING_STEPS[onboardingStep];
+            document.getElementById('onboardingIcon').textContent = step.icon;
+            document.getElementById('onboardingTitle').textContent = step.title;
+            document.getElementById('onboardingText').innerHTML = step.html;
+
+            // Progress dots
+            const dots = ONBOARDING_STEPS.map((_, i) =>
+                `<span class="ob-dot${i === onboardingStep ? ' active' : ''}"></span>`).join('');
+            document.getElementById('onboardingDots').innerHTML = dots;
+
+            // Buttons
+            const isFirst = onboardingStep === 0;
+            const isLast = onboardingStep === ONBOARDING_STEPS.length - 1;
+            document.getElementById('onboardingBackBtn').style.display = isFirst ? 'none' : '';
+            document.getElementById('onboardingSkipBtn').style.display = isLast ? 'none' : '';
+            document.getElementById('onboardingNextBtn').textContent =
+                isLast ? 'Set your preferences →' : 'Next';
+        }
+
+        function openOnboarding() {
+            onboardingStep = 0;
+            renderOnboardingStep();
+            document.getElementById('onboardingModal').style.display = 'flex';
+        }
+
+        function onboardingNext() {
+            if (onboardingStep < ONBOARDING_STEPS.length - 1) {
+                onboardingStep++;
+                renderOnboardingStep();
+            } else {
+                // Finished: close and drop the user into the Preferences tab.
+                closeOnboarding();
+                showTab('preferences');
+            }
+        }
+
+        function onboardingPrev() {
+            if (onboardingStep > 0) {
+                onboardingStep--;
+                renderOnboardingStep();
+            }
+        }
+
+        function closeOnboarding() {
+            document.getElementById('onboardingModal').style.display = 'none';
+            markOnboardingComplete();
+        }
+
+        function markOnboardingComplete() {
+            if (onboardingMarked) return;
+            onboardingMarked = true;
+            fetch('/onboarding/complete', { method: 'POST' }).catch(err => {
+                // Non-fatal: worst case the guide auto-opens again next visit.
+                console.warn('Could not save onboarding state:', err);
+            });
+        }
+
+
         let map;
         let streetView;
         let streetViewMiniMap;
@@ -2004,8 +2266,19 @@
 
         function onPlaceChanged() {
             const place = autocomplete.getPlace();
-            
+
             if (!place.geometry) {
+                // The user pressed Enter or blurred without picking a prediction from
+                // the dropdown. In that case the Autocomplete widget fires this event
+                // with an unresolved stub (no geometry / address_components), so the
+                // client-side neighborhood detection below would be skipped entirely.
+                // Fall back to geocoding the typed address on the backend, which both
+                // updates the maps and auto-populates neighborhoods via /get_neighborhoods.
+                const typedAddress = document.getElementById('address').value.trim();
+                if (typedAddress) {
+                    populateNeighborhoodsForAddress(typedAddress);
+                    geocodeAndUpdateMaps(typedAddress);
+                }
                 return;
             }
 
@@ -2050,6 +2323,26 @@
                 label.appendChild(document.createTextNode(' ' + neighborhood));
                 container.appendChild(label);
             });
+        }
+
+        // Fallback neighborhood detection used when the Autocomplete widget fires
+        // without a resolved place (e.g. the user typed the full address and pressed
+        // Enter instead of clicking a prediction). Uses the backend geocoder so the
+        // neighborhood is populated regardless of how the address was entered.
+        async function populateNeighborhoodsForAddress(address) {
+            try {
+                const response = await fetch('/get_neighborhoods', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address })
+                });
+                const data = await response.json();
+                if (data.success && Array.isArray(data.neighborhoods) && data.neighborhoods.length) {
+                    updateNeighborhoodCheckboxes(data.neighborhoods);
+                }
+            } catch (error) {
+                console.error('Error fetching neighborhoods:', error);
+            }
         }
 
         function updateNeighborhoodCheckboxes(neighborhoods) {
@@ -2826,37 +3119,241 @@
         }
 
         // Run analysis
+        // Escape user/sheet-derived text before inserting into innerHTML.
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str == null ? '' : String(str);
+            return div.innerHTML;
+        }
+
+        // Format a number of seconds as a friendly "time left" string.
+        function formatEta(seconds) {
+            if (seconds === null || seconds === undefined || !isFinite(seconds)) return '';
+            seconds = Math.max(0, Math.round(seconds));
+            if (seconds < 60) return `~${seconds}s left`;
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            if (mins < 60) return secs ? `~${mins}m ${secs}s left` : `~${mins}m left`;
+            const hrs = Math.floor(mins / 60);
+            return `~${hrs}h ${mins % 60}m left`;
+        }
+
+        // Local countdown ticker: the server sends a fresh ETA with each event;
+        // between events we decrement it every second so the user sees a live
+        // countdown rather than a number that freezes for 60s on a slow step.
+        let _analysisEtaDeadline = null;
+        let _analysisEtaTicker = null;
+        function _renderAnalysisEta() {
+            const etaEl = document.getElementById('analysisProgressEta');
+            if (!etaEl) return;
+            if (_analysisEtaDeadline === null) { etaEl.textContent = ''; return; }
+            const remain = Math.max(0, (_analysisEtaDeadline - Date.now()) / 1000);
+            etaEl.textContent = formatEta(remain);
+        }
+        function setAnalysisEta(seconds) {
+            if (seconds === null || seconds === undefined || !isFinite(seconds)) {
+                _analysisEtaDeadline = null;
+            } else {
+                _analysisEtaDeadline = Date.now() + Math.max(0, seconds) * 1000;
+            }
+            _renderAnalysisEta();
+        }
+        function startAnalysisEtaTicker() {
+            stopAnalysisEtaTicker();
+            _analysisEtaTicker = setInterval(_renderAnalysisEta, 1000);
+        }
+        function stopAnalysisEtaTicker() {
+            if (_analysisEtaTicker) { clearInterval(_analysisEtaTicker); _analysisEtaTicker = null; }
+        }
+
+        function resetAnalysisProgressUI() {
+            const bar = document.getElementById('analysisProgressBar');
+            const title = document.getElementById('analysisProgressTitle');
+            const count = document.getElementById('analysisProgressCount');
+            const eta = document.getElementById('analysisProgressEta');
+            const current = document.getElementById('analysisProgressCurrent');
+            const step = document.getElementById('analysisProgressStep');
+            const banner = document.getElementById('analysisProgressBanner');
+            const log = document.getElementById('analysisProgressLog');
+            const spinner = document.querySelector('#analysisLoading .analysis-progress-spinner');
+            if (bar) bar.style.width = '0%';
+            if (title) title.textContent = 'Starting analysis…';
+            if (count) count.textContent = 'Preparing…';
+            if (eta) eta.textContent = '';
+            if (current) current.textContent = '';
+            if (step) step.textContent = '';
+            if (banner) { banner.style.display = 'none'; banner.textContent = ''; }
+            if (log) log.innerHTML = '';
+            if (spinner) spinner.style.display = '';
+            setAnalysisEta(null);
+        }
+
         async function runAnalysis() {
             const btn = document.getElementById('runAnalysisBtn');
             const loading = document.getElementById('analysisLoading');
             const results = document.getElementById('analysisResults');
-            
+
+            const bar = document.getElementById('analysisProgressBar');
+            const title = document.getElementById('analysisProgressTitle');
+            const countEl = document.getElementById('analysisProgressCount');
+            const currentEl = document.getElementById('analysisProgressCurrent');
+            const stepEl = document.getElementById('analysisProgressStep');
+            const bannerEl = document.getElementById('analysisProgressBanner');
+            const logEl = document.getElementById('analysisProgressLog');
+            const spinnerEl = document.querySelector('#analysisLoading .analysis-progress-spinner');
+
             btn.disabled = true;
-            btn.textContent = 'Running...';
+            btn.textContent = 'Running…';
+            resetAnalysisProgressUI();
             loading.style.display = 'block';
             results.classList.add('hidden');
             results.classList.remove('detail-shown');
-            
+            startAnalysisEtaTicker();
+
+            let total = 0;
+            let completedPayload = null;
+            let sawFatal = false;
+
+            const applyPercent = (p) => {
+                if (typeof p === 'number' && isFinite(p) && bar) {
+                    bar.style.width = Math.max(0, Math.min(100, p)) + '%';
+                }
+            };
+            const addLog = (html, cls) => {
+                const li = document.createElement('li');
+                if (cls) li.className = cls;
+                li.innerHTML = html;
+                logEl.appendChild(li);
+                logEl.scrollTop = logEl.scrollHeight;
+            };
+
+            const handleEvent = (evt) => {
+                switch (evt.type) {
+                    case 'start':
+                        total = evt.total || 0;
+                        if (total === 0) {
+                            title.textContent = 'Nothing to analyze';
+                            countEl.textContent = 'All apartments are already up to date.';
+                            applyPercent(100);
+                            setAnalysisEta(null);
+                        } else {
+                            title.textContent = `Analyzing ${total} apartment${total === 1 ? '' : 's'}…`;
+                            countEl.textContent = `0 of ${total} complete`;
+                        }
+                        break;
+                    case 'apartment':
+                        title.textContent = `Analyzing apartment ${evt.number} of ${evt.total}…`;
+                        countEl.textContent = `${evt.number - 1} of ${evt.total} complete`;
+                        currentEl.innerHTML = `<span class="analysis-progress-dot">●</span> <strong>${escapeHtml(evt.address || 'Unknown')}</strong>`;
+                        stepEl.textContent = '';
+                        applyPercent(evt.percent);
+                        setAnalysisEta(evt.eta);
+                        break;
+                    case 'step':
+                        stepEl.innerHTML = `<span class="analysis-progress-stepnum">Step ${evt.step_number}/${evt.step_total}</span> · ${escapeHtml(evt.step_label || evt.step_key)}`;
+                        applyPercent(evt.percent);
+                        setAnalysisEta(evt.eta);
+                        break;
+                    case 'item_done':
+                        countEl.textContent = `${evt.index + 1} of ${evt.total} complete`;
+                        applyPercent(evt.percent);
+                        setAnalysisEta(evt.eta);
+                        addLog(`${evt.success ? '✅' : '⚠️'} ${escapeHtml(evt.address || 'Unknown')}`,
+                               evt.success ? 'ok' : 'fail');
+                        break;
+                    case 'note':
+                        addLog(`<span class="analysis-progress-note">ℹ️ ${escapeHtml(evt.message || '')}</span>`, 'note');
+                        break;
+                    case 'heartbeat':
+                        applyPercent(evt.percent);
+                        setAnalysisEta(evt.eta);
+                        break;
+                    case 'error':
+                        if (evt.fatal) {
+                            sawFatal = true;
+                            title.textContent = 'Analysis failed';
+                            stepEl.textContent = '';
+                            currentEl.innerHTML = `<span class="error">❌ ${escapeHtml(evt.message || 'Unknown error')}</span>`;
+                        } else {
+                            addLog(`⚠️ ${escapeHtml(evt.message || 'Error')}`, 'fail');
+                        }
+                        break;
+                    case 'complete':
+                        completedPayload = evt;
+                        applyPercent(100);
+                        stopAnalysisEtaTicker();
+                        setAnalysisEta(null);
+                        stepEl.textContent = '';
+                        currentEl.textContent = '';
+                        if (spinnerEl) spinnerEl.style.display = 'none';
+                        title.textContent = evt.total === 0 ? 'Nothing to analyze' : 'Analysis complete';
+                        countEl.textContent = `${evt.analyzed} of ${evt.total} analyzed`;
+                        if (evt.needs_rerun) {
+                            bannerEl.innerHTML = `⚠️ ${escapeHtml(evt.message)}`;
+                            bannerEl.style.display = 'block';
+                        }
+                        break;
+                }
+            };
+
             try {
-                const response = await fetch('/run_analysis', {
-                    method: 'POST'
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    alert(`Analysis complete! Analyzed ${data.analyzed} apartments.`);
+                const response = await fetch('/run_analysis_stream', { method: 'POST' });
+                if (!response.ok || !response.body) {
+                    throw new Error(`Server returned ${response.status}`);
+                }
+
+                // Read the NDJSON stream line-by-line as it arrives.
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+
+                    let newlineIndex;
+                    while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
+                        const line = buffer.slice(0, newlineIndex).trim();
+                        buffer = buffer.slice(newlineIndex + 1);
+                        if (!line) continue;
+                        try {
+                            handleEvent(JSON.parse(line));
+                        } catch (parseErr) {
+                            console.warn('Could not parse progress line:', line, parseErr);
+                        }
+                    }
+                }
+                const tail = buffer.trim();
+                if (tail) {
+                    try { handleEvent(JSON.parse(tail)); } catch (e) { /* ignore */ }
+                }
+
+                // Refresh the plot/rankings so any freshly-scored apartments appear.
+                // (Even a partial run may have landed some dots.)
+                if (completedPayload) {
+                    if (completedPayload.total > 0) {
+                        await new Promise(r => setTimeout(r, 900));
+                    }
                     loadAnalysisData();
-                } else {
-                    alert('Error running analysis: ' + (data.error || 'Unknown error'));
                 }
             } catch (error) {
                 console.error('Error running analysis:', error);
-                alert('Error running analysis');
+                title.textContent = 'Analysis failed';
+                if (spinnerEl) spinnerEl.style.display = 'none';
+                currentEl.innerHTML = `<span class="error">❌ ${escapeHtml(error.message || 'Error running analysis')}</span>`;
+                sawFatal = true;
             } finally {
+                stopAnalysisEtaTicker();
                 btn.disabled = false;
-                btn.textContent = 'Run Analysis';
-                loading.style.display = 'none';
+                const needsRerun = completedPayload && completedPayload.needs_rerun;
+                btn.textContent = needsRerun ? 'Run Analysis again' : 'Run Analysis';
+                // Keep the progress card visible when there's something to read
+                // (a fatal error, or apartments that still need another run);
+                // otherwise hide it once results are shown.
+                if (!sawFatal && !needsRerun) {
+                    loading.style.display = 'none';
+                }
             }
         }
 
@@ -4651,6 +5148,14 @@ Score = 10 × (1 - ${parseFloat(gymWalkTime).toFixed(1)} / ${maxTime}) = ${gymSc
             setupPhotoSelectorButton();
             setupClearWfhButton();
             updatePhotoSelectorHelper();
+
+            // First-run: auto-open the onboarding walkthrough for new users.
+            if (!ONBOARDING_COMPLETED) {
+                openOnboarding();
+            }
+
+            // Offer to import existing data from the peer environment, if any.
+            checkForPeerData();
             
             // Setup collapsible sections
             document.querySelectorAll('.collapsible-section').forEach(button => {
@@ -5088,6 +5593,304 @@ Score = 10 × (1 - ${parseFloat(gymWalkTime).toFixed(1)} / ${maxTime}) = ${gymSc
         }
 
         // Schema Management Functions
+        // ===================== Cross-environment sync UI =====================
+        function escapeHtml(str) {
+            return String(str == null ? '' : str)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        // Latest diff, kept so the import handler knows the full plan candidates.
+        let lastSyncDiff = null;
+        // How many importable apartments we last detected (drives the walkthrough copy).
+        let syncPeerCount = 0;
+
+        // ---- Guided walkthrough (mirrors the onboarding "Getting started" tool) ----
+        let syncIntroStep = 0;
+
+        function syncIntroSteps() {
+            const n = syncPeerCount;
+            const noun = n === 1 ? 'apartment' : 'apartments';
+            const foundLine = n > 0
+                ? `<p>We spotted <strong>${n}</strong> ${noun} in <strong>${escapeHtml(PEER_ENV_LABEL)}</strong>
+                   that ${n === 1 ? "isn't" : "aren't"} in your list here yet.</p>`
+                : `<p>This checks <strong>${escapeHtml(PEER_ENV_LABEL)}</strong> for apartments you may have
+                   entered there but not here.</p>`;
+            return [
+                {
+                    icon: '📦',
+                    title: 'Bring over your existing data',
+                    html: foundLine +
+                        `<p>If you've used this tool in <strong>${escapeHtml(PEER_ENV_LABEL)}</strong> before, you don't
+                        have to re-enter anything — you can import it straight into your own tabs here.</p>`
+                },
+                {
+                    icon: '🔍',
+                    title: 'How we match apartments',
+                    html: `<p>Each listing is matched by its <strong>Zillow link</strong> when available, otherwise by a
+                        <strong>normalized address</strong> — so "123 Main St." and "123 main street" count as the same place.</p>
+                        <p>You'll see three groups: <strong>available to import</strong>, <strong>only here</strong>, and
+                        <strong>present in both but different</strong>. Only the details you enter (price, beds, parking…)
+                        are compared — computed scores are ignored so there's no false noise.</p>`
+                },
+                {
+                    icon: '🛡️',
+                    title: 'Safe by design',
+                    html: `<ul class="onboarding-steps">
+                        <li><strong>Additive</strong> — importing never deletes anything you already have.</li>
+                        <li><strong>Preview first</strong> — you see the full diff and pick exactly what to bring over.</li>
+                        <li><strong>Conflicts are yours to resolve</strong> — keep yours or take ${escapeHtml(PEER_ENV_LABEL)}'s, per apartment.</li>
+                        <li><strong>Re-runnable</strong> — running it again with nothing new does nothing.</li>
+                        <li><strong>Optional backup</strong> — snapshot your tab before merging.</li>
+                        </ul>`
+                },
+                {
+                    icon: '✅',
+                    title: 'Ready when you are',
+                    html: `<p>Click below to compare your data with <strong>${escapeHtml(PEER_ENV_LABEL)}</strong>. Nothing is
+                        written until you review the diff and choose <em>Import selected</em>.</p>
+                        <p style="color:#6e6e73; font-size:0.85rem;">💡 You can reopen this anytime from
+                        <strong>Admin → Cross-Environment Sync → ❔ How it works</strong>.</p>`
+                }
+            ];
+        }
+
+        function renderSyncIntroStep() {
+            const steps = syncIntroSteps();
+            const step = steps[syncIntroStep];
+            document.getElementById('syncIntroIcon').textContent = step.icon;
+            document.getElementById('syncIntroTitle').textContent = step.title;
+            document.getElementById('syncIntroText').innerHTML = step.html;
+
+            document.getElementById('syncIntroDots').innerHTML = steps.map((_, i) =>
+                `<span class="ob-dot${i === syncIntroStep ? ' active' : ''}"></span>`).join('');
+
+            const isFirst = syncIntroStep === 0;
+            const isLast = syncIntroStep === steps.length - 1;
+            document.getElementById('syncIntroBackBtn').style.display = isFirst ? 'none' : '';
+            document.getElementById('syncIntroSkipBtn').style.display = isLast ? 'none' : '';
+            document.getElementById('syncIntroNextBtn').textContent =
+                isLast ? ('Check ' + PEER_ENV_LABEL + ' →') : 'Next';
+        }
+
+        function openSyncIntro() {
+            if (!SYNC_ENABLED) return;
+            syncIntroStep = 0;
+            renderSyncIntroStep();
+            document.getElementById('syncIntroModal').style.display = 'flex';
+        }
+
+        function closeSyncIntro() {
+            const modal = document.getElementById('syncIntroModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function syncIntroPrev() {
+            if (syncIntroStep > 0) { syncIntroStep--; renderSyncIntroStep(); }
+        }
+
+        function syncIntroNext() {
+            const steps = syncIntroSteps();
+            if (syncIntroStep < steps.length - 1) {
+                syncIntroStep++;
+                renderSyncIntroStep();
+            } else {
+                // Finished: drop the user into the Admin sync section and run the check.
+                closeSyncIntro();
+                showTab('admin');
+                const section = document.getElementById('syncSection');
+                if (section) section.scrollIntoView({behavior: 'smooth', block: 'start'});
+                loadSyncDiff();
+            }
+        }
+
+        // On first load, quietly check whether the peer env has data to import
+        // and surface a dismissible banner if so (onboarding integration).
+        async function checkForPeerData() {
+            if (!SYNC_ENABLED) return;
+            try {
+                const resp = await fetch('/sync/diff');
+                const data = await resp.json();
+                if (!data || !data.enabled || !data.success) return;
+                lastSyncDiff = data;
+                const n = (data.summary && data.summary.only_in_peer) || 0;
+                syncPeerCount = n;
+                if (n > 0) {
+                    const banner = document.getElementById('syncImportBanner');
+                    const text = document.getElementById('syncImportBannerText');
+                    if (banner && text) {
+                        text.innerHTML = `📦 We found <strong>${n}</strong> apartment${n === 1 ? '' : 's'} in `
+                            + `<strong>${escapeHtml(data.peer_label || PEER_ENV_LABEL)}</strong> that you don't have here yet. `
+                            + `Want to import ${n === 1 ? 'it' : 'them'}?`;
+                        banner.style.display = 'flex';
+                    }
+                }
+            } catch (err) {
+                console.warn('Peer data check failed:', err);
+            }
+        }
+
+        async function loadSyncDiff() {
+            const btn = document.getElementById('syncCheckBtn');
+            const statusDiv = document.getElementById('syncStatus');
+            const detailsDiv = document.getElementById('syncDetails');
+            if (!statusDiv || !detailsDiv) return;
+
+            if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+            statusDiv.style.display = 'block';
+            detailsDiv.innerHTML = '<p>Comparing your data with ' + escapeHtml(PEER_ENV_LABEL) + '…</p>';
+
+            try {
+                const resp = await fetch('/sync/diff');
+                const data = await resp.json();
+
+                if (!data.enabled) {
+                    detailsDiv.innerHTML = '<p>Cross-environment sync is not configured.</p>';
+                    return;
+                }
+                if (!data.success) {
+                    detailsDiv.innerHTML = `<p class="error">Error: ${escapeHtml(data.error)}</p>`;
+                    return;
+                }
+
+                lastSyncDiff = data;
+                syncPeerCount = (data.summary && data.summary.only_in_peer) || 0;
+                renderSyncDiff(data);
+            } catch (error) {
+                console.error('Error loading sync diff:', error);
+                detailsDiv.innerHTML = `<p class="error">Error: ${escapeHtml(error.message)}</p>`;
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = 'Check for data in ' + PEER_ENV_LABEL; }
+            }
+        }
+
+        function renderSyncDiff(data) {
+            const detailsDiv = document.getElementById('syncDetails');
+            const s = data.summary || {};
+            let html = '<div class="schema-results">';
+            html += '<div class="schema-summary">';
+            html += `<p><strong>Only in ${escapeHtml(data.peer_label)}:</strong> ${s.only_in_peer || 0}`
+                 + ` &nbsp;|&nbsp; <strong>Only here:</strong> ${s.only_here || 0}`
+                 + ` &nbsp;|&nbsp; <strong>Differ:</strong> ${s.differ || 0}`
+                 + ` &nbsp;|&nbsp; <strong>Identical:</strong> ${s.identical || 0}</p>`;
+            html += '</div>';
+
+            // --- Importable (only in peer) ---
+            if (data.only_in_peer && data.only_in_peer.length) {
+                html += '<div class="schema-issue missing">';
+                html += `<h5>📦 Available to import (${data.only_in_peer.length})</h5>`;
+                html += '<label style="display:block; margin:6px 0;"><input type="checkbox" id="syncSelectAllNew" checked onchange="document.querySelectorAll(\'.sync-new-item\').forEach(c=>c.checked=this.checked)"> Select all</label>';
+                html += '<ul style="list-style:none; padding-left:0;">';
+                data.only_in_peer.forEach(item => {
+                    html += `<li><label style="display:flex; gap:8px; align-items:center;">`
+                        + `<input type="checkbox" class="sync-new-item" value="${escapeHtml(item.key)}" checked>`
+                        + `<span>${escapeHtml(item.address)}`
+                        + (item.price ? ` <small>(${escapeHtml(item.price)})</small>` : '')
+                        + `</span></label></li>`;
+                });
+                html += '</ul></div>';
+            }
+
+            // --- Conflicts (differ) ---
+            if (data.differ && data.differ.length) {
+                html += '<div class="schema-issue misplaced">';
+                html += `<h5>⚠️ Present in both, but different (${data.differ.length})</h5>`;
+                html += '<p>Choose which version to keep for each. Default keeps your data.</p>';
+                data.differ.forEach(item => {
+                    html += `<div style="border:1px solid #e0e0e0; border-radius:6px; padding:10px; margin-bottom:10px;">`;
+                    html += `<strong>${escapeHtml(item.address)}</strong>`;
+                    html += '<table style="width:100%; font-size:0.85em; margin:6px 0; border-collapse:collapse;">';
+                    html += '<tr><th style="text-align:left;">Field</th><th style="text-align:left;">Yours</th><th style="text-align:left;">' + escapeHtml(data.peer_label) + '</th></tr>';
+                    item.fields.forEach(f => {
+                        html += `<tr><td>${escapeHtml(f.column)}</td>`
+                            + `<td>${escapeHtml(f.mine)}</td>`
+                            + `<td>${escapeHtml(f.peer)}</td></tr>`;
+                    });
+                    html += '</table>';
+                    const kf = escapeHtml(item.key);
+                    html += `<label style="margin-right:12px;"><input type="radio" name="conflict_${kf}" value="mine" checked> Keep mine</label>`;
+                    html += `<label class="sync-conflict-item" data-key="${kf}"><input type="radio" name="conflict_${kf}" value="peer"> Use ${escapeHtml(data.peer_label)}</label>`;
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+
+            if ((!data.only_in_peer || !data.only_in_peer.length) && (!data.differ || !data.differ.length)) {
+                html += '<div class="schema-success"><h5>✅ You\'re in sync</h5>'
+                    + `<p>Nothing to import from ${escapeHtml(data.peer_label)}.</p></div>`;
+            } else {
+                html += '<div style="margin-top:12px; display:flex; gap:10px; align-items:center;">';
+                html += '<label><input type="checkbox" id="syncSnapshot" checked> Back up my sheet first</label>';
+                html += '<button class="btn btn-primary" id="syncApplyBtn" onclick="applySync()">Import selected</button>';
+                html += '</div>';
+            }
+
+            html += '</div>';
+            detailsDiv.innerHTML = html;
+        }
+
+        async function applySync() {
+            const importNew = Array.from(document.querySelectorAll('.sync-new-item:checked')).map(c => c.value);
+            const conflicts = {};
+            document.querySelectorAll('.sync-conflict-item').forEach(el => {
+                const key = el.getAttribute('data-key');
+                const sel = document.querySelector(`input[name="conflict_${CSS.escape(key)}"]:checked`);
+                if (sel) conflicts[key] = sel.value;
+            });
+
+            if (importNew.length === 0 && !Object.values(conflicts).some(v => v === 'peer')) {
+                alert('Nothing selected to import.');
+                return;
+            }
+
+            const snapshot = document.getElementById('syncSnapshot');
+            const plan = {
+                direction: 'import',
+                snapshot: snapshot ? snapshot.checked : true,
+                import_new: importNew,
+                conflicts: conflicts,
+            };
+
+            const btn = document.getElementById('syncApplyBtn');
+            if (!confirm(`Import ${importNew.length} new apartment(s)`
+                + (Object.values(conflicts).some(v => v === 'peer') ? ' and apply the selected updates' : '')
+                + ' into your tabs?')) {
+                return;
+            }
+            if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
+
+            try {
+                const resp = await fetch('/sync/apply', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(plan),
+                });
+                const result = await resp.json();
+                const detailsDiv = document.getElementById('syncDetails');
+
+                if (!result.success) {
+                    detailsDiv.innerHTML = `<p class="error">Error: ${escapeHtml(result.error)}</p>`;
+                    return;
+                }
+
+                const sum = result.summary || {};
+                let html = '<div class="schema-success">';
+                html += `<h5>✅ Sync complete</h5>`;
+                html += `<p>Added <strong>${sum.added || 0}</strong>, updated <strong>${sum.updated || 0}</strong>, skipped <strong>${sum.skipped || 0}</strong>.</p>`;
+                if (result.snapshot) {
+                    html += `<p><small>Backup created: ${escapeHtml(result.snapshot)}</small></p>`;
+                }
+                html += '<p><button class="btn btn-secondary" onclick="loadSyncDiff()">Re-check</button></p>';
+                html += '</div>';
+                detailsDiv.innerHTML = html;
+            } catch (error) {
+                console.error('Error applying sync:', error);
+                alert('Error applying sync: ' + error.message);
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = 'Import selected'; }
+            }
+        }
+
         async function checkSchema() {
             const btn = document.getElementById('checkSchemaBtn');
             const statusDiv = document.getElementById('schemaStatus');
@@ -5241,6 +6044,59 @@ Score = 10 × (1 - ${parseFloat(gymWalkTime).toFixed(1)} / ${maxTime}) = ${gymSc
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Sync Schema';
+            }
+        }
+
+        async function deleteMyAccount() {
+            const input = document.getElementById('deleteAccountConfirm');
+            const btn = document.getElementById('deleteAccountBtn');
+            const statusDiv = document.getElementById('deleteAccountStatus');
+            const username = '{{ current_user }}';
+            const typed = (input.value || '').trim();
+
+            statusDiv.innerHTML = '';
+
+            if (typed !== username) {
+                statusDiv.innerHTML = `<p class="error">Type your exact username (<code>${username}</code>) to confirm.</p>`;
+                return;
+            }
+
+            if (!confirm(
+                `PERMANENTLY delete "${username}" and ALL of this account's data?\n\n` +
+                'This removes every per-user tab and cannot be undone.'
+            )) {
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Deleting…';
+            try {
+                const response = await fetch('/admin/delete_user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: username, confirm: typed })
+                });
+                const data = await response.json();
+
+                if (!response.ok || !data.success) {
+                    statusDiv.innerHTML = `<p class="error">${(data && data.error) || 'Could not delete the account.'}</p>`;
+                    btn.disabled = false;
+                    btn.textContent = 'Delete my account & data';
+                    return;
+                }
+
+                const count = (data.tabs_deleted || []).length;
+                statusDiv.innerHTML =
+                    `<p style="color: #1a7f37;">Deleted "${data.username}" and ${count} tab(s). Redirecting…</p>`;
+
+                // The server clears the session when you delete yourself, so send
+                // the user back to the login page.
+                setTimeout(() => { window.location.href = data.logged_out ? '/login' : '/'; }, 1200);
+            } catch (error) {
+                console.error('Error deleting account:', error);
+                statusDiv.innerHTML = `<p class="error">Error deleting account: ${error.message}</p>`;
+                btn.disabled = false;
+                btn.textContent = 'Delete my account & data';
             }
         }
 

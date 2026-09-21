@@ -3,7 +3,7 @@ builder = "nixpacks"
 
 [deploy]
 # Reference the Procfile at root (Railway standard location)
-startCommand = "gunicorn web_app:app --bind 0.0.0.0:$PORT --timeout 300 --workers 2 --threads 2 --access-logfile - --error-logfile -"
+startCommand = "gunicorn web_app:app --bind 0.0.0.0:$PORT --timeout 1800 --workers 2 --threads 4 --access-logfile - --error-logfile -"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 

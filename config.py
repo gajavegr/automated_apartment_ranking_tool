@@ -39,6 +39,32 @@ else:
 
 # API Configuration
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
+
+# Cross-environment data sync (prod <-> staging).
+#
+# The prod and staging deployments each own a *separate* Google Sheet but share
+# the same service account (Editor on both). Point PEER_GOOGLE_SHEET_ID at the
+# *other* environment's sheet to enable the sync feature (detect + import data
+# that already exists in the other environment). The feature is a no-op / hidden
+# when this is unset.
+PEER_GOOGLE_SHEET_ID = os.getenv("PEER_GOOGLE_SHEET_ID", "")
+# Whether the peer sheet uses the multi-user, per-user namespaced tab scheme
+# ("<username> - Apartment Data") vs. the single-user base tab names
+# ("Apartment Data").
+#
+# Since dev, staging and prod were unified onto one codebase, ALL deployments
+# run the multi-user layer, so this should be "true" everywhere. It stays
+# configurable for one case: a peer sheet created before the unification, whose
+# tabs are still un-namespaced ("Apartment Data"). Point at such a sheet and set
+# this to false, otherwise the sync reads tabs that do not exist and reports the
+# peer as empty.
+PEER_IS_MULTI_USER = os.getenv("PEER_IS_MULTI_USER", "false").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+# Human-friendly label for the peer environment, used in the UI (e.g.
+# "production" or "staging").
+PEER_ENV_LABEL = os.getenv("PEER_ENV_LABEL", "the other environment")
+
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
 
@@ -59,6 +85,25 @@ SF_OPENDATA_APP_TOKEN = os.getenv("SF_OPENDATA_APP_TOKEN")  # Get your token at:
 # Cache Configuration
 CACHE_DIR = os.getenv("CACHE_DIR", ".cache")
 CACHE_EXPIRE_HOURS = int(os.getenv("CACHE_EXPIRE_HOURS", "168"))  # 1 week default
+
+# Zillow Listing Search (automated candidate import)
+# Zillow has no official public search API and blocks scraping, so automated
+# search goes through a third-party scraper API (RapidAPI by default) using a
+# server-side key. Optional: if disabled/unconfigured, the /search_zillow
+# endpoint returns a clear "not configured" message instead of failing.
+ZILLOW_SEARCH_ENABLED = os.getenv("ZILLOW_SEARCH_ENABLED", "false").lower() == "true"
+ZILLOW_RAPIDAPI_KEY = os.getenv("ZILLOW_RAPIDAPI_KEY", "")
+ZILLOW_RAPIDAPI_HOST = os.getenv("ZILLOW_RAPIDAPI_HOST", "zillow-com1.p.rapidapi.com")
+ZILLOW_DEFAULT_LOCATION = os.getenv("ZILLOW_DEFAULT_LOCATION", "San Francisco, CA")
+
+# DataSF property enrichment (San Francisco Assessor secured property tax roll)
+# Authoritative, free, official source for year built / units / property type.
+# Public dataset (wv5m-vpq2); no key required. An optional Socrata app token
+# raises anonymous rate limits.
+DATASF_ASSESSOR_ENDPOINT = os.getenv(
+    "DATASF_ASSESSOR_ENDPOINT", "https://data.sfgov.org/resource/wv5m-vpq2.json"
+)
+DATASF_APP_TOKEN = os.getenv("DATASF_APP_TOKEN", "")
 
 # Google Sheet Column Names
 SHEET_COLUMNS = {

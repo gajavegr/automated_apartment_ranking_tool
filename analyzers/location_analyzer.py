@@ -103,22 +103,32 @@ class LocationAnalyzer:
             print(f"  ⚠️  Places API request failed ({service}): {e}")
             return {'status': 'ERROR', 'error': str(e)}
     
-    def analyze_location(self, address: str, analyze_commute: bool = True, analyze_safety: bool = True, analyze_amenities: bool = True) -> Dict[str, Any]:
+    def analyze_location(self, address: str, analyze_commute: bool = True, analyze_safety: bool = True, analyze_amenities: bool = True, progress_callback=None) -> Dict[str, Any]:
         """
         Complete location analysis for an apartment
-        
+
         Args:
             address: Apartment address
             analyze_commute: Whether to analyze commute times (default: True)
             analyze_safety: Whether to analyze safety/crime data (default: True)
             analyze_amenities: Whether to analyze nearby amenities/restaurants (default: True)
-            
+            progress_callback: Optional callable(step_key) for real-time progress
+                               reporting. Exceptions from it are swallowed.
+
         Returns:
             Dictionary with all location analysis results
         """
+        def _report(step_key: str) -> None:
+            if progress_callback:
+                try:
+                    progress_callback(step_key)
+                except Exception:
+                    pass
+
         result = {}
-        
+
         # Get coordinates
+        _report("geocode")
         coords = self.geocode_address(address)
         if coords:
             result['latitude'] = coords[0]
@@ -132,6 +142,7 @@ class LocationAnalyzer:
         
         # Commute analysis
         if analyze_commute:
+            _report("commute")
             print(f"\n📍 Analyzing commutes from: {address}")
             print(f"  Your work: {config.YOUR_WORK_ADDRESS}")
             print(f"  Partner work: {config.PARTNER_WORK_ADDRESS}")
@@ -183,6 +194,7 @@ class LocationAnalyzer:
         
         # Safety analysis
         if analyze_safety:
+            _report("safety")
             safety_data = self.get_safety_score(coords[0], coords[1])
             result['safety_score_opendata'] = safety_data.get('safety_score', 5.0)
             result['crime_incidents'] = safety_data.get('incident_count', 0)
@@ -1538,13 +1550,14 @@ Respond with ONLY the word "YES" or "NO" (nothing else)."""
         Attempt to find the year a building was built
         
         Uses multiple strategies:
+        0. DataSF assessor roll (SF first-choice: authoritative, free, official)
         1. Google Places API (sometimes has this data)
         2. Claude AI web search and extraction (most reliable)
         3. Street View metadata (earliest available image as fallback)
-        
+
         Args:
             address: Full address string (may include apartment number)
-            
+
         Returns:
             Year as integer, or None if not found
         """
@@ -1552,7 +1565,21 @@ Respond with ONLY the word "YES" or "NO" (nothing else)."""
         cached = self.cache.get(cache_key)
         if cached:
             return cached
-        
+
+        # Strategy 0 — SF first-choice: the Assessor's secured property tax roll
+        # via DataSF is authoritative and free. It falls through for non-SF
+        # addresses (no match) or any DataSF hiccup, so the strategies below
+        # still run as fallbacks.
+        try:
+            from utils import datasf_client
+            record = datasf_client.lookup_by_address(address)
+            if record and record.year_built:
+                print(f"  🏛️  Building year from SF assessor roll: {record.year_built}")
+                self.cache.set(cache_key, record.year_built)
+                return record.year_built
+        except Exception as e:
+            print(f"  ⚠️  DataSF assessor lookup failed, using fallbacks: {e}")
+
         # Strip apartment number for better Claude search results
         # (Building records typically don't include apartment numbers)
         building_address = self._strip_apartment_number(address)

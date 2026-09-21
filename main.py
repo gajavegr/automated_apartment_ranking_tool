@@ -45,20 +45,32 @@ class ApartmentAnalyzer:
             print("3. All dependencies are installed")
             raise
     
-    def analyze_apartment(self, row_data: Dict[str, Any], force_refresh: bool = False, 
-                         components_to_recalc: List[str] = None) -> Dict[str, Any]:
+    def analyze_apartment(self, row_data: Dict[str, Any], force_refresh: bool = False,
+                         components_to_recalc: List[str] = None,
+                         progress_callback=None) -> Dict[str, Any]:
         """
         Analyze a single apartment
-        
+
         Args:
             row_data: Row data from Google Sheets (must include basic info)
             force_refresh: Force re-analysis even if cached
             components_to_recalc: List of components to recalculate (None = all)
                                  Options: 'gym', 'commute', 'safety', 'happening', 'wfh'
-            
+            progress_callback: Optional callable(step_key: str) invoked at each phase
+                               boundary so callers (e.g. the streaming Analysis tab)
+                               can report real-time progress. Never allowed to break
+                               analysis — exceptions from it are swallowed.
+
         Returns:
             Dictionary with all analysis results
         """
+        def _report(step_key: str) -> None:
+            if progress_callback:
+                try:
+                    progress_callback(step_key)
+                except Exception:
+                    pass  # progress reporting must never break analysis
+
         address = row_data.get(config.SHEET_COLUMNS["address"], "").strip()
         manual_safety = row_data.get(config.SHEET_COLUMNS["manual_safety"], 5.0)
         
@@ -123,6 +135,7 @@ class ApartmentAnalyzer:
             result['neighborhood'] = row_data.get(config.SHEET_COLUMNS["neighborhood"], '')
             result['selected_gyms'] = row_data.get(config.SHEET_COLUMNS["selected_gyms"], '')
             
+            _report("basic")
             print(f"\n[1/3] Basic Info (from manual entry):")
             print(f"  Address: {result['address']}")
             print(f"  Price: ${result['price']}/mo | {result['bedrooms']}bd/{result['bathrooms']}ba | {result['sqft']} sqft")
@@ -194,7 +207,8 @@ class ApartmentAnalyzer:
                             result['address'],
                             analyze_commute=recalc_commute,
                             analyze_safety=recalc_safety,
-                            analyze_amenities=False  # We handle amenities separately in the happening block
+                            analyze_amenities=False,  # We handle amenities separately in the happening block
+                            progress_callback=progress_callback
                         )
                         
                         if recalc_commute:
@@ -258,6 +272,7 @@ class ApartmentAnalyzer:
                 
                 # Happening score - restaurants, cafes, parks
                 if recalc_happening:
+                    _report("amenities")
                     # Get Places of Interest first (to pass names to amenities search)
                     print("📍 Calculating distance to personal places of interest...")
                     places_of_interest = self.sheets_client.get_places_of_interest()
@@ -292,6 +307,7 @@ class ApartmentAnalyzer:
                 # Calculate average walking time to places of interest
                 # (Only if recalculating happening score)
                 if recalc_happening:
+                    _report("poi")
                     places_of_interest = self.sheets_client.get_places_of_interest()
                     if places_of_interest:
                         apartment_coords = self.location_analyzer.geocode_address(result.get('address'))
@@ -349,6 +365,7 @@ class ApartmentAnalyzer:
                 
                 # Gym calculation - only if recalculating gym score
                 if recalc_gym:
+                    _report("gym")
                     # Check if user has pre-selected gyms
                     selected_gyms_str = result.get('selected_gyms', '').strip()
                     print(f"  Selected gyms from sheet: '{selected_gyms_str}'")
@@ -525,6 +542,7 @@ class ApartmentAnalyzer:
             result.setdefault('visitor_parking_ease', None)
             
             # Calculate scores
+            _report("scoring")
             print(f"\n✓ Calculating scores...")
             print(f"  Debug - Parking type: {result.get('parking_type')}")
             print(f"  Debug - Laundry type: {result.get('laundry_type')}")
